@@ -19,6 +19,7 @@ def run_yolov8_pipeline(
     enable_speed_calculation: bool = True,
     enable_field_calibration: bool = True,
     manual_distance_meters: Optional[float] = None,
+    stride_correction: Optional[float] = None,
     debug: bool = False,
     logger: Optional[logging.Logger] = None,
 ) -> Optional[dict]:
@@ -57,13 +58,18 @@ def run_yolov8_pipeline(
                 pitch_distance_m = (
                     manual_distance_meters if manual_distance_meters is not None else 18.44
                 )
-                log.info("球速計算：使用手動輸入距離（不再需要點選校正）")
-                log.info("投手到捕手距離：%.2f 公尺", pitch_distance_m)
                 speed_calculator = BallSpeedCalculator(
                     fps=video_fps,
                     video_width=video_width,
                     video_height=video_height,
                     theoretical_distance=pitch_distance_m,
+                    stride_correction=stride_correction,
+                )
+                log.info(
+                    "球速計算：投手丘距離=%.2fm, 跨步修正=%.2fm, 有效飛行距離=%.2fm",
+                    pitch_distance_m,
+                    speed_calculator.stride_correction,
+                    speed_calculator.effective_distance,
                 )
 
     pitch_frames = []

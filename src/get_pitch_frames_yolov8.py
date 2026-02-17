@@ -24,6 +24,171 @@ def _kmh_to_mph(kmh: float) -> Optional[float]:
     return kmh * 0.621371 if kmh else None
 
 
+# ── Stride correction constants ─────────────────────────────────
+BODY_STRIDE_DEFAULT_M = 1.2     # 身體前移（腿跨步），固定近似值
+FOREARM_LENGTH_M = 0.45         # 前臂平均長度（肘到指尖）
+MIN_FOREARM_PIXELS = 15         # 前臂像素長度（太短 = Pose 不可靠）
+
+
+def _estimate_arm_forward_from_pose(
+    pose_landmarks,
+    throwing_hand: Optional[dict],
+    ball_direction: Optional[tuple[float, float]],
+    image_w: int,
+    image_h: int,
+) -> Optional[float]:
+    """用像素估算手臂前伸距離（公尺）。
+
+    1. 取投球手的肘和指尖像素座標
+    2. 前臂向量投影到球飛行方向（若無球方向則用肘→指尖的水平分量）
+    3. 投影長度 / 前臂像素總長 × 真實前臂長度 = 前伸公尺數
+
+    不需要 pixels_per_meter，因為前臂自身就是比例尺。
+    """
+    if pose_landmarks is None or throwing_hand is None:
+        return None
+
+    elbow_idx = int(throwing_hand["elbow"])
+    finger_idx = int(throwing_hand["index_finger"])
+
+    try:
+        elbow_lm = pose_landmarks.landmark[elbow_idx]
+        finger_lm = pose_landmarks.landmark[finger_idx]
+    except (IndexError, AttributeError):
+        return None
+
+    elbow_vis = elbow_lm.visibility if hasattr(elbow_lm, "visibility") else 0.0
+    finger_vis = finger_lm.visibility if hasattr(finger_lm, "visibility") else 0.0
+    if elbow_vis < 0.4 or finger_vis < 0.4:
+        return None
+
+    ex, ey = elbow_lm.x * image_w, elbow_lm.y * image_h
+    fx, fy = finger_lm.x * image_w, finger_lm.y * image_h
+
+    forearm_dx = fx - ex
+    forearm_dy = fy - ey
+    forearm_pixels = float(np.hypot(forearm_dx, forearm_dy))
+
+    if forearm_pixels < MIN_FOREARM_PIXELS:
+        return None
+
+    if ball_direction is not None:
+        bx, by = ball_direction
+        b_len = float(np.hypot(bx, by))
+        if b_len > 0:
+            bx_n, by_n = bx / b_len, by / b_len
+            projected = forearm_dx * bx_n + forearm_dy * by_n
+            forward_ratio = abs(projected) / forearm_pixels
+        else:
+            forward_ratio = abs(forearm_dx) / forearm_pixels
+    else:
+        forward_ratio = abs(forearm_dx) / forearm_pixels
+
+    forward_ratio = min(forward_ratio, 1.0)
+    arm_forward_m = forward_ratio * FOREARM_LENGTH_M
+    return arm_forward_m
+
+
+def _estimate_stride_correction(
+    pose_landmarks,
+    throwing_hand: Optional[dict],
+    ball_direction: Optional[tuple[float, float]],
+    image_w: int,
+    image_h: int,
+) -> Optional[float]:
+    """估算完整的 stride correction（身體前移 + 手臂前伸）。
+
+    回傳 None 表示 Pose 資料不足，應使用預設值。
+    """
+    arm_forward = _estimate_arm_forward_from_pose(
+        pose_landmarks, throwing_hand, ball_direction, image_w, image_h,
+    )
+    if arm_forward is None:
+        return None
+
+    correction = BODY_STRIDE_DEFAULT_M + arm_forward
+    log.info(
+        "Dynamic stride correction: body=%.2fm + arm=%.2fm = %.2fm",
+        BODY_STRIDE_DEFAULT_M, arm_forward, correction,
+    )
+    return correction
+
+
+# ── Release point pose validation ──────────────────────────────
+MIN_ELBOW_ANGLE_AT_RELEASE = 130     # 出手時肘角度應 > 130°
+MAX_RELEASE_BALL_DIST_RATIO = 0.20   # 出手點和第一顆球距離 ≤ 畫面對角線 20%
+
+
+def _validate_release_point_with_pose(
+    pose_landmarks,
+    release_point: tuple[int, int],
+    throwing_hand: Optional[dict],
+    first_ball_point: Optional[tuple[int, int]],
+    image_w: int,
+    image_h: int,
+) -> tuple[bool, list[str]]:
+    """用 Pose 驗證出球點是否合理。
+
+    回傳 (is_valid, reasons)：
+    - is_valid: True 表示通過全部檢查
+    - reasons: 失敗原因列表（用於 log）
+    """
+    if pose_landmarks is None or throwing_hand is None:
+        return True, []  # 沒有 Pose 就不驗證，預設通過
+
+    fails: list[str] = []
+
+    def _get_pt(idx: int, min_vis: float = 0.3) -> Optional[tuple[float, float]]:
+        try:
+            lm = pose_landmarks.landmark[idx]
+        except (IndexError, AttributeError):
+            return None
+        vis = lm.visibility if hasattr(lm, "visibility") else 1.0
+        if vis < min_vis:
+            return None
+        return (lm.x * image_w, lm.y * image_h)
+
+    shoulder = _get_pt(int(throwing_hand["shoulder"]))
+    elbow = _get_pt(int(throwing_hand["elbow"]))
+    wrist = _get_pt(int(throwing_hand["wrist"]))
+
+    # ── checkpoint 1：手在腰部以上 ──
+    # 用肩膀和髖關節推算腰部 y 座標
+    hip_left = _get_pt(23)
+    hip_right = _get_pt(24)
+    if wrist is not None and (hip_left or hip_right):
+        hip_y_vals = [p[1] for p in [hip_left, hip_right] if p is not None]
+        hip_y = float(np.mean(hip_y_vals))
+        if release_point[1] > hip_y + image_h * 0.05:
+            fails.append(f"hand below waist (release_y={release_point[1]:.0f}, hip_y={hip_y:.0f})")
+
+    # ── checkpoint 2：肘接近伸直（> 130°）──
+    if shoulder is not None and elbow is not None and wrist is not None:
+        v1 = np.array([shoulder[0] - elbow[0], shoulder[1] - elbow[1]])
+        v2 = np.array([wrist[0] - elbow[0], wrist[1] - elbow[1]])
+        cos_a = float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6))
+        cos_a = float(np.clip(cos_a, -1.0, 1.0))
+        angle = float(np.arccos(cos_a) * 180 / np.pi)
+        if angle < MIN_ELBOW_ANGLE_AT_RELEASE:
+            fails.append(f"elbow not extended (angle={angle:.0f}°, need>{MIN_ELBOW_ANGLE_AT_RELEASE}°)")
+
+    # ── checkpoint 3：出手點離第一顆球不太遠 ──
+    if first_ball_point is not None:
+        diag = float(np.hypot(image_w, image_h))
+        dist = float(np.hypot(
+            release_point[0] - first_ball_point[0],
+            release_point[1] - first_ball_point[1],
+        ))
+        if dist > diag * MAX_RELEASE_BALL_DIST_RATIO:
+            fails.append(
+                f"release too far from first ball "
+                f"(dist={dist:.0f}px, max={diag * MAX_RELEASE_BALL_DIST_RATIO:.0f}px)"
+            )
+
+    is_valid = len(fails) == 0
+    return is_valid, fails
+
+
 # ── Detection filter constants ─────────────────────────────────
 MAX_AREA_RATIO = 0.005        # Max 0.5% of frame area
 MIN_SIDE_RATIO = 0.002        # Min side length ratio
@@ -592,9 +757,20 @@ def get_pitch_frames_yolov8(
                 throwing_hand=throwing_hand, first_ball_point=_fbp,
             )
             if rp is not None:
-                release_point = rp
-                first_release_adjusted = True
-                log.info("Release point recorded from pose frame %d", fid)
+                # Pose 驗證：檢查出手姿態是否合理
+                rp_valid, rp_fails = _validate_release_point_with_pose(
+                    pose_landmarks, rp, throwing_hand, _fbp, image_w, image_h,
+                )
+                if rp_valid:
+                    release_point = rp
+                    first_release_adjusted = True
+                    log.info("Release point recorded from pose frame %d (validated)", fid)
+                else:
+                    log.warning(
+                        "Release point at frame %d failed pose validation: %s — "
+                        "will fallback to first ball detection",
+                        fid, "; ".join(rp_fails),
+                    )
 
         point = None
         if best_track_id is not None:
@@ -696,12 +872,40 @@ def get_pitch_frames_yolov8(
                 if release_point is None or release_point == p0:
                     release_point = (est_x, est_y)
 
+        # 找出最後一個有球的 frame index
+        last_ball_frame_idx = None
+        for i in range(len(pitch_frames) - 1, -1, -1):
+            if pitch_frames[i].ball_in_frame:
+                last_ball_frame_idx = i
+                break
+
+        # 動態 stride correction：用 Pose 的前臂像素比例估算手臂前伸距離
+        if len(ball_trajectory) >= 2:
+            ball_dir = (
+                float(ball_trajectory[1][0] - ball_trajectory[0][0]),
+                float(ball_trajectory[1][1] - ball_trajectory[0][1]),
+            )
+        else:
+            ball_dir = None
+
+        release_pose_lm = None
+        if release_pose_frame_idx is not None and 0 <= release_pose_frame_idx < len(raw_detections):
+            release_pose_lm = raw_detections[release_pose_frame_idx].get("pose_landmarks")
+
+        dynamic_stride = _estimate_stride_correction(
+            release_pose_lm, throwing_hand, ball_dir, width, height,
+        )
+        if dynamic_stride is not None:
+            speed_calculator.stride_correction = dynamic_stride
+            log.info("Using dynamic stride correction: %.2fm", dynamic_stride)
+
         if len(ball_trajectory) >= 2:
             speed_info = speed_calculator.calculate_speed_detailed(
                 ball_trajectory,
                 release_point=release_point,
                 release_frame_idx=optimal_release_frame_idx,
                 first_ball_frame_idx=first_ball_frame_idx,
+                last_ball_frame_idx=last_ball_frame_idx,
             )
             
             # 添加 release_point 到 speed_info 以便在 overlay 中繪製
