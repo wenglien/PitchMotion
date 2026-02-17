@@ -14,6 +14,10 @@ struct FrameProcessResult {
 /// 1. 把 CMSampleBuffer 丟給 Mediapipe Pose（需在 Xcode 內串接 MediaPipe SDK）取得關鍵點
 /// 2. 把同一個 frame 丟給 CoreML YOLO 模型做球偵測
 /// 3. 根據釋球點與目標點 frame index + fps 計算球速
+///
+/// 注意：pitchDistanceMeters 應傳入跨步修正後的「有效飛行距離」，
+/// 而非投手丘到本壘板的原始距離（18.44m）。
+/// 由 CameraViewModel 計算 effectiveDistance 後傳入。
 final class FrameProcessor {
     private let pitchDistanceMeters: Double
     

@@ -27,10 +27,16 @@ final class CameraViewModel: NSObject, ObservableObject {
     private let videoOutput = AVCaptureVideoDataOutput()
     private let sessionQueue = DispatchQueue(label: "SpeedgunMobile.CameraSessionQueue")
     
-    // 這裡可以讓使用者設定實際距離，預設 18.44m（職棒投手丘）
+    // 投手丘到本壘板距離（公尺），預設 18.44m（MLB）
     var pitchDistanceMeters: Double = 18.44
+    // 跨步修正（公尺）：投手跨步 + 手臂伸展的距離，預設 1.7m
+    var strideCorrection: Double = 1.7
+    // 實際球飛行距離 = pitchDistanceMeters - strideCorrection
+    var effectiveDistance: Double { max(pitchDistanceMeters - strideCorrection, 1.0) }
     
-    private lazy var frameProcessor = FrameProcessor(pitchDistanceMeters: pitchDistanceMeters)
+    private lazy var frameProcessor = FrameProcessor(
+        pitchDistanceMeters: effectiveDistance
+    )
     
     func startSession() {
         sessionQueue.async {

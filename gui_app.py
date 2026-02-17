@@ -55,6 +55,7 @@ class SpeedgunApp(tk.Tk):
         self.status_msg = tk.StringVar(value="Ready to analyze.")
         self.yolov8_weights = tk.StringVar(value=os.path.join("yolov8", "best_baseball.pt"))
         self.pitch_dist = tk.DoubleVar(value=18.44)
+        self.stride_correction = tk.DoubleVar(value=1.7)
         
         # Analysis Results
         self.result_data = {}
@@ -137,9 +138,19 @@ class SpeedgunApp(tk.Tk):
         ttk.Separator(sidebar_content, orient="horizontal").pack(fill="x", pady=10)
         
         # Parameters
-        ttk.Label(sidebar_content, text="Pitch Distance (m)", style="MetricLabel.TLabel").pack(anchor="w")
+        ttk.Label(sidebar_content, text="Mound Distance (m)", style="MetricLabel.TLabel").pack(anchor="w")
         entry_dist = ttk.Entry(sidebar_content, textvariable=self.pitch_dist)
-        entry_dist.pack(fill="x", pady=(5, 15))
+        entry_dist.pack(fill="x", pady=(5, 10))
+
+        ttk.Label(sidebar_content, text="Stride Correction (m)", style="MetricLabel.TLabel").pack(anchor="w")
+        entry_stride = ttk.Entry(sidebar_content, textvariable=self.stride_correction)
+        entry_stride.pack(fill="x", pady=(5, 5))
+        ttk.Label(
+            sidebar_content,
+            text="Effective = Mound - Stride",
+            style="MetricLabel.TLabel",
+            foreground=self.colors["fg_subtext"],
+        ).pack(anchor="w", pady=(0, 15))
         
         ttk.Label(sidebar_content, text="YOLO Model", style="MetricLabel.TLabel").pack(anchor="w")
         entry_model = ttk.Entry(sidebar_content, textvariable=self.yolov8_weights)
@@ -494,6 +505,7 @@ class SpeedgunApp(tk.Tk):
                 weights_path=os.path.abspath(self.yolov8_weights.get()),
                 output_path=output_path,
                 manual_distance_meters=self.pitch_dist.get(),
+                stride_correction=self.stride_correction.get(),
                 show_preview=False,
                 debug=True
             )
@@ -534,8 +546,8 @@ class SpeedgunApp(tk.Tk):
         # 2. Max Speed
         self.result_max_speed.set(fmt_speed(data.get('max_speed_kmh', 0)))
         
-        # 3. Distance
-        dist = data.get('total_distance_m', 0)
+        # 3. Distance (prefer effective_distance if available)
+        dist = data.get('effective_distance_m') or data.get('total_distance_m', 0)
         self.result_distance.set(f"{dist:.1f} m")
         
         # Update Chart

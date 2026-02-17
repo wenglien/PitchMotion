@@ -15,6 +15,7 @@ MAX_SPEED_MULT = 1.15           # Theoretical max-speed multiplier
 MAX_REASONABLE_SPEED_KMH = 250  # Sanity cap for release speed
 RELEASE_FALLBACK_SEC = 0.067    # Default release→first-detect interval
 MIN_PIXEL_DIST = 10             # Minimum pixel distance for release calc
+DEFAULT_STRIDE_CORRECTION = 1.7  # MLB avg stride + arm extension (~5.6 ft)
 
 
 class BallSpeedCalculator:
@@ -27,6 +28,7 @@ class BallSpeedCalculator:
         video_height: int,
         pixels_per_meter: Optional[float] = None,
         theoretical_distance: Optional[float] = None,
+        stride_correction: Optional[float] = None,
     ):
         if fps <= 0:
             raise ValueError(f"fps must be positive, got {fps}")
@@ -38,6 +40,18 @@ class BallSpeedCalculator:
         self.near_y: Optional[int] = None
         self.far_y: Optional[int] = None
         self.theoretical_distance = theoretical_distance
+        self.stride_correction = (
+            stride_correction if stride_correction is not None
+            else DEFAULT_STRIDE_CORRECTION
+        )
+
+    @property
+    def effective_distance(self) -> Optional[float]:
+        """實際球飛行距離 = 投手丘距離 - 跨步修正。"""
+        if self.theoretical_distance is None:
+            return None
+        eff = self.theoretical_distance - self.stride_correction
+        return max(eff, 1.0)  # 保底 1m，避免極端值
 
     # ── Calibration ────────────────────────────────────────────
 
@@ -123,6 +137,7 @@ class BallSpeedCalculator:
         release_point: Optional[Tuple[int, int]] = None,
         release_frame_idx: Optional[int] = None,
         first_ball_frame_idx: Optional[int] = None,
+        last_ball_frame_idx: Optional[int] = None,
     ) -> Dict:
         """Return comprehensive speed breakdown dict."""
         if len(trajectory_points) < 2:
@@ -133,6 +148,7 @@ class BallSpeedCalculator:
             return self._calculate_theoretical(
                 trajectory_points, release_point,
                 release_frame_idx, first_ball_frame_idx,
+                last_ball_frame_idx,
             )
 
         # ── Pixel-based mode ──────────────────────────────────
@@ -146,16 +162,75 @@ class BallSpeedCalculator:
 
     # ── Private helpers ────────────────────────────────────────
 
+    def _estimate_flight_time(
+        self,
+        num_trajectory_points: int,
+        release_frame_idx: Optional[int],
+        first_ball_frame_idx: Optional[int],
+        last_ball_frame_idx: Optional[int],
+    ) -> float:
+        """估算完整飛行時間（秒）。
+
+        1. release_frame → last_ball_frame（最完整）
+        2. first_ball_frame → last_ball_frame（缺出手幀時的退路）
+        3. num_trajectory_points / fps（最後退路，同舊行為）
+        """
+        if (
+            release_frame_idx is not None
+            and last_ball_frame_idx is not None
+            and last_ball_frame_idx > release_frame_idx
+        ):
+            flight_frames = float(last_ball_frame_idx - release_frame_idx)
+            log.debug(
+                "Flight time: release(%d)→last(%d) = %d frames",
+                release_frame_idx, last_ball_frame_idx, int(flight_frames),
+            )
+            return max(1.0, flight_frames) / self.fps
+
+        if (
+            first_ball_frame_idx is not None
+            and last_ball_frame_idx is not None
+            and last_ball_frame_idx > first_ball_frame_idx
+        ):
+            flight_frames = float(last_ball_frame_idx - first_ball_frame_idx)
+            # 補回 release → first_ball 的時間
+            pre_frames = self._estimate_frames_elapsed(
+                release_frame_idx, first_ball_frame_idx
+            )
+            total_frames = flight_frames + pre_frames
+            log.debug(
+                "Flight time: first(%d)→last(%d) + pre(%.1f) = %.1f frames",
+                first_ball_frame_idx, last_ball_frame_idx, pre_frames, total_frames,
+            )
+            return max(1.0, total_frames) / self.fps
+
+        log.debug(
+            "Flight time fallback: %d trajectory points / %d fps",
+            num_trajectory_points, self.fps,
+        )
+        return max(1, num_trajectory_points) / self.fps
+
     def _calculate_theoretical(
         self,
         trajectory_points: List[Tuple[int, int]],
         release_point: Optional[Tuple[int, int]],
         release_frame_idx: Optional[int],
         first_ball_frame_idx: Optional[int],
+        last_ball_frame_idx: Optional[int] = None,
     ) -> Dict:
         num_frames = len(trajectory_points)
-        total_time = num_frames / self.fps
-        avg_speed_ms = self.theoretical_distance / total_time
+        distance = self.effective_distance
+        log.info(
+            "Theoretical calc: mound=%.2fm, stride_corr=%.2fm, effective=%.2fm",
+            self.theoretical_distance, self.stride_correction, distance,
+        )
+
+        total_time = self._estimate_flight_time(
+            num_frames, release_frame_idx, first_ball_frame_idx, last_ball_frame_idx,
+        )
+        log.info("Flight time: %.3fs (%d fps)", total_time, self.fps)
+
+        avg_speed_ms = distance / total_time
         avg_speed_kmh = avg_speed_ms * 3.6
         initial_speed = avg_speed_kmh * INITIAL_SPEED_MULT
         max_speed = avg_speed_kmh * MAX_SPEED_MULT
@@ -185,7 +260,11 @@ class BallSpeedCalculator:
             'initial_speed_kmh': initial_speed,
             'max_speed_kmh': max_speed,
             'average_speed_kmh': avg_speed_kmh,
-            'total_distance_m': self.theoretical_distance,
+            'total_distance_m': distance,
+            'effective_distance_m': distance,
+            'mound_distance_m': self.theoretical_distance,
+            'stride_correction_m': self.stride_correction,
+            'flight_time_s': total_time,
             'num_frames': num_frames,
             'frame_details': synthetic_details,
             'calculation_method': 'theoretical',

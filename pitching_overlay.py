@@ -24,6 +24,7 @@ def run_yolov8_overlay(
     conf: float = 0.05,
     show_preview: bool = False,
     manual_distance_meters: Optional[float] = None,
+    stride_correction: Optional[float] = None,
     enable_speed_calculation: bool = True,
     debug: bool = False,
     logger: Optional[logging.Logger] = None,
@@ -40,6 +41,7 @@ def run_yolov8_overlay(
         enable_speed_calculation=enable_speed_calculation,
         enable_field_calibration=False,
         manual_distance_meters=manual_distance_meters,
+        stride_correction=stride_correction,
         debug=debug,
         logger=logger,
     )
@@ -82,7 +84,14 @@ def _parse_cli_args():
         "--distance",
         dest="distance",
         type="float",
-        help="手動輸入投手到捕手距離（公尺），例如：18.44 或 15",
+        help="投手丘到本壘板距離（公尺），例如：18.44（MLB）或 14.02（少棒）",
+        default=None,
+    )
+    optparser.add_option(
+        "--stride-correction",
+        dest="stride_correction",
+        type="float",
+        help="跨步修正值（公尺），預設 1.7。實際飛行距離 = 投手丘距離 - 跨步修正",
         default=None,
     )
     optparser.add_option(
@@ -154,6 +163,7 @@ def cli_main() -> None:
             conf=float(options.conf),
             show_preview=True,
             manual_distance_meters=options.distance,
+            stride_correction=options.stride_correction,
             enable_speed_calculation=not options.no_speed,
             debug=bool(options.debug),
             logger=log,
