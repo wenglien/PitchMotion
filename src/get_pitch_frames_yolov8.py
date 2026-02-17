@@ -879,6 +879,26 @@ def get_pitch_frames_yolov8(
                 last_ball_frame_idx = i
                 break
 
+        # 診斷 log：列出球速計算的關鍵幀資訊
+        log.info(
+            "Speed calc inputs: release_frame=%s, first_ball=%s, last_ball=%s, "
+            "trajectory_pts=%d, total_frames=%d, fps=%d",
+            optimal_release_frame_idx, first_ball_frame_idx, last_ball_frame_idx,
+            len(ball_trajectory), len(pitch_frames), fps,
+        )
+        if optimal_release_frame_idx is not None and last_ball_frame_idx is not None:
+            span = last_ball_frame_idx - optimal_release_frame_idx
+            log.info(
+                "Frame span: release→last = %d frames = %.3fs",
+                span, span / fps,
+            )
+        if first_ball_frame_idx is not None and last_ball_frame_idx is not None:
+            det_span = last_ball_frame_idx - first_ball_frame_idx
+            log.info(
+                "Detection span: first→last = %d frames = %.3fs",
+                det_span, det_span / fps,
+            )
+
         # 動態 stride correction：用 Pose 的前臂像素比例估算手臂前伸距離
         if len(ball_trajectory) >= 2:
             ball_dir = (

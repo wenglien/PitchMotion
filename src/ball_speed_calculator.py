@@ -171,44 +171,63 @@ class BallSpeedCalculator:
     ) -> float:
         """估算完整飛行時間（秒）。
 
-        1. release_frame → last_ball_frame（最完整）
-        2. first_ball_frame → last_ball_frame（缺出手幀時的退路）
-        3. num_trajectory_points / fps（最後退路，同舊行為）
+        優先順序（偵測區間優先，避免 release 偵測太早拉長時間）：
+        1. first_ball_frame → last_ball_frame + 補回少量 pre-detect 時間
+        2. release_frame → last_ball_frame（僅上面不可用時的退路）
+        3. num_trajectory_points / fps（最後退路）
         """
-        if (
-            release_frame_idx is not None
-            and last_ball_frame_idx is not None
-            and last_ball_frame_idx > release_frame_idx
-        ):
-            flight_frames = float(last_ball_frame_idx - release_frame_idx)
-            log.debug(
-                "Flight time: release(%d)→last(%d) = %d frames",
-                release_frame_idx, last_ball_frame_idx, int(flight_frames),
-            )
-            return max(1.0, flight_frames) / self.fps
+        raw_time = None
 
+        # 優先：用「實際偵測到球的區間」+ 補回出手→首偵測的時間
         if (
             first_ball_frame_idx is not None
             and last_ball_frame_idx is not None
             and last_ball_frame_idx > first_ball_frame_idx
         ):
-            flight_frames = float(last_ball_frame_idx - first_ball_frame_idx)
-            # 補回 release → first_ball 的時間
+            detection_frames = float(last_ball_frame_idx - first_ball_frame_idx)
             pre_frames = self._estimate_frames_elapsed(
                 release_frame_idx, first_ball_frame_idx
             )
-            total_frames = flight_frames + pre_frames
-            log.debug(
-                "Flight time: first(%d)→last(%d) + pre(%.1f) = %.1f frames",
-                first_ball_frame_idx, last_ball_frame_idx, pre_frames, total_frames,
+            total_frames = detection_frames + pre_frames
+            log.info(
+                "Flight time: first(%d)→last(%d)=%d + pre=%.1f → %.1f frames (%.3fs)",
+                first_ball_frame_idx, last_ball_frame_idx,
+                int(detection_frames), pre_frames, total_frames,
+                total_frames / self.fps,
             )
-            return max(1.0, total_frames) / self.fps
+            raw_time = max(1.0, total_frames) / self.fps
 
-        log.debug(
-            "Flight time fallback: %d trajectory points / %d fps",
-            num_trajectory_points, self.fps,
-        )
-        return max(1, num_trajectory_points) / self.fps
+        # 退路：用 release → last（僅當上面不可用）
+        if raw_time is None and (
+            release_frame_idx is not None
+            and last_ball_frame_idx is not None
+            and last_ball_frame_idx > release_frame_idx
+        ):
+            flight_frames = float(last_ball_frame_idx - release_frame_idx)
+            log.info(
+                "Flight time fallback: release(%d)→last(%d) = %d frames (%.3fs)",
+                release_frame_idx, last_ball_frame_idx,
+                int(flight_frames), flight_frames / self.fps,
+            )
+            raw_time = max(1.0, flight_frames) / self.fps
+
+        # 最後退路
+        if raw_time is None:
+            log.info(
+                "Flight time last-resort: %d trajectory points / %d fps",
+                num_trajectory_points, self.fps,
+            )
+            raw_time = max(1, num_trajectory_points) / self.fps
+
+        # 避免時間過小導致球速暴衝
+        if raw_time < MIN_FLIGHT_TIME_SEC:
+            log.warning(
+                "Flight time %.3fs too small (min %.2fs), clamping",
+                raw_time, MIN_FLIGHT_TIME_SEC,
+            )
+            raw_time = MIN_FLIGHT_TIME_SEC
+
+        return raw_time
 
     def _calculate_theoretical(
         self,
