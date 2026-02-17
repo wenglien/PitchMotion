@@ -16,6 +16,7 @@ MAX_REASONABLE_SPEED_KMH = 250  # Sanity cap for release speed
 RELEASE_FALLBACK_SEC = 0.067    # Default release→first-detect interval
 MIN_PIXEL_DIST = 10             # Minimum pixel distance for release calc
 DEFAULT_STRIDE_CORRECTION = 1.7  # MLB avg stride + arm extension (~5.6 ft)
+MIN_FLIGHT_TIME_SEC = 0.25       # 真實投球飛行至少 ~0.35s，設 0.25 避免時間過小導致球速暴衝
 
 
 class BallSpeedCalculator:
