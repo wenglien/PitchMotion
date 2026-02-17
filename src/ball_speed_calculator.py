@@ -16,7 +16,7 @@ MAX_REASONABLE_SPEED_KMH = 250  # Sanity cap for release speed
 RELEASE_FALLBACK_SEC = 0.067    # Default release→first-detect interval
 MIN_PIXEL_DIST = 10             # Minimum pixel distance for release calc
 DEFAULT_STRIDE_CORRECTION = 1.7  # MLB avg stride + arm extension (~5.6 ft)
-MIN_FLIGHT_TIME_SEC = 0.25       # 真實投球飛行至少 ~0.35s，設 0.25 避免時間過小導致球速暴衝
+MIN_FLIGHT_TIME_SEC = 0.25       # 投球飛行至少 ~0.35s，設 0.25 防止時間過小球速暴衝
 
 
 class BallSpeedCalculator:
@@ -172,14 +172,14 @@ class BallSpeedCalculator:
     ) -> float:
         """估算完整飛行時間（秒）。
 
-        優先順序（偵測區間優先，避免 release 偵測太早拉長時間）：
-        1. first_ball_frame → last_ball_frame + 補回少量 pre-detect 時間
-        2. release_frame → last_ball_frame（僅上面不可用時的退路）
+        優先用偵測區間（first→last），避免 release 偵測太早拉長時間：
+        1. first_ball → last_ball + 補回 pre-detect 時間
+        2. release → last_ball（僅上面不可用時）
         3. num_trajectory_points / fps（最後退路）
         """
         raw_time = None
 
-        # 優先：用「實際偵測到球的區間」+ 補回出手→首偵測的時間
+        # 優先：用實際偵測到球的區間
         if (
             first_ball_frame_idx is not None
             and last_ball_frame_idx is not None
@@ -198,7 +198,7 @@ class BallSpeedCalculator:
             )
             raw_time = max(1.0, total_frames) / self.fps
 
-        # 退路：用 release → last（僅當上面不可用）
+        # 退路：用 release → last
         if raw_time is None and (
             release_frame_idx is not None
             and last_ball_frame_idx is not None
@@ -220,10 +220,10 @@ class BallSpeedCalculator:
             )
             raw_time = max(1, num_trajectory_points) / self.fps
 
-        # 避免時間過小導致球速暴衝
+        # 防止時間過小 → 球速暴衝
         if raw_time < MIN_FLIGHT_TIME_SEC:
             log.warning(
-                "Flight time %.3fs too small (min %.2fs), clamping",
+                "Flight time %.3fs < min %.2fs, clamping",
                 raw_time, MIN_FLIGHT_TIME_SEC,
             )
             raw_time = MIN_FLIGHT_TIME_SEC
@@ -254,6 +254,16 @@ class BallSpeedCalculator:
         avg_speed_kmh = avg_speed_ms * 3.6
         initial_speed = avg_speed_kmh * INITIAL_SPEED_MULT
         max_speed = avg_speed_kmh * MAX_SPEED_MULT
+
+        # 球速上限護欄
+        if avg_speed_kmh > MAX_REASONABLE_SPEED_KMH:
+            log.warning(
+                "Average speed %.1f km/h exceeds cap (%.0f), clamping",
+                avg_speed_kmh, MAX_REASONABLE_SPEED_KMH,
+            )
+            avg_speed_kmh = float(MAX_REASONABLE_SPEED_KMH)
+            initial_speed = min(initial_speed, float(MAX_REASONABLE_SPEED_KMH))
+            max_speed = min(max_speed, float(MAX_REASONABLE_SPEED_KMH))
 
         release_speed = None
         if self.pixels_per_meter is not None and release_point and trajectory_points:
