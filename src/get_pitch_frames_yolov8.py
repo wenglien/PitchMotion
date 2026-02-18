@@ -116,7 +116,9 @@ def _estimate_stride_correction(
 
 # ── Release point pose validation ──────────────────────────────
 MIN_ELBOW_ANGLE_AT_RELEASE = 130     # 出手時肘角度應 > 130°
-MAX_RELEASE_BALL_DIST_RATIO = 0.20   # 出手點和第一顆球距離 ≤ 畫面對角線 20%
+MAX_RELEASE_BALL_DIST_RATIO = 0.12   # 出手點和第一顆球距離 ≤ 畫面對角線 12%
+RELEASE_TRAJ_DIST_RATIO = 0.05      # release point 和軌跡反推的最大偏差（對角線 5%）
+RELEASE_DIR_MAX_ANGLE = 45.0        # release→first_ball 和球飛行方向最大偏差角度
 
 
 def _validate_release_point_with_pose(
@@ -187,6 +189,72 @@ def _validate_release_point_with_pose(
 
     is_valid = len(fails) == 0
     return is_valid, fails
+
+
+def _validate_release_against_trajectory(
+    release_point: tuple[int, int],
+    trajectory_estimate: tuple[int, int],
+    first_ball_point: tuple[int, int],
+    ball_direction: tuple[float, float],
+    width: int,
+    height: int,
+) -> tuple[bool, list[str]]:
+    """用球的飛行軌跡嚴格驗證 release point 是否合理
+
+    1. 距離：release point 必須接近軌跡反推估計值（< 對角線 5%）
+    2. 上游：release point 必須在第一顆球的「上游」（朝投手方向）
+    3. 方向：release→first_ball 向量必須與球飛行方向大致一致（< 45°）
+
+    Args:
+        release_point: 待驗證的出手點
+        trajectory_estimate: 軌跡反推的出手點估計
+        first_ball_point: 第一顆球的偵測位置
+        ball_direction: 球飛行方向向量 (dx, dy)（像素/幀）
+        width, height: 畫面尺寸
+
+    Returns:
+        (is_valid, fail_reasons)
+    """
+    fails: list[str] = []
+    diag = float(np.hypot(width, height))
+
+    # ── Check 1：距離 ──
+    dist = float(np.hypot(
+        release_point[0] - trajectory_estimate[0],
+        release_point[1] - trajectory_estimate[1],
+    ))
+    max_dist = diag * RELEASE_TRAJ_DIST_RATIO
+    if dist > max_dist:
+        fails.append(
+            f"too far from trajectory estimate "
+            f"(dist={dist:.0f}px, max={max_dist:.0f}px)"
+        )
+
+    # ── Check 2：上游（release 在第一顆球的飛行反方向側）──
+    r2b_x = float(first_ball_point[0] - release_point[0])
+    r2b_y = float(first_ball_point[1] - release_point[1])
+    bd_x, bd_y = float(ball_direction[0]), float(ball_direction[1])
+    dot = r2b_x * bd_x + r2b_y * bd_y
+    if dot < 0:
+        fails.append(
+            f"downstream of first ball — release should be behind "
+            f"(dot={dot:.0f}, expected > 0)"
+        )
+
+    # ── Check 3：方向一致性 ──
+    r2b_len = float(np.hypot(r2b_x, r2b_y))
+    bd_len = float(np.hypot(bd_x, bd_y))
+    if r2b_len > 5.0 and bd_len > 0.1:
+        cos_angle = dot / (r2b_len * bd_len)
+        cos_angle = float(np.clip(cos_angle, -1.0, 1.0))
+        angle = float(np.arccos(cos_angle) * 180.0 / np.pi)
+        if angle > RELEASE_DIR_MAX_ANGLE:
+            fails.append(
+                f"direction mismatch with ball trajectory "
+                f"(angle={angle:.0f}°, max={RELEASE_DIR_MAX_ANGLE:.0f}°)"
+            )
+
+    return len(fails) == 0, fails
 
 
 # ── Detection filter constants ─────────────────────────────────
@@ -285,11 +353,15 @@ def _extract_release_point_from_pose(
     def _dist_sq(a: tuple[int, int], b: tuple[int, int]) -> float:
         return float((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
+    # 出手瞬間手臂高速甩動，要求較高的可見度門檻以避免模糊 landmark
+    FINGER_MIN_VIS = 0.6   # 指尖：動態模糊下更容易漂移
+    WRIST_MIN_VIS = 0.45   # 手腕：稍微穩定但仍需較高門檻
+
     if throwing_hand:
-        fp = get_xy(int(throwing_hand["index_finger"]), 0.5)
+        fp = get_xy(int(throwing_hand["index_finger"]), FINGER_MIN_VIS)
         if fp is not None:
             return fp
-        wp = get_xy(int(throwing_hand["wrist"]), 0.35)
+        wp = get_xy(int(throwing_hand["wrist"]), WRIST_MIN_VIS)
         if wp is not None:
             return wp
         return None
@@ -297,12 +369,12 @@ def _extract_release_point_from_pose(
     # throwing hand unknown → 收集所有候選
     candidates: list[tuple[tuple[int, int], float]] = []  # (point, visibility)
     for idx in (19, 20):  # index fingers
-        r = get_xy_with_vis(idx, 0.5)
+        r = get_xy_with_vis(idx, FINGER_MIN_VIS)
         if r is not None:
             candidates.append(r)
     if not candidates:
         for idx in (15, 16):  # wrists
-            r = get_xy_with_vis(idx, 0.35)
+            r = get_xy_with_vis(idx, WRIST_MIN_VIS)
             if r is not None:
                 candidates.append(r)
 
@@ -474,6 +546,76 @@ def _pick_best_track_id(
         log.info("No valid track found (all below displacement threshold)")
 
     return best_id
+
+
+def _find_flight_end_frame(
+    track_items: list[dict],
+    fps: int,
+) -> Optional[int]:
+    """分析軌跡速度剖面，偵測球何時被捕手接住（飛行結束）。
+
+    飛行中的球速度穩定，被接住後速度驟降至接近零。
+    本函式偵測此轉折點，回傳最後一個「飛行中」的 frame_id。
+
+    Args:
+        track_items: SORT tracker 產生的軌跡點列表（含 frame_id, cx, cy, area）
+        fps: 影片幀率
+
+    Returns:
+        最後一個飛行中偵測的 frame_id，或 None 表示無法判斷
+    """
+    if len(track_items) < 5:
+        return None
+
+    items = sorted(track_items, key=lambda x: x["frame_id"])
+
+    # 計算每段速度（像素/幀）
+    seg_vels: list[float] = []
+    for i in range(1, len(items)):
+        dx = items[i]["cx"] - items[i - 1]["cx"]
+        dy = items[i]["cy"] - items[i - 1]["cy"]
+        df = max(1, items[i]["frame_id"] - items[i - 1]["frame_id"])
+        speed = float(np.hypot(dx, dy)) / df
+        seg_vels.append(speed)
+
+    if len(seg_vels) < 4:
+        return None
+
+    # 用前 60% 的中位數作為飛行速度參考
+    n_ref = max(3, int(len(seg_vels) * 0.6))
+    median_speed = float(np.median(seg_vels[:n_ref]))
+
+    if median_speed < 2.0:
+        # 整體幾乎不動 — 可能不是飛行中的球，無法判斷
+        return None
+
+    # 速度降至參考值的 30% 以下 → 球已被接住或停止
+    threshold = median_speed * 0.30
+
+    # 從尾端向前掃描，找到最後一段速度仍高於門檻的位置
+    end_item_idx = len(items) - 1
+    for i in range(len(seg_vels) - 1, -1, -1):
+        if seg_vels[i] >= threshold:
+            end_item_idx = i + 1  # segment i 是 items[i] 到 items[i+1] 之間
+            break
+    else:
+        # 所有段的速度都低於門檻 — 不修剪
+        return None
+
+    trimmed_count = len(items) - 1 - end_item_idx
+    if trimmed_count <= 0:
+        return None  # 沒有需要修剪的
+
+    log.info(
+        "Flight end detection: median_vel=%.1f px/f, threshold=%.1f, "
+        "end_frame=%d, trimmed %d post-flight items (%.3fs)",
+        median_speed, threshold,
+        items[end_item_idx]["frame_id"],
+        trimmed_count,
+        trimmed_count / fps,
+    )
+
+    return items[end_item_idx]["frame_id"]
 
 
 def get_pitch_frames_yolov8(
@@ -722,6 +864,13 @@ def get_pitch_frames_yolov8(
         tracks_by_id, width=width, height=height, raw_detections=raw_detections
     )
 
+    # ── 飛行結束偵測：分析軌跡速度，找出球被接住的幀 ──
+    flight_end_frame: Optional[int] = None
+    if best_track_id is not None and best_track_id in tracks_by_id:
+        flight_end_frame = _find_flight_end_frame(
+            tracks_by_id[best_track_id], fps
+        )
+
     first_release_adjusted = False
     first_ball_frame_idx = None
 
@@ -831,11 +980,29 @@ def get_pitch_frames_yolov8(
                     throwing_hand=throwing_hand,
                     first_ball_point=(centerX, centerY),
                 )
-                release_point = rp if rp is not None else (centerX, centerY)
+                if rp is not None:
+                    # Fallback 路徑也必須通過 pose validation
+                    rp_valid, rp_fails = _validate_release_point_with_pose(
+                        pose_landmarks, rp, throwing_hand,
+                        (centerX, centerY), image_w, image_h,
+                    )
+                    if rp_valid:
+                        release_point = rp
+                        log.info("Fallback release point from pose at first ball frame %d (validated)", fid)
+                    else:
+                        log.warning(
+                            "Fallback pose release at frame %d failed validation: %s — "
+                            "leaving release_point=None for trajectory fix",
+                            fid, "; ".join(rp_fails),
+                        )
+                        # 不設 release_point，讓 post-loop 的軌跡反推來處理
+                else:
+                    # Pose 不可用，暫時不設 release_point
+                    log.info("No pose release at first ball frame %d, will use trajectory", fid)
             else:
-                release_point = (centerX, centerY)
+                # 完全沒有 Pose，暫不設 release_point
+                log.info("No pose at first ball frame %d, will use trajectory", fid)
             first_release_adjusted = True
-            log.info("Using first ball detection as release point (frame %d)", fid)
 
         color = (255, 255, 0)
         pitch_frames.append(FrameInfo(frame_rgb, True, (centerX, centerY), color))
@@ -843,60 +1010,151 @@ def get_pitch_frames_yolov8(
     # 計算球速
     speed_info = {}
     if speed_calculator and len(pitch_frames) > 0:
-        # 提取所有有球的 frame 的座標
+        # 提取所有有球的 frame 的座標（限制在飛行結束幀之內）
         ball_trajectory = [
-            frame.ball for frame in pitch_frames 
-            if frame.ball_in_frame
+            frame.ball for i, frame in enumerate(pitch_frames)
+            if frame.ball_in_frame and (flight_end_frame is None or i <= flight_end_frame)
         ]
         
-        # 若 pose 不可靠導致出球點退化成「第一顆球的位置」，用軌跡前段反推一個較合理的出球點
-        # （主要用於 overlay 標記，避免出球點落在打者腳邊或畫面中段）
-        if len(ball_trajectory) >= 2:
+        # ── 用軌跡反推出手點（trajectory-based release point）──
+        # Pose 在出手瞬間經常不準（手臂高速 + 動態模糊），
+        # 用球的實際飛行軌跡反推更可靠。
+        trajectory_release_pt = None
+        if best_track_id is not None and best_track_id in tracks_by_id:
+            track_items = sorted(
+                tracks_by_id[best_track_id], key=lambda x: x["frame_id"]
+            )
+            if len(track_items) >= 2:
+                # 用軌跡前段（最多 5 點）估算每幀速度（pixels/frame）
+                n_use = min(5, len(track_items))
+                t_first = track_items[0]
+                t_last = track_items[n_use - 1]
+                frame_gap = max(1, t_last["frame_id"] - t_first["frame_id"])
+                vx_pf = (t_last["cx"] - t_first["cx"]) / frame_gap
+                vy_pf = (t_last["cy"] - t_first["cy"]) / frame_gap
+
+                if (vx_pf * vx_pf + vy_pf * vy_pf) >= 0.5:
+                    # 回推幀數（限制在合理範圍）
+                    max_back = round(0.10 * fps, 1)  # 最多回推 0.10s
+                    if (
+                        optimal_release_frame_idx is not None
+                        and first_ball_frame_idx is not None
+                        and first_ball_frame_idx > optimal_release_frame_idx
+                    ):
+                        frames_back = min(
+                            float(first_ball_frame_idx - optimal_release_frame_idx),
+                            max_back,
+                        )
+                    else:
+                        frames_back = max(1.0, round(0.067 * fps, 1))
+
+                    est_x = int(t_first["cx"] - vx_pf * frames_back)
+                    est_y = int(t_first["cy"] - vy_pf * frames_back)
+                    est_x = max(0, min(width - 1, est_x))
+                    est_y = max(0, min(height - 1, est_y))
+                    trajectory_release_pt = (est_x, est_y)
+
+        # 若無 track 資料，退回用 ball_trajectory 估算（精度稍差但仍比 pose 穩定）
+        if trajectory_release_pt is None and len(ball_trajectory) >= 2:
             p0 = ball_trajectory[0]
             p1 = ball_trajectory[1]
             vx = p1[0] - p0[0]
             vy = p1[1] - p0[1]
-            # 速度太小通常代表誤判或幾乎沒動，不做反推
             if (vx * vx + vy * vy) >= 4:
-                # 用實際幀差回推；若無出手幀資訊則以 FPS 估計
-                if optimal_release_frame_idx is not None and first_ball_frame_idx is not None and first_ball_frame_idx > optimal_release_frame_idx:
-                    frames_back = float(first_ball_frame_idx - optimal_release_frame_idx)
-                else:
-                    frames_back = max(1.0, round(0.067 * fps, 1))
+                frames_back = max(1.0, round(0.067 * fps, 1))
                 est_x = int(p0[0] - vx * frames_back)
                 est_y = int(p0[1] - vy * frames_back)
                 est_x = max(0, min(width - 1, est_x))
                 est_y = max(0, min(height - 1, est_y))
+                trajectory_release_pt = (est_x, est_y)
 
-                # 只有在 release_point 不存在或明顯是退化值（與第一點相同）時才覆蓋
-                if release_point is None or release_point == p0:
-                    release_point = (est_x, est_y)
+        # ── 嚴格驗證 Pose release point vs 軌跡反推 ──
+        # 球的飛行方向（用 best track 的 per-frame 速度，或 ball_trajectory 前兩點）
+        ball_flight_dir: Optional[tuple[float, float]] = None
+        if best_track_id is not None and best_track_id in tracks_by_id:
+            _tk = sorted(tracks_by_id[best_track_id], key=lambda x: x["frame_id"])
+            if len(_tk) >= 2:
+                _n = min(5, len(_tk))
+                _fg = max(1, _tk[_n - 1]["frame_id"] - _tk[0]["frame_id"])
+                ball_flight_dir = (
+                    (_tk[_n - 1]["cx"] - _tk[0]["cx"]) / _fg,
+                    (_tk[_n - 1]["cy"] - _tk[0]["cy"]) / _fg,
+                )
+        if ball_flight_dir is None and len(ball_trajectory) >= 2:
+            ball_flight_dir = (
+                float(ball_trajectory[1][0] - ball_trajectory[0][0]),
+                float(ball_trajectory[1][1] - ball_trajectory[0][1]),
+            )
 
-        # 找出最後一個有球的 frame index
+        if trajectory_release_pt is not None:
+            first_ball_pt = ball_trajectory[0] if ball_trajectory else None
+
+            if release_point is None or (
+                first_ball_pt is not None and release_point == first_ball_pt
+            ):
+                # 沒有有效的 Pose release point → 直接用軌跡反推
+                release_point = trajectory_release_pt
+                log.info(
+                    "Release point from trajectory extrapolation: (%d, %d)",
+                    trajectory_release_pt[0], trajectory_release_pt[1],
+                )
+            elif first_ball_pt is not None and ball_flight_dir is not None:
+                # Pose release point 存在 → 用三重條件嚴格驗證
+                rp_valid, rp_fails = _validate_release_against_trajectory(
+                    release_point, trajectory_release_pt,
+                    first_ball_pt, ball_flight_dir,
+                    width, height,
+                )
+                if rp_valid:
+                    log.info(
+                        "Pose release point (%d, %d) passed trajectory validation "
+                        "(estimate=(%d, %d))",
+                        release_point[0], release_point[1],
+                        trajectory_release_pt[0], trajectory_release_pt[1],
+                    )
+                else:
+                    log.warning(
+                        "Pose release point (%d, %d) FAILED trajectory validation: "
+                        "%s — replacing with trajectory estimate (%d, %d)",
+                        release_point[0], release_point[1],
+                        "; ".join(rp_fails),
+                        trajectory_release_pt[0], trajectory_release_pt[1],
+                    )
+                    release_point = trajectory_release_pt
+            else:
+                # 無法驗證（缺少第一顆球或方向）— 保守選擇軌跡反推
+                log.info(
+                    "Cannot validate pose release, using trajectory estimate (%d, %d)",
+                    trajectory_release_pt[0], trajectory_release_pt[1],
+                )
+                release_point = trajectory_release_pt
+
+        # 找出最後一個有球的 frame index（限制在飛行結束幀之內）
+        scan_limit = len(pitch_frames)
+        if flight_end_frame is not None:
+            scan_limit = min(scan_limit, flight_end_frame + 1)
+
         last_ball_frame_idx = None
-        for i in range(len(pitch_frames) - 1, -1, -1):
+        for i in range(scan_limit - 1, -1, -1):
             if pitch_frames[i].ball_in_frame:
                 last_ball_frame_idx = i
                 break
 
-        # 診斷 log：列出球速計算的關鍵幀資訊
-        log.info(
-            "Speed calc inputs: release_frame=%s, first_ball=%s, last_ball=%s, "
-            "trajectory_pts=%d, total_frames=%d, fps=%d",
-            optimal_release_frame_idx, first_ball_frame_idx, last_ball_frame_idx,
-            len(ball_trajectory), len(pitch_frames), fps,
-        )
-        if optimal_release_frame_idx is not None and last_ball_frame_idx is not None:
-            span = last_ball_frame_idx - optimal_release_frame_idx
+        if flight_end_frame is not None and last_ball_frame_idx is not None:
             log.info(
-                "Frame span: release→last = %d frames = %.3fs",
-                span, span / fps,
-            )
-        if first_ball_frame_idx is not None and last_ball_frame_idx is not None:
-            det_span = last_ball_frame_idx - first_ball_frame_idx
-            log.info(
-                "Detection span: first→last = %d frames = %.3fs",
-                det_span, det_span / fps,
+                "Flight range: first_ball=%s, last_ball=%d (flight_end=%d, "
+                "original_last=%d, saved %.3fs)",
+                first_ball_frame_idx, last_ball_frame_idx, flight_end_frame,
+                max(
+                    (i for i in range(len(pitch_frames) - 1, -1, -1)
+                     if pitch_frames[i].ball_in_frame),
+                    default=-1,
+                ),
+                (max(
+                    (i for i in range(len(pitch_frames) - 1, -1, -1)
+                     if pitch_frames[i].ball_in_frame),
+                    default=last_ball_frame_idx,
+                ) - last_ball_frame_idx) / fps,
             )
 
         # 動態 stride correction：用 Pose 的前臂像素比例估算手臂前伸距離

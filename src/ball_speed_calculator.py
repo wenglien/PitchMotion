@@ -14,9 +14,11 @@ INITIAL_SPEED_MULT = 1.10       # Theoretical initial-speed multiplier
 MAX_SPEED_MULT = 1.15           # Theoretical max-speed multiplier
 MAX_REASONABLE_SPEED_KMH = 250  # Sanity cap for release speed
 RELEASE_FALLBACK_SEC = 0.067    # Default release→first-detect interval
+MAX_PRE_DETECT_SEC = 0.10       # Pre-detection （release→first ball）
 MIN_PIXEL_DIST = 10             # Minimum pixel distance for release calc
 DEFAULT_STRIDE_CORRECTION = 1.7  # MLB avg stride + arm extension (~5.6 ft)
 MIN_FLIGHT_TIME_SEC = 0.25       # 投球飛行至少 ~0.35s，設 0.25 防止時間過小球速暴衝
+MIN_REASONABLE_SPEED_MS = 22.2   # ~80 km/h (~50 mph)，任何真實投球都不會低於此速
 
 
 class BallSpeedCalculator:
@@ -91,13 +93,25 @@ class BallSpeedCalculator:
         release_frame_idx: Optional[int],
         first_ball_frame_idx: Optional[int],
     ) -> float:
+        fallback = max(1.0, round(RELEASE_FALLBACK_SEC * self.fps, 1))
+        max_pre_frames = max(1.0, round(MAX_PRE_DETECT_SEC * self.fps, 1))
+
         if (
             release_frame_idx is not None
             and first_ball_frame_idx is not None
             and first_ball_frame_idx > release_frame_idx
         ):
-            return float(max(1, first_ball_frame_idx - release_frame_idx))
-        return max(1.0, round(RELEASE_FALLBACK_SEC * self.fps, 1))
+            raw = float(max(1, first_ball_frame_idx - release_frame_idx))
+            if raw > max_pre_frames:
+                log.warning(
+                    "Pre-detect gap %.0f frames (%.3fs) exceeds cap %.0f frames (%.3fs), "
+                    "using fallback %.0f frames (%.3fs) — release detection may be too early",
+                    raw, raw / self.fps, max_pre_frames, MAX_PRE_DETECT_SEC,
+                    fallback, fallback / self.fps,
+                )
+                return fallback
+            return raw
+        return fallback
 
     # ── Release speed ──────────────────────────────────────────
 
@@ -227,6 +241,19 @@ class BallSpeedCalculator:
                 raw_time, MIN_FLIGHT_TIME_SEC,
             )
             raw_time = MIN_FLIGHT_TIME_SEC
+
+        # 防止時間過大 → 球速偏低（球被追蹤超過本壘板）
+        if self.effective_distance is not None:
+            max_flight_time = self.effective_distance / MIN_REASONABLE_SPEED_MS
+            if raw_time > max_flight_time:
+                log.warning(
+                    "Flight time %.3fs exceeds physics ceiling %.3fs "
+                    "(effective_dist=%.2fm, min_speed=%.1f m/s ≈ %.0f km/h), clamping",
+                    raw_time, max_flight_time,
+                    self.effective_distance, MIN_REASONABLE_SPEED_MS,
+                    MIN_REASONABLE_SPEED_MS * 3.6,
+                )
+                raw_time = max_flight_time
 
         return raw_time
 
