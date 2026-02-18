@@ -361,8 +361,8 @@ class ReleasePointDetector:
         # 找前腳落地：Y 方向速度突然接近 0 並持續
         # 連續幀數需依 FPS 縮放：要求至少 ~100ms 的穩定期
         foot_contact_idx = None
-        velocity_threshold = np.mean(y_velocities) * 0.25
-        consec_needed = max(3, int(round(0.1 * self.fps)))  # 100ms 換算成幀數
+        velocity_threshold = np.mean(y_velocities) * FOOT_VEL_MULT
+        consec_needed = max(3, int(round(FOOT_STABLE_SEC * self.fps)))
 
         for i in range(len(y_velocities) - consec_needed):
             if all(y_velocities[i + k] < velocity_threshold for k in range(consec_needed)):
@@ -372,8 +372,8 @@ class ReleasePointDetector:
         if foot_contact_idx is not None:
             # 出球通常在落地後約 0.08s ~ 0.45s（用 FPS 換算成幀數，避免高 FPS 錯位）
             # 原本 0.67s 窗口太寬，容易把非出球幀也納入
-            start_delay_sec = 0.08
-            end_delay_sec = 0.45
+            start_delay_sec = FOOT_WINDOW_START_SEC
+            end_delay_sec = FOOT_WINDOW_END_SEC
             window_start = foot_contact_idx + int(round(start_delay_sec * self.fps))
             window_end = min(foot_contact_idx + int(round(end_delay_sec * self.fps)), len(self.pose_history) - 1)
             return (window_start, window_end)
@@ -390,7 +390,7 @@ class ReleasePointDetector:
         Returns:
             dict with 'frame_idx', 'confidence', 'signals' or None
         """
-        if len(self.pose_history) < 10:
+        if len(self.pose_history) < MIN_FRAMES_FOR_DETECTION:
             return None
 
         # 檢測各個訊號
@@ -407,9 +407,9 @@ class ReleasePointDetector:
         # ---- S1-S2 時間一致性檢查 ----
         # 如果 S1 和 S2 相差超過 0.15 秒，表示其中一個可能是誤判，
         # 降低離群訊號的權重
-        s1_weight = 0.4
-        s2_weight = 0.3
-        agreement_sec = 0.15  # 允許的最大偏差（秒）
+        s1_weight = S1_DEFAULT_WEIGHT
+        s2_weight = S2_DEFAULT_WEIGHT
+        agreement_sec = S1S2_AGREEMENT_SEC
         agreement_frames = int(round(agreement_sec * self.fps))
 
         if s1_frame is not None and s2_frame is not None:
@@ -417,7 +417,7 @@ class ReleasePointDetector:
             if gap > agreement_frames:
                 # 不一致：降低離群訊號的權重而非直接丟棄
                 # 偏好 S1（手腕峰值較穩定），S2 降為 0.1
-                s2_weight = 0.1
+                s2_weight = S2_DOWNWEIGHTED
 
         # ---- 組建候選 ----
         candidates = []
@@ -436,13 +436,13 @@ class ReleasePointDetector:
 
             if filtered:
                 # S3 約束成功，給予信心加成
-                candidates = [(f, w * 1.2) for f, w in filtered]
+                candidates = [(f, w * S3_CONFIDENCE_BOOST) for f, w in filtered]
             # else: S3 約束失敗時不丟棄所有候選——繼續使用 S1/S2
 
         # ---- 球軌跡交叉驗證 ----
         # 出球應在第一顆球偵測到的前方（最多提前 ~0.3s）
         if first_ball_frame is not None and candidates:
-            max_lead_sec = 0.30
+            max_lead_sec = BALL_MAX_LEAD_SEC
             max_lead_frames = int(round(max_lead_sec * self.fps))
             ball_filtered = [
                 (f, w) for f, w in candidates
@@ -472,7 +472,7 @@ class ReleasePointDetector:
         # 只有單一訊號時上限為 0.6（避免單訊號過度自信）
         num_signals = sum(1 for s in [s1_frame, s2_frame] if s is not None)
         if num_signals <= 1:
-            confidence = min(confidence, 0.6)
+            confidence = min(confidence, SINGLE_SIGNAL_MAX_CONF)
         confidence = min(confidence, 1.0)
 
         return {
