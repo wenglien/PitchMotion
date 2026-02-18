@@ -9,6 +9,8 @@ from PIL import Image, ImageTk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
+import subprocess
+import shutil
 
 # Adjust import path if needed
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -322,6 +324,114 @@ class SpeedgunApp(tk.Tk):
         self.timeline_var.set(0)
         self._update_time_label()
 
+    def _get_video_properties(self, video_path: str) -> tuple:
+        """
+        Get video properties (fps and resolution).
+        Returns: (fps, width, height) or (None, None, None) if unable to read
+        """
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return None, None, None
+            
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
+            
+            return fps, width, height
+        except Exception as e:
+            print(f"Error reading video properties: {e}")
+            return None, None, None
+    
+    def _check_and_preprocess_video(self, video_path: str) -> Optional[str]:
+        """
+        Check if video is 120fps and 4K (3840x2160).
+        If not, preprocess it and return the preprocessed video path.
+        If already correct format, return None (use original).
+        """
+        fps, width, height = self._get_video_properties(video_path)
+        
+        if fps is None or width is None or height is None:
+            print(f"Warning: Could not read video properties for {video_path}")
+            return None
+        
+        # Check if video needs preprocessing
+        # Target: 120 FPS and 4K (3840x2160)
+        needs_preprocessing = (fps != 120 or width != 3840 or height != 2160)
+        
+        if not needs_preprocessing:
+            print(f"Video is already 120fps and 4K, skipping preprocessing")
+            return None
+        
+        print(f"Video needs preprocessing: fps={fps}, resolution={width}x{height}")
+        print(f"Target: 120fps and 3840x2160")
+        
+        # Check if ffmpeg is available
+        if shutil.which("ffmpeg") is None:
+            print("Warning: ffmpeg not found. Cannot preprocess video. Attempting analysis with original video.")
+            self.after(0, lambda: messagebox.showwarning(
+                "FFmpeg Not Found",
+                "ffmpeg is not installed. Video preprocessing is unavailable.\n"
+                "Analysis will continue with the original video quality.\n"
+                "For better results, install ffmpeg."
+            ))
+            return None
+        
+        # Preprocess the video
+        video_dir = os.path.dirname(video_path)
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        preprocessed_path = os.path.join(video_dir, f"{video_name}_120fps_4k.mp4")
+        
+        # Check if preprocessed version already exists
+        if os.path.exists(preprocessed_path):
+            print(f"Using existing preprocessed video: {preprocessed_path}")
+            return preprocessed_path
+        
+        try:
+            print(f"Preprocessing video: {video_path}")
+            print(f"Output: {preprocessed_path}")
+            
+            # Build ffmpeg filter
+            scale_pad = "scale=3840:-2,pad=3840:2160:(3840-iw)/2:(2160-ih)/2"
+            vf = f"minterpolate=fps=120:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,{scale_pad}"
+            
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", video_path,
+                "-vf", vf,
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "18",
+                "-c:a", "copy",
+                preprocessed_path,
+            ]
+            
+            print(f"Running: {' '.join(cmd)}")
+            self.after(0, lambda: self.status_msg.set("Preprocessing video (this may take a while)..."))
+            
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            
+            if proc.returncode != 0:
+                print(f"FFmpeg error: {proc.stdout}")
+                self.after(0, lambda: messagebox.showwarning(
+                    "Preprocessing Failed",
+                    f"Video preprocessing failed.\nAttempting analysis with original video.\n\nError: {proc.stdout[:200]}"
+                ))
+                return None
+            
+            print(f"Video preprocessing completed: {preprocessed_path}")
+            return preprocessed_path
+            
+        except Exception as e:
+            print(f"Error during video preprocessing: {e}")
+            self.after(0, lambda: messagebox.showwarning(
+                "Preprocessing Error",
+                f"Error during video preprocessing: {str(e)}\nAttempting analysis with original video."
+            ))
+            return None
+
     def play_video(self):
         if not hasattr(self, 'current_output_path') or not self.current_output_path:
             return
@@ -471,20 +581,31 @@ class SpeedgunApp(tk.Tk):
         self.btn_run.config(state="disabled", text="ANALYZING...")
         self.btn_select.config(state="disabled")
         self.btn_play.config(state="disabled") # Disable play during analysis
-        self.status_msg.set("Initializing AI model...")
+        self.status_msg.set("Checking video format...")
         
         # Start worker thread
         threading.Thread(target=self._worker_thread, daemon=True).start()
 
     def _worker_thread(self):
         try:
+            # Check and preprocess video if necessary
+            video_to_analyze = self.video_paths[0]
+            self.after(0, lambda: self.status_msg.set("Checking video format..."))
+            
+            preprocessed_video = self._check_and_preprocess_video(video_to_analyze)
+            if preprocessed_video:
+                video_to_analyze = preprocessed_video
+                self.after(0, lambda: self.status_msg.set("Video preprocessed. Initializing AI model..."))
+            else:
+                self.after(0, lambda: self.status_msg.set("Initializing AI model..."))
+            
             output_filename = "Overlay_Pro.mp4"
-            base_dir = os.path.dirname(self.video_paths[0])
+            base_dir = os.path.dirname(video_to_analyze)
             output_path = os.path.join(base_dir, output_filename)
             
             # Run Pipeline
             results = run_yolov8_pipeline(
-                self.video_paths,
+                [video_to_analyze],
                 weights_path=os.path.abspath(self.yolov8_weights.get()),
                 output_path=output_path,
                 manual_distance_meters=self.pitch_dist.get(),
