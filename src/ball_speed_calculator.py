@@ -4,6 +4,8 @@ import logging
 import numpy as np
 from typing import List, Tuple, Optional, Dict
 
+from src.utils import MS_TO_KMH, SpeedInfo
+
 log = logging.getLogger(__name__)
 
 # ── Tunable Constants ──────────────────────────────────────────
@@ -137,7 +139,7 @@ class BallSpeedCalculator:
         correction = self._apply_perspective_correction((0, mid_y))
         real_dist = (pixel_dist / self.pixels_per_meter) * correction
         time = frames_elapsed / self.fps
-        speed_kmh = (real_dist / time) * 3.6
+        speed_kmh = (real_dist / time) * MS_TO_KMH
 
         if speed_kmh > MAX_REASONABLE_SPEED_KMH:
             log.warning("Release speed %.1f km/h exceeds cap, discarding", speed_kmh)
@@ -153,13 +155,13 @@ class BallSpeedCalculator:
         release_frame_idx: Optional[int] = None,
         first_ball_frame_idx: Optional[int] = None,
         last_ball_frame_idx: Optional[int] = None,
-    ) -> Dict:
+    ) -> SpeedInfo:
         """Return comprehensive speed breakdown dict."""
         if len(trajectory_points) < 2:
             return {"error": "Not enough trajectory points (need >= 2)"}
 
         # ── Theoretical mode ───────────────────────────────────
-        if self.theoretical_distance:
+        if self.theoretical_distance is not None:
             return self._calculate_theoretical(
                 trajectory_points, release_point,
                 release_frame_idx, first_ball_frame_idx,
@@ -251,7 +253,7 @@ class BallSpeedCalculator:
                     "(effective_dist=%.2fm, min_speed=%.1f m/s ≈ %.0f km/h), clamping",
                     raw_time, max_flight_time,
                     self.effective_distance, MIN_REASONABLE_SPEED_MS,
-                    MIN_REASONABLE_SPEED_MS * 3.6,
+                    MIN_REASONABLE_SPEED_MS * MS_TO_KMH,
                 )
                 raw_time = max_flight_time
 
@@ -264,7 +266,7 @@ class BallSpeedCalculator:
         release_frame_idx: Optional[int],
         first_ball_frame_idx: Optional[int],
         last_ball_frame_idx: Optional[int] = None,
-    ) -> Dict:
+    ) -> SpeedInfo:
         num_frames = len(trajectory_points)
         distance = self.effective_distance
         log.info(
@@ -278,7 +280,7 @@ class BallSpeedCalculator:
         log.info("Flight time: %.3fs (%d fps)", total_time, self.fps)
 
         avg_speed_ms = distance / total_time
-        avg_speed_kmh = avg_speed_ms * 3.6
+        avg_speed_kmh = avg_speed_ms * MS_TO_KMH
         initial_speed = avg_speed_kmh * INITIAL_SPEED_MULT
         max_speed = avg_speed_kmh * MAX_SPEED_MULT
 
@@ -306,7 +308,7 @@ class BallSpeedCalculator:
             synthetic_details.append({
                 'frame': i,
                 'speed_kmh': current_speed,
-                'speed_ms': current_speed / 3.6,
+                'speed_ms': current_speed / MS_TO_KMH,
                 'distance_m': dist_per_frame,
                 'correction_factor': 1.0,
             })
@@ -333,7 +335,7 @@ class BallSpeedCalculator:
         release_point: Optional[Tuple[int, int]],
         release_frame_idx: Optional[int],
         first_ball_frame_idx: Optional[int],
-    ) -> Dict:
+    ) -> SpeedInfo:
         time_interval = 1.0 / self.fps
         speeds = []
 
@@ -347,7 +349,7 @@ class BallSpeedCalculator:
 
             speeds.append({
                 'frame': i,
-                'speed_kmh': speed_ms * 3.6,
+                'speed_kmh': speed_ms * MS_TO_KMH,
                 'speed_ms': speed_ms,
                 'distance_m': real_dist,
                 'correction_factor': correction,

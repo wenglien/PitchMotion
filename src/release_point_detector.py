@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import numpy as np
 from typing import List, Tuple, Optional, Dict
+
+log = logging.getLogger(__name__)
 
 # ── Tunable Constants ──────────────────────────────────────────
 MIN_VISIBILITY = 0.35           # Minimum landmark visibility threshold
@@ -205,14 +208,14 @@ class ReleasePointDetector:
                 continue
 
             wrist = frame_data.get(wrist_idx)
-            if not wrist or wrist.get("visibility", 1.0) < 0.35:
+            if not wrist or wrist.get("visibility", 1.0) < MIN_VISIBILITY:
                 wrist_points.append(None)
                 continue
             wrist_points.append((float(wrist["x"]), float(wrist["y"])))
 
         # 過濾 None
         valid_indices = [i for i, p in enumerate(wrist_points) if p is not None]
-        if len(valid_indices) < 10:
+        if len(valid_indices) < MIN_FRAMES_FOR_DETECTION:
             return None
 
         valid_points = [wrist_points[i] for i in valid_indices]
@@ -234,7 +237,9 @@ class ReleasePointDetector:
         offset = -int(round(advance_sec * self.fps))
 
         chosen_local_idx = max(0, min(len(valid_indices) - 1, peak_local_idx + offset))
-        return int(valid_indices[chosen_local_idx])
+        frame_idx = int(valid_indices[chosen_local_idx])
+        log.debug("S1 wrist speed peak: frame=%d (peak_local=%d, offset=%d)", frame_idx, peak_local_idx, offset)
+        return frame_idx
 
 
     def _detect_signal_s2_elbow_extension(self) -> Optional[int]:
@@ -272,7 +277,7 @@ class ReleasePointDetector:
                 shoulder.get("visibility", 1.0),
                 elbow.get("visibility", 1.0),
                 wrist.get("visibility", 1.0),
-            ) < 0.35:
+            ) < MIN_VISIBILITY:
                 continue
             
             # 計算肘關節角度
@@ -303,10 +308,12 @@ class ReleasePointDetector:
                     candidates.append((i, wrist_vels[i]))
         
         if candidates:
-            # 選擇手腕速度最高的候選點
             best_idx = max(candidates, key=lambda x: x[1])[0]
-            return valid_indices[best_idx]
+            frame_idx = valid_indices[best_idx]
+            log.debug("S2 elbow extension: frame=%d (%d candidates)", frame_idx, len(candidates))
+            return frame_idx
         
+        log.debug("S2 elbow extension: no candidates found")
         return None
     
     def _detect_signal_s3_foot_contact(self) -> Optional[Tuple[int, int]]:
@@ -330,9 +337,9 @@ class ReleasePointDetector:
             left_ankle = frame_data.get(27)
             right_ankle = frame_data.get(28)
 
-            if left_ankle and left_ankle.get("visibility", 1.0) >= 0.35:
+            if left_ankle and left_ankle.get("visibility", 1.0) >= MIN_VISIBILITY:
                 left_series.append((i, (float(left_ankle["x"]), float(left_ankle["y"]))))
-            if right_ankle and right_ankle.get("visibility", 1.0) >= 0.35:
+            if right_ankle and right_ankle.get("visibility", 1.0) >= MIN_VISIBILITY:
                 right_series.append((i, (float(right_ankle["x"]), float(right_ankle["y"]))))
 
         def total_displacement(series: list[Tuple[int, Tuple[float, float]]]) -> float:
@@ -370,14 +377,12 @@ class ReleasePointDetector:
                 break
         
         if foot_contact_idx is not None:
-            # 出球通常在落地後約 0.08s ~ 0.45s（用 FPS 換算成幀數，避免高 FPS 錯位）
-            # 原本 0.67s 窗口太寬，容易把非出球幀也納入
-            start_delay_sec = FOOT_WINDOW_START_SEC
-            end_delay_sec = FOOT_WINDOW_END_SEC
-            window_start = foot_contact_idx + int(round(start_delay_sec * self.fps))
-            window_end = min(foot_contact_idx + int(round(end_delay_sec * self.fps)), len(self.pose_history) - 1)
+            window_start = foot_contact_idx + int(round(FOOT_WINDOW_START_SEC * self.fps))
+            window_end = min(foot_contact_idx + int(round(FOOT_WINDOW_END_SEC * self.fps)), len(self.pose_history) - 1)
+            log.debug("S3 foot contact: frame=%d, window=[%d, %d]", foot_contact_idx, window_start, window_end)
             return (window_start, window_end)
         
+        log.debug("S3 foot contact: not detected")
         return None
     
     def detect_release_point(self, first_ball_frame: Optional[int] = None) -> Optional[Dict]:
@@ -452,6 +457,7 @@ class ReleasePointDetector:
                 candidates = ball_filtered
 
         if not candidates:
+            log.info("No release point candidates after filtering")
             return None
 
         # ---- 選擇最佳幀 ----
@@ -466,15 +472,17 @@ class ReleasePointDetector:
         # 選擇最接近加權中心的候選點
         best_frame = min(candidates, key=lambda x: abs(x[0] - target_frame))[0]
 
-        # ---- 信心度 ----
-        # 基礎信心來自訊號權重總和
-        confidence = total_weight / 1.0
+        confidence = total_weight
         # 只有單一訊號時上限為 0.6（避免單訊號過度自信）
         num_signals = sum(1 for s in [s1_frame, s2_frame] if s is not None)
         if num_signals <= 1:
             confidence = min(confidence, SINGLE_SIGNAL_MAX_CONF)
         confidence = min(confidence, 1.0)
 
+        log.info(
+            "Release point: frame=%d, confidence=%.2f, signals(S1=%s, S2=%s, S3=%s)",
+            best_frame, confidence, s1_frame, s2_frame, s3_window,
+        )
         return {
             'frame_idx': best_frame,
             'confidence': confidence,

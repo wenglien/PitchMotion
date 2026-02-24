@@ -3,18 +3,12 @@ from __future__ import annotations
 import logging
 import cv2
 import numpy as np
-import copy
 from typing import Optional
 from image_registration import cross_correlation_shifts
-from src.utils import draw_ball_curve, fill_lost_tracking
+from src.utils import draw_ball_curve, fill_lost_tracking, kmh_to_mph
 from src.FrameInfo import FrameInfo
 
 log = logging.getLogger(__name__)
-
-
-def kmh_to_mph(kmh: float) -> float:
-    """Convert km/h to mph."""
-    return kmh * 0.621371
 
 
 def generate_overlay(
@@ -113,27 +107,29 @@ def generate_overlay(
             # Draw the last small tail, make the trajectory length and ball speed fit, so that the trajectory will not appear suddenly
             background_frame = draw_ball_curve(background_frame, trajectory, max_points=25)
         
-        # Draw release point marker (with boundary check)
+        # Draw release point marker (scaled, with boundary check)
         if speed_info and 'release_point' in speed_info:
+            rp_scale = width / 1920.0
             release_pt = speed_info['release_point']
             rx, ry = release_pt
             if 0 <= rx < width and 0 <= ry < height:
-                cv2.circle(background_frame, release_pt, 12, (0, 255, 0), 3)
-                cv2.circle(background_frame, release_pt, 8, (255, 255, 255), -1)
+                r_outer = max(4, int(12 * rp_scale))
+                r_inner = max(3, int(8 * rp_scale))
+                cv2.circle(background_frame, release_pt, r_outer, (0, 255, 0), max(1, int(3 * rp_scale)))
+                cv2.circle(background_frame, release_pt, r_inner, (255, 255, 255), -1)
                 cv2.putText(
                     background_frame, "Release",
-                    (rx + 15, ry - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA
+                    (rx + int(15 * rp_scale), ry - int(10 * rp_scale)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6 * rp_scale,
+                    (0, 255, 0), max(1, int(2 * rp_scale)), cv2.LINE_AA
                 )
 
-        # 在畫面上顯示球速資訊
+        # 在畫面上顯示球速資訊（座標依解析度縮放，以 1920 為基準）
         if speed_info and ('release_speed_kmh' in speed_info or 'initial_speed_kmh' in speed_info):
-            # Semi-transparent background overlay
+            scale = width / 1920.0
             overlay = background_frame.copy()
 
-            # Build info lines based on available speed data
             if speed_info.get('release_speed_kmh'):
-                # 有出手球速時的完整顯示
                 ball_speed_kmh = speed_info['release_speed_kmh']
                 ball_speed_mph = kmh_to_mph(ball_speed_kmh)
                 max_speed_kmh = speed_info['max_speed_kmh']
@@ -144,7 +140,6 @@ def generate_overlay(
                     f"Max: {max_speed_kmh:.1f} km/h ({max_speed_mph:.1f} mph)",
                     f"Distance: {speed_info['total_distance_m']:.1f} m"
                 ]
-                box_height = 150
             elif speed_info.get('initial_speed_kmh'):
                 init_speed_kmh = speed_info['initial_speed_kmh']
                 init_speed_mph = kmh_to_mph(init_speed_kmh)
@@ -156,48 +151,34 @@ def generate_overlay(
                     f"Max: {max_speed_kmh:.1f} km/h ({max_speed_mph:.1f} mph)",
                     f"Distance: {speed_info['total_distance_m']:.1f} m"
                 ]
-                box_height = 150
             else:
                 info_lines = []
-                box_height = 0
             
             if info_lines:
-                # 繪製半透明背景框
-                cv2.rectangle(
-                    overlay,
-                    (20, 20),
-                    (550, box_height),  # 加寬以容納 mph
-                    (0, 0, 0),
-                    -1
-                )
+                pad = int(20 * scale)
+                line_height = int(40 * scale)
+                box_w = int(550 * scale)
+                box_h = pad + line_height * len(info_lines) + int(10 * scale)
+
+                cv2.rectangle(overlay, (pad, pad), (box_w, box_h), (0, 0, 0), -1)
                 cv2.addWeighted(overlay, 0.6, background_frame, 0.4, 0, background_frame)
+                cv2.rectangle(background_frame, (pad, pad), (box_w, box_h), (0, 255, 255), max(1, int(2 * scale)))
                 
-                # 繪製邊框
-                cv2.rectangle(
-                    background_frame,
-                    (20, 20),
-                    (550, box_height),  # 加寬以容納 mph
-                    (0, 255, 255),
-                    2
-                )
-                
-                # 顯示文字資訊
-                y_offset = 60
+                y_offset = pad + int(40 * scale)
                 for i, line in enumerate(info_lines):
-                    # 根據類型選擇顏色
-                    if i == 0:  # 主要球速 - 綠色
+                    if i == 0:
                         color = (0, 255, 0)
-                        font_scale = 1.2
-                        thickness = 3
-                    else:  # 其他資訊 - 黃色/白色
+                        font_scale = 1.2 * scale
+                        thickness = max(1, int(3 * scale))
+                    else:
                         color = (0, 255, 255) if 'Max' in line else (255, 255, 255)
-                        font_scale = 0.8
-                        thickness = 2
+                        font_scale = 0.8 * scale
+                        thickness = max(1, int(2 * scale))
                     
                     cv2.putText(
                         background_frame,
                         line,
-                        (35, y_offset + i * 40),
+                        (pad + int(15 * scale), y_offset + i * line_height),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         font_scale,
                         color,

@@ -8,7 +8,7 @@ from ultralytics import YOLO
 from typing import Optional
 
 from src.FrameInfo import FrameInfo
-from src.utils import fill_lost_tracking
+from src.utils import fill_lost_tracking, kmh_to_mph
 from src.ball_speed_calculator import BallSpeedCalculator
 from src.release_point_detector import ReleasePointDetector
 from src.SORT_tracker.sort import Sort
@@ -17,11 +17,6 @@ log = logging.getLogger(__name__)
 
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
-
-
-def _kmh_to_mph(kmh: float) -> Optional[float]:
-    """Convert km/h to mph."""
-    return kmh * 0.621371 if kmh else None
 
 
 # ── Stride correction constants ─────────────────────────────────
@@ -115,8 +110,9 @@ def _estimate_stride_correction(
 
 
 # ── Release point pose validation ──────────────────────────────
-MIN_ELBOW_ANGLE_AT_RELEASE = 130     # 出手時肘角度應 > 130°
-MAX_RELEASE_BALL_DIST_RATIO = 0.12   # 出手點和第一顆球距離 ≤ 畫面對角線 12%
+MIN_ELBOW_ANGLE_2D = 120             # 出手時肘角度（2D projection，容許透視壓縮）
+MIN_ELBOW_ANGLE_3D = 100             # 出手時肘角度（3D world coords，MediaPipe 快速動作下易低估）
+MAX_RELEASE_BALL_DIST_RATIO = 0.15   # 出手點和第一顆球距離 ≤ 畫面對角線 15%
 RELEASE_TRAJ_DIST_RATIO = 0.05      # release point 和軌跡反推的最大偏差（對角線 5%）
 RELEASE_DIR_MAX_ANGLE = 45.0        # release→first_ball 和球飛行方向最大偏差角度
 
@@ -128,6 +124,7 @@ def _validate_release_point_with_pose(
     first_ball_point: Optional[tuple[int, int]],
     image_w: int,
     image_h: int,
+    pose_world_landmarks=None,
 ) -> tuple[bool, list[str]]:
     """用 Pose 驗證出球點是否合理。
 
@@ -164,15 +161,33 @@ def _validate_release_point_with_pose(
         if release_point[1] > hip_y + image_h * 0.05:
             fails.append(f"hand below waist (release_y={release_point[1]:.0f}, hip_y={hip_y:.0f})")
 
-    # ── checkpoint 2：肘接近伸直（> 130°）──
+    # ── checkpoint 2：肘接近伸直 ──
+    # 優先使用 3D world landmarks（不受透視壓縮影響），否則 fallback 到 2D（放寬門檻）
     if shoulder is not None and elbow is not None and wrist is not None:
-        v1 = np.array([shoulder[0] - elbow[0], shoulder[1] - elbow[1]])
-        v2 = np.array([wrist[0] - elbow[0], wrist[1] - elbow[1]])
-        cos_a = float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6))
-        cos_a = float(np.clip(cos_a, -1.0, 1.0))
-        angle = float(np.arccos(cos_a) * 180 / np.pi)
-        if angle < MIN_ELBOW_ANGLE_AT_RELEASE:
-            fails.append(f"elbow not extended (angle={angle:.0f}°, need>{MIN_ELBOW_ANGLE_AT_RELEASE}°)")
+        used_3d = False
+        if pose_world_landmarks is not None and throwing_hand is not None:
+            try:
+                s_w = pose_world_landmarks.landmark[int(throwing_hand["shoulder"])]
+                e_w = pose_world_landmarks.landmark[int(throwing_hand["elbow"])]
+                w_w = pose_world_landmarks.landmark[int(throwing_hand["wrist"])]
+                v1 = np.array([s_w.x - e_w.x, s_w.y - e_w.y, s_w.z - e_w.z])
+                v2 = np.array([w_w.x - e_w.x, w_w.y - e_w.y, w_w.z - e_w.z])
+                cos_a = float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6))
+                cos_a = float(np.clip(cos_a, -1.0, 1.0))
+                angle = float(np.arccos(cos_a) * 180 / np.pi)
+                used_3d = True
+                if angle < MIN_ELBOW_ANGLE_3D:
+                    fails.append(f"elbow not extended (3D angle={angle:.0f}°, need>{MIN_ELBOW_ANGLE_3D}°)")
+            except Exception:
+                used_3d = False
+        if not used_3d:
+            v1 = np.array([shoulder[0] - elbow[0], shoulder[1] - elbow[1]])
+            v2 = np.array([wrist[0] - elbow[0], wrist[1] - elbow[1]])
+            cos_a = float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6))
+            cos_a = float(np.clip(cos_a, -1.0, 1.0))
+            angle = float(np.arccos(cos_a) * 180 / np.pi)
+            if angle < MIN_ELBOW_ANGLE_2D:
+                fails.append(f"elbow not extended (2D angle={angle:.0f}°, need>{MIN_ELBOW_ANGLE_2D}°)")
 
     # ── checkpoint 3：出手點離第一顆球不太遠 ──
     if first_ball_point is not None:
@@ -189,6 +204,60 @@ def _validate_release_point_with_pose(
 
     is_valid = len(fails) == 0
     return is_valid, fails
+
+
+ELBOW_SCAN_LOOKAHEAD = 20  # 往後掃描最多幀數（約 0.67s@30fps）
+
+
+def _find_best_elbow_frame(
+    raw_detections: list,
+    start_fid: int,
+    throwing_hand: Optional[dict],
+    end_fid: Optional[int] = None,
+    max_lookahead: int = ELBOW_SCAN_LOOKAHEAD,
+) -> tuple[Optional[int], Optional[object], Optional[object], float]:
+    """在 [start_fid, end_fid] 範圍內掃描，找 3D 手肘角最大的幀。
+
+    Returns:
+        (frame_id, pose_landmarks, pose_world_landmarks, best_angle)
+    """
+    if throwing_hand is None:
+        return None, None, None, 0.0
+    if end_fid is None:
+        end_fid = start_fid + max_lookahead
+
+    best_fid: Optional[int] = None
+    best_angle = -1.0
+    best_pose = None
+    best_world = None
+
+    for rd in raw_detections:
+        fid = rd["frame_id"]
+        if fid < start_fid or fid > end_fid:
+            continue
+        if not rd.get("has_pose"):
+            continue
+        wl = rd.get("pose_world_landmarks")
+        if wl is None:
+            continue
+        try:
+            s_w = wl.landmark[int(throwing_hand["shoulder"])]
+            e_w = wl.landmark[int(throwing_hand["elbow"])]
+            w_w = wl.landmark[int(throwing_hand["wrist"])]
+            v1 = np.array([s_w.x - e_w.x, s_w.y - e_w.y, s_w.z - e_w.z])
+            v2 = np.array([w_w.x - e_w.x, w_w.y - e_w.y, w_w.z - e_w.z])
+            cos_a = float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6))
+            cos_a = float(np.clip(cos_a, -1.0, 1.0))
+            angle = float(np.arccos(cos_a) * 180 / np.pi)
+            if angle > best_angle:
+                best_angle = angle
+                best_fid = fid
+                best_pose = rd["pose_landmarks"]
+                best_world = wl
+        except Exception:
+            continue
+
+    return best_fid, best_pose, best_world, best_angle
 
 
 def _validate_release_against_trajectory(
@@ -666,11 +735,10 @@ def get_pitch_frames_yolov8(
         log.warning("Cannot read fps, using default 30")
 
     pitch_frames: list[FrameInfo] = []
-    raw_detections: list = []  # 儲存原始偵測結果（尚未修正出球點）
+    raw_detections: list = []  # metadata only — no frame images stored
     frame_id = 0
-    release_point = None  # 記錄出手點
+    release_point = None
     
-    # 初始化多訊號出球點檢測器
     release_detector = ReleasePointDetector(fps=fps)
     ball_class_ids: Optional[set[int]] = None
 
@@ -713,18 +781,8 @@ def get_pitch_frames_yolov8(
             results = pose.process(frame_rgb)
             has_pose = results is not None and results.pose_landmarks is not None
             if has_pose:
-                # 添加到出球點檢測器
                 release_detector.add_frame(results.pose_landmarks, width, height)
-
-                mp_drawing.draw_landmarks(
-                    frame_rgb,
-                    results.pose_landmarks,
-                    mp_pose.POSE_CONNECTIONS,
-                    mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                    mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2, circle_radius=2),
-                )
             else:
-                # 沒有 pose，添加 None
                 release_detector.add_frame(None, width, height)
 
             # Directly extract the detection box from the YOLO result
@@ -755,33 +813,21 @@ def get_pitch_frames_yolov8(
                 pose_landmarks=results.pose_landmarks if has_pose else None,
             )
 
-            # 儲存原始偵測資料（第一階段：收集數據）
+            # Store metadata only — frame images are re-read in Phase 2
             raw_detections.append(
                 {
-                    "frame_rgb": frame_rgb,
                     "frame_id": frame_id,
                     "dets_list": dets_filtered,
                     "has_pose": has_pose,
                     "pose_landmarks": results.pose_landmarks if has_pose else None,
+                    "pose_world_landmarks": results.pose_world_landmarks if has_pose else None,
                     "ankle_pts": _extract_ankles(results.pose_landmarks, width, height) if has_pose else [],
                 }
             )
 
-            if show_preview:
-                vis = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                cv2.imshow("yolov8_result", vis)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
-
             frame_id += 1
     finally:
-        # 避免 mediapipe 資源未釋放（長影片/多次執行時較容易累積）
         pose.close()
-        if show_preview:
-            try:
-                cv2.destroyAllWindows()
-            except Exception:
-                pass
 
     log.info("Phase 1 complete: data collection (%d frames)", frame_id)
     
@@ -874,26 +920,42 @@ def get_pitch_frames_yolov8(
     first_release_adjusted = False
     first_ball_frame_idx = None
 
-    # Fallback：若追蹤無法挑出合理 track（例如影片很短/偵測很少），改用逐幀貪婪選點
-    # 仍保留「尺寸/踝部排除」的 dets_list，因此比原本的「只挑最高分」穩定很多。
     last_point = None
     last_vel = None
 
-    for frame_data in raw_detections:
-        frame_rgb = frame_data["frame_rgb"]
+    # Re-read video for Phase 2 to avoid storing all frames in memory
+    phase2_cap = cv2.VideoCapture(video_path)
+    try:
+      for frame_data in raw_detections:
         fid = frame_data["frame_id"]
         has_pose = frame_data["has_pose"]
         pose_landmarks = frame_data["pose_landmarks"]
+        pose_world_landmarks = frame_data.get("pose_world_landmarks")
 
-        # 先嘗試用 pose 的出手幀記錄 release point（即使該幀沒有球偵測）
+        # Read next frame from video
+        ret, frame_bgr = phase2_cap.read()
+        if not ret:
+            log.warning("Phase 2: failed to read frame %d, padding remaining", fid)
+            pitch_frames.append(FrameInfo(np.zeros((height, width, 3), dtype=np.uint8), False))
+            continue
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+        # Re-draw pose skeleton on the frame (was done in Phase 1 before)
+        if has_pose and pose_landmarks is not None:
+            mp_drawing.draw_landmarks(
+                frame_rgb,
+                pose_landmarks,
+                mp_pose.POSE_CONNECTIONS,
+                mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2, circle_radius=2),
+            )
+
         if (
             not first_release_adjusted
             and release_pose_frame_idx is not None
             and fid == release_pose_frame_idx
             and has_pose
         ):
-            image_h, image_w, _ = frame_rgb.shape
-            # 用第一顆球的位置幫助選正確的手
             _fbp = None
             if _first_ball_frame_for_validation is not None:
                 for _rd in raw_detections:
@@ -902,13 +964,13 @@ def get_pitch_frames_yolov8(
                         _fbp = (int((_d[0] + _d[2]) / 2), int((_d[1] + _d[3]) / 2))
                         break
             rp = _extract_release_point_from_pose(
-                pose_landmarks, image_w=image_w, image_h=image_h,
+                pose_landmarks, image_w=width, image_h=height,
                 throwing_hand=throwing_hand, first_ball_point=_fbp,
             )
             if rp is not None:
-                # Pose 驗證：檢查出手姿態是否合理
                 rp_valid, rp_fails = _validate_release_point_with_pose(
-                    pose_landmarks, rp, throwing_hand, _fbp, image_w, image_h,
+                    pose_landmarks, rp, throwing_hand, _fbp, width, height,
+                    pose_world_landmarks=pose_world_landmarks,
                 )
                 if rp_valid:
                     release_point = rp
@@ -917,9 +979,36 @@ def get_pitch_frames_yolov8(
                 else:
                     log.warning(
                         "Release point at frame %d failed pose validation: %s — "
-                        "will fallback to first ball detection",
+                        "scanning forward for best elbow frame",
                         fid, "; ".join(rp_fails),
                     )
+                    # 往後掃描手肘最伸直的幀
+                    _scan_end = _first_ball_frame_for_validation if _first_ball_frame_for_validation is not None else fid + ELBOW_SCAN_LOOKAHEAD
+                    _bf, _bp, _bw, _ba = _find_best_elbow_frame(
+                        raw_detections, fid, throwing_hand, end_fid=_scan_end
+                    )
+                    if _bf is not None:
+                        rp2 = _extract_release_point_from_pose(
+                            _bp, image_w=width, image_h=height,
+                            throwing_hand=throwing_hand, first_ball_point=_fbp,
+                        )
+                        if rp2 is not None:
+                            rp2_valid, rp2_fails = _validate_release_point_with_pose(
+                                _bp, rp2, throwing_hand, _fbp, width, height,
+                                pose_world_landmarks=_bw,
+                            )
+                            if rp2_valid:
+                                release_point = rp2
+                                first_release_adjusted = True
+                                log.info(
+                                    "Release point from elbow scan at frame %d (3D elbow=%.0f°)",
+                                    _bf, _ba,
+                                )
+                            else:
+                                log.warning(
+                                    "Elbow scan frame %d also failed: %s — will fallback to first ball detection",
+                                    _bf, "; ".join(rp2_fails),
+                                )
 
         point = None
         if best_track_id is not None:
@@ -927,7 +1016,6 @@ def get_pitch_frames_yolov8(
         else:
             dets_list = frame_data["dets_list"]
             if dets_list:
-                # 從過濾後候選中，優先挑「接近預測位置」者；沒有歷史時挑最高分
                 cand_centers = []
                 for d in dets_list:
                     x1, y1, x2, y2, conf, _ = d.tolist()
@@ -942,7 +1030,6 @@ def get_pitch_frames_yolov8(
                     if last_vel is not None:
                         pred = (int(last_point[0] + last_vel[0]), int(last_point[1] + last_vel[1]))
 
-                    # 距離太離譜的直接不選（避免突然跳到腳）
                     max_jump = width * 0.25
                     best = None
                     best_cost = 1e18
@@ -950,7 +1037,6 @@ def get_pitch_frames_yolov8(
                         dist = float(np.hypot(cx - pred[0], cy - pred[1]))
                         if dist > max_jump:
                             continue
-                        # cost: 距離為主，置信度為輔（越高越好）
                         cost = dist - (conf * 50.0)
                         if cost < best_cost:
                             best_cost = cost
@@ -963,7 +1049,6 @@ def get_pitch_frames_yolov8(
 
         centerX, centerY = point
 
-        # 更新 fallback 的速度估計（即便走 track 模式也可以讓後續更穩）
         if last_point is not None:
             last_vel = (centerX - last_point[0], centerY - last_point[1])
         last_point = (centerX, centerY)
@@ -971,20 +1056,18 @@ def get_pitch_frames_yolov8(
         if first_ball_frame_idx is None:
             first_ball_frame_idx = fid
 
-        # 若 pose 出手幀未成功記錄（例如 pose 缺失/信心不足），退回用「第一個球偵測點」記錄一次
         if not first_release_adjusted and fid == first_ball_frame_idx:
             if has_pose:
-                image_h, image_w, _ = frame_rgb.shape
                 rp = _extract_release_point_from_pose(
-                    pose_landmarks, image_w=image_w, image_h=image_h,
+                    pose_landmarks, image_w=width, image_h=height,
                     throwing_hand=throwing_hand,
                     first_ball_point=(centerX, centerY),
                 )
                 if rp is not None:
-                    # Fallback 路徑也必須通過 pose validation
                     rp_valid, rp_fails = _validate_release_point_with_pose(
                         pose_landmarks, rp, throwing_hand,
-                        (centerX, centerY), image_w, image_h,
+                        (centerX, centerY), width, height,
+                        pose_world_landmarks=pose_world_landmarks,
                     )
                     if rp_valid:
                         release_point = rp
@@ -992,20 +1075,47 @@ def get_pitch_frames_yolov8(
                     else:
                         log.warning(
                             "Fallback pose release at frame %d failed validation: %s — "
-                            "leaving release_point=None for trajectory fix",
+                            "scanning backward for best elbow frame",
                             fid, "; ".join(rp_fails),
                         )
-                        # 不設 release_point，讓 post-loop 的軌跡反推來處理
+                        # 往前掃描手肘最伸直的幀（release 應在球偵測到之前）
+                        _scan_start = max(0, fid - ELBOW_SCAN_LOOKAHEAD)
+                        _bf2, _bp2, _bw2, _ba2 = _find_best_elbow_frame(
+                            raw_detections, _scan_start, throwing_hand, end_fid=fid
+                        )
+                        if _bf2 is not None:
+                            rp3 = _extract_release_point_from_pose(
+                                _bp2, image_w=width, image_h=height,
+                                throwing_hand=throwing_hand,
+                                first_ball_point=(centerX, centerY),
+                            )
+                            if rp3 is not None:
+                                rp3_valid, rp3_fails = _validate_release_point_with_pose(
+                                    _bp2, rp3, throwing_hand,
+                                    (centerX, centerY), width, height,
+                                    pose_world_landmarks=_bw2,
+                                )
+                                if rp3_valid:
+                                    release_point = rp3
+                                    log.info(
+                                        "Fallback release from backward scan at frame %d (3D elbow=%.0f°)",
+                                        _bf2, _ba2,
+                                    )
+                                else:
+                                    log.warning(
+                                        "Backward scan frame %d also failed: %s — leaving release_point=None",
+                                        _bf2, "; ".join(rp3_fails),
+                                    )
                 else:
-                    # Pose 不可用，暫時不設 release_point
                     log.info("No pose release at first ball frame %d, will use trajectory", fid)
             else:
-                # 完全沒有 Pose，暫不設 release_point
                 log.info("No pose at first ball frame %d, will use trajectory", fid)
             first_release_adjusted = True
 
         color = (255, 255, 0)
         pitch_frames.append(FrameInfo(frame_rgb, True, (centerX, centerY), color))
+    finally:
+        phase2_cap.release()
 
     # 計算球速
     speed_info = {}
@@ -1202,7 +1312,7 @@ def get_pitch_frames_yolov8(
                 ]:
                     kmh = speed_info.get(key)
                     if kmh:
-                        parts.append(f"{label}={kmh:.1f}km/h({_kmh_to_mph(kmh):.1f}mph)")
+                        parts.append(f"{label}={kmh:.1f}km/h({kmh_to_mph(kmh):.1f}mph)")
                 if speed_info.get('total_distance_m'):
                     parts.append(f"dist={speed_info['total_distance_m']:.2f}m")
                 if speed_info.get('num_frames'):

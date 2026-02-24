@@ -7,6 +7,7 @@ from ultralytics import YOLO
 from src.get_pitch_frames_yolov8 import get_pitch_frames_yolov8
 from src.generate_overlay import generate_overlay
 from src.ball_speed_calculator import BallSpeedCalculator
+from src.utils import MLB_MOUND_DISTANCE_M
 
 
 def run_yolov8_pipeline(
@@ -22,7 +23,7 @@ def run_yolov8_pipeline(
     stride_correction: Optional[float] = None,
     debug: bool = False,
     logger: Optional[logging.Logger] = None,
-) -> Optional[dict]:
+) -> list[dict]:
     """
     Ultralytics YOLO（YOLO11/YOLOv8）推論 + Mediapipe Pose + overlay pipeline。
 
@@ -46,31 +47,34 @@ def run_yolov8_pipeline(
         import cv2
 
         cap = cv2.VideoCapture(video_paths[0])
-        if cap.isOpened():
-            video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            video_fps = int(cap.get(cv2.CAP_PROP_FPS))
+        try:
+            if cap.isOpened():
+                video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                video_fps = int(cap.get(cv2.CAP_PROP_FPS))
 
-            ret, _ = cap.read()
+                ret, _ = cap.read()
+
+                if ret:
+                    pitch_distance_m = (
+                        manual_distance_meters if manual_distance_meters is not None
+                        else MLB_MOUND_DISTANCE_M
+                    )
+                    speed_calculator = BallSpeedCalculator(
+                        fps=video_fps,
+                        video_width=video_width,
+                        video_height=video_height,
+                        theoretical_distance=pitch_distance_m,
+                        stride_correction=stride_correction,
+                    )
+                    log.info(
+                        "球速計算：投手丘距離=%.2fm, 跨步修正=%.2fm, 有效飛行距離=%.2fm",
+                        pitch_distance_m,
+                        speed_calculator.stride_correction,
+                        speed_calculator.effective_distance,
+                    )
+        finally:
             cap.release()
-
-            if ret:
-                pitch_distance_m = (
-                    manual_distance_meters if manual_distance_meters is not None else 18.44
-                )
-                speed_calculator = BallSpeedCalculator(
-                    fps=video_fps,
-                    video_width=video_width,
-                    video_height=video_height,
-                    theoretical_distance=pitch_distance_m,
-                    stride_correction=stride_correction,
-                )
-                log.info(
-                    "球速計算：投手丘距離=%.2fm, 跨步修正=%.2fm, 有效飛行距離=%.2fm",
-                    pitch_distance_m,
-                    speed_calculator.stride_correction,
-                    speed_calculator.effective_distance,
-                )
 
     pitch_frames = []
     width = height = fps = None
@@ -90,7 +94,7 @@ def run_yolov8_pipeline(
                 show_preview=show_preview,
                 speed_calculator=speed_calculator,
             )
-            if ball_frames and len(ball_frames) > 0:
+            if ball_frames:
                 pitch_frames.append(ball_frames)
                 if speed_info:
                     all_speed_info.append(speed_info)
@@ -113,7 +117,7 @@ def run_yolov8_pipeline(
                 )
             continue
 
-    valid_pitch_frames = [pf for pf in pitch_frames if pf and len(pf) > 0]
+    valid_pitch_frames = [pf for pf in pitch_frames if pf]
 
     if valid_pitch_frames and width is not None and height is not None and fps is not None:
         speed_info_for_overlay = all_speed_info[0] if all_speed_info else None

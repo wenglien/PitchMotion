@@ -1,17 +1,15 @@
+import argparse
 import logging
 import os
 import sys
 import warnings
-from optparse import OptionParser
-
 from typing import Optional
 
 from src.pipelines.yolov8_pipeline import run_yolov8_pipeline as _run_yolov8_pipeline
 from src.logging_utils import configure_logging, get_logger
 
-# Ignore warnings
 if not sys.warnoptions:
-    warnings.simplefilter("ignore")
+    warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 def run_yolov8_overlay(
@@ -47,102 +45,89 @@ def run_yolov8_overlay(
     )
 
 
-def _parse_cli_args():
+def _parse_cli_args() -> argparse.Namespace:
     """CLI 模式下使用的參數解析。"""
-    optparser = OptionParser()
-    optparser.add_option(
-        "-f",
-        "--videos_folder",
+    parser = argparse.ArgumentParser(
+        description="以 Ultralytics YOLO（YOLO11/YOLOv8）分析投球影片並產生 Overlay 影片。"
+    )
+    parser.add_argument(
+        "-f", "--videos-folder",
         dest="rootDir",
-        help="Root directory that contains your pitching videos",
         default=os.path.join("videos", "videos1"),
+        help="包含投球影片的資料夾（預設：videos/videos1）",
     )
-    optparser.add_option(
-        "-v",
-        "--video_file",
+    parser.add_argument(
+        "-v", "--video-file",
         dest="videoFile",
-        help="Single video file to analyze (overrides --videos_folder)",
         default=None,
+        help="單一影片檔案（會覆蓋 --videos-folder）",
     )
-    optparser.add_option(
-        "-w",
-        "--weights",
-        dest="weights",
-        help="Path to Ultralytics YOLO weights (.pt) (YOLO11/YOLOv8)",
+    parser.add_argument(
+        "-w", "--weights",
         default=os.path.join("yolov8", "best_baseball.pt"),
+        help="Ultralytics YOLO 權重檔路徑（.pt）",
     )
-    optparser.add_option(
-        "-c",
-        "--conf",
-        dest="conf",
-        type="float",
-        help="YOLO confidence threshold (default: 0.05)",
+    parser.add_argument(
+        "-c", "--conf",
+        type=float,
         default=0.05,
+        help="YOLO 偵測置信度閾值（預設：0.05）",
     )
-    optparser.add_option(
-        "-d",
-        "--distance",
-        dest="distance",
-        type="float",
+    parser.add_argument(
+        "-d", "--distance",
+        type=float,
+        default=None,
         help="投手丘到本壘板距離（公尺），例如：18.44（MLB）或 14.02（少棒）",
-        default=None,
     )
-    optparser.add_option(
+    parser.add_argument(
         "--stride-correction",
-        dest="stride_correction",
-        type="float",
-        help="跨步修正值（公尺），預設 1.7。實際飛行距離 = 投手丘距離 - 跨步修正",
+        type=float,
         default=None,
+        help="跨步修正值（公尺），預設 1.7。實際飛行距離 = 投手丘距離 - 跨步修正",
     )
-    optparser.add_option(
+    parser.add_argument(
         "--no-speed",
-        dest="no_speed",
         action="store_true",
-        help="停用球速計算功能（Ultralytics YOLO）",
         default=False,
+        help="停用球速計算功能",
     )
-
-    optparser.add_option(
+    parser.add_argument(
         "--debug",
-        dest="debug",
         action="store_true",
+        default=False,
         help="顯示完整 traceback（除錯用）",
-        default=False,
     )
-    optparser.add_option(
+    parser.add_argument(
         "--quiet",
-        dest="quiet",
         action="store_true",
-        help="只輸出錯誤訊息（ERROR）",
         default=False,
+        help="只輸出錯誤訊息（ERROR）",
     )
-    optparser.add_option(
-        "-V",
-        "--verbose",
-        dest="verbose",
+    parser.add_argument(
+        "-V", "--verbose",
         action="count",
-        help="輸出更多除錯資訊（可重複，例如 -VV）",
         default=0,
+        help="輸出更多除錯資訊（可重複，例如 -VV）",
     )
-    return optparser.parse_args()
+    return parser.parse_args()
 
 
 def cli_main() -> None:
     """單一 CLI 入口。"""
-    options, args = _parse_cli_args()
-    configure_logging(verbose=int(options.verbose or 0), quiet=bool(options.quiet))
+    args = _parse_cli_args()
+    configure_logging(verbose=args.verbose, quiet=args.quiet)
     log = get_logger("pitching_overlay")
 
     video_paths: list[str] = []
-    if options.videoFile:
-        video_file = options.videoFile
+    if args.videoFile:
+        video_file = args.videoFile
         if not os.path.isfile(video_file):
             log.error("video file not found: %s", video_file)
             sys.exit(1)
         video_paths = [video_file]
-        output_path = os.path.join(os.path.dirname(video_file), "Overlay.mp4")
+        output_path = os.path.join(os.path.dirname(video_file) or ".", "Overlay.mp4")
     else:
-        rootDir = options.rootDir
+        rootDir = args.rootDir
         if not os.path.isdir(rootDir):
             log.error("videos folder not found: %s", rootDir)
             sys.exit(1)
@@ -159,17 +144,17 @@ def cli_main() -> None:
         run_yolov8_overlay(
             video_paths,
             output_path,
-            weights_path=options.weights,
-            conf=float(options.conf),
+            weights_path=args.weights,
+            conf=args.conf,
             show_preview=True,
-            manual_distance_meters=options.distance,
-            stride_correction=options.stride_correction,
-            enable_speed_calculation=not options.no_speed,
-            debug=bool(options.debug),
+            manual_distance_meters=args.distance,
+            stride_correction=args.stride_correction,
+            enable_speed_calculation=not args.no_speed,
+            debug=args.debug,
             logger=log,
         )
     except Exception as e:
-        if options.debug:
+        if args.debug:
             log.exception("YOLO 處理失敗")
         else:
             log.error("YOLO 處理失敗：%s", str(e))

@@ -1,7 +1,51 @@
+from __future__ import annotations
+
 import cv2
 import copy
 import numpy as np
+from typing import Optional, TypedDict
 from src.FrameInfo import FrameInfo
+
+# ── Shared constants ──────────────────────────────────────────
+MS_TO_KMH = 3.6
+KMH_TO_MPH = 0.621371
+MLB_MOUND_DISTANCE_M = 18.44
+
+
+def kmh_to_mph(kmh: float) -> float:
+    """Convert km/h to mph."""
+    return kmh * KMH_TO_MPH
+
+
+# ── Shared data structures ────────────────────────────────────
+
+class FrameSpeedDetail(TypedDict):
+    frame: int
+    speed_kmh: float
+    speed_ms: float
+    distance_m: float
+    correction_factor: float
+
+
+class SpeedInfo(TypedDict, total=False):
+    """球速計算結果的結構定義。
+
+    所有 key 都是 optional（total=False）以保持向後相容。
+    """
+    release_speed_kmh: Optional[float]
+    initial_speed_kmh: float
+    max_speed_kmh: float
+    average_speed_kmh: float
+    total_distance_m: float
+    effective_distance_m: float
+    mound_distance_m: float
+    stride_correction_m: float
+    flight_time_s: float
+    num_frames: int
+    frame_details: list[FrameSpeedDetail]
+    calculation_method: str
+    release_point: tuple[int, int]
+    error: str
 
 
 def draw_ball_curve(
