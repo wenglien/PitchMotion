@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "SpeedGun",
+    "slug": "speedgun-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f4f6f9"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.speedgun.mobile",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "SpeedGun needs access to your photo library to select pitch videos for analysis.",
+        "NSCameraUsageDescription": "SpeedGun needs camera access to record pitch videos."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.speedgun.mobile"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sharing",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "SpeedGun needs access to your photo library to select pitch videos."
+        }
+      ],
+      "expo-video"
+    ]
+  }
+}

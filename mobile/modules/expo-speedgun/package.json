@@ -1,0 +1,11 @@
+{
+  "name": "expo-speedgun",
+  "version": "1.0.0",
+  "description": "On-device baseball pitch analysis pipeline for SpeedGun",
+  "main": "index.ts",
+  "author": "SpeedGun Team",
+  "license": "MIT",
+  "peerDependencies": {
+    "expo": "*"
+  }
+}

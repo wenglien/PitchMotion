@@ -1,0 +1,21 @@
+# ── FastAPI server ────────────────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+
+# ── Google Cloud ──────────────────────────────────────────────────────────────
+google-cloud-firestore==2.16.0
+google-cloud-storage==2.17.0
+
+# ── Speedgun pipeline dependencies ───────────────────────────────────────────
+filterpy==1.4.5
+image_registration==0.2.9
+matplotlib==3.9.0
+numpy==1.26.4
+Pillow==10.3.0
+scipy==1.13.1
+scikit-image==0.22.0
+opencv-python-headless==4.9.0.80
+mediapipe==0.10.21
+ultralytics>=8.3.150  # YOLO26 support (released 2026-01-14)
+scikit-learn>=1.4.0

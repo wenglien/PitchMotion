@@ -1,0 +1,114 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Model files (large files, should be downloaded separately)
+model/yolov4-tiny-baseball-416/saved_model.pb
+model/yolov4-tiny-baseball-416/variables/
+*.pb
+*.h5
+*.ckpt
+# *.pt - 已納入版控以推送模型權重
+*.weights
+*.onnx
+*.mlmodel
+
+# Training outputs (yolov8/runs/ 已納入版控以保留訓練權重)
+# yolov8/runs/
+*.csv
+*.png
+*.jpg
+!yolov8/datasets/**/*.jpg
+!yolov8/datasets/**/*.txt
+!yolov26n/datasets/**/*.jpg
+!yolov26n/datasets/**/*.txt
+
+# Video files — tracked via Git LFS in ver.2
+# videos/
+# *.mp4
+# *.avi
+# *.mov
+# *.mkv
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+
+# MediaPipe
+*.tflite
+
+# CoreML
+*.mlmodelc
+
+# Test outputs
+test_output/
+output/
+Overlay.mp4
+*_overlay.mp4
+
+# Local dev env overrides (use .env.example as template)
+.env
+
+# iOS – CocoaPods & Xcode generated files
+# Regenerate with: cd ios && xcodegen generate && pod install
+ios/Pods/
+ios/*.xcworkspace/
+ios/*.xcodeproj/
+
+# iOS / MediaPipe model files (binary, distribute separately)
+*.task
