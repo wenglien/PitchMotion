@@ -52,6 +52,12 @@ struct BallKinematics {
     var breakConfidence: Double = 0         // 0..1
 }
 
+struct BallTrajectorySample {
+    let frameIndex: Int
+    let point: CGPoint
+    let isSynthetic: Bool
+}
+
 final class BallKinematicsAnalyzer {
 
     // Strike-zone real-world width (MLB rule book — 17 inches).
@@ -70,10 +76,12 @@ final class BallKinematicsAnalyzer {
     // outlier pitch is "off the chart" without the number being outright
     // absurd.
     private static let BREAK_CLAMP_CM: Double = 80.0
+    private static let SYNTHETIC_SAMPLE_WEIGHT: Double = 0.45
 
     /// Main entry point.
     func analyze(
         trajectory: [CGPoint],
+        samples inputSamples: [BallTrajectorySample]? = nil,
         speedInfo: SpeedInfo,
         frameWidth: Int,
         frameHeight: Int,
@@ -94,11 +102,22 @@ final class BallKinematicsAnalyzer {
             return out
         }
 
-        // 1. Smooth pixel trajectory.
-        let smoothed = smooth(trajectory, window: 3)
-        let n = smoothed.count
-        let xs = smoothed.map { Double($0.x) }
-        let ys = smoothed.map { Double($0.y) }
+        // 1. Build time-aware samples. If the caller passes frame indices,
+        // keep real frame spacing; otherwise fall back to dense point order.
+        let rawSamples = inputSamples?.filter { finite($0.point) } ?? trajectory.enumerated().map {
+            BallTrajectorySample(frameIndex: $0.offset, point: $0.element, isSynthetic: false)
+        }
+        let cleanedSamples = filterOutliers(rawSamples)
+        guard cleanedSamples.count >= 8 else { return out }
+
+        let smoothedSamples = smoothSamples(cleanedSamples, window: 3)
+        let n = smoothedSamples.count
+        let ts = smoothedSamples.map { Double($0.frameIndex) }
+        let xs = smoothedSamples.map { Double($0.point.x) }
+        let ys = smoothedSamples.map { Double($0.point.y) }
+        let weights = smoothedSamples.map { $0.isSynthetic ? Self.SYNTHETIC_SAMPLE_WEIGHT : 1.0 }
+        let firstT = ts.first ?? 0.0
+        let lastT = ts.last ?? Double(n - 1)
 
         // 2. Pixel → centimetre calibration at plate plane.
         let zoneWidthPx  = (zone.xMax - zone.xMin) * Double(frameWidth)
@@ -107,31 +126,44 @@ final class BallKinematicsAnalyzer {
         let cmPerPxX = Self.STRIKE_ZONE_WIDTH_CM  / zoneWidthPx
         let cmPerPxY = Self.STRIKE_ZONE_HEIGHT_CM / zoneHeightPx
 
-        // 3. Fit a line to the first ~25 % of the trajectory (at least 4
-        // points, at most 12) — this approximates the ball's release
-        // direction in the image.
-        let refCount = max(4, min(12, Int(Double(n) * 0.25)))
+        // 3. Fit a line to the first reliable slice of the trajectory. Use
+        // actual frame indices and downweight gap-filled points so the release
+        // direction is not bent by interpolation or uneven sampling.
+        let refCount = max(4, min(14, Int(ceil(Double(n) * 0.30))))
         let refIdx = Array(0..<refCount)
         let refXs = refIdx.map { xs[$0] }
         let refYs = refIdx.map { ys[$0] }
-        // Index acts as our parameter t (frames are evenly spaced in time).
-        let refTs = refIdx.map { Double($0) }
+        let refTs = refIdx.map { ts[$0] }
+        let refWeights = refIdx.map { weights[$0] }
 
-        let (slopeX, interceptX, r2X) = linearFit(refTs, refXs)
-        let (slopeY, interceptY, r2Y) = linearFit(refTs, refYs)
+        let (slopeX, interceptX, r2X) = weightedLinearFit(refTs, refXs, refWeights)
+        let (slopeY, interceptY, r2Y) = weightedLinearFit(refTs, refYs, refWeights)
 
         // If the release direction is noisy (very low R² on BOTH axes) we
         // cannot trust the extrapolation.
         let dirR2 = max(r2X, r2Y)
         guard dirR2 > 0.40 else { return out }
 
-        // 4. Extrapolate that line all the way to the final trajectory
-        // point, which we treat as "catch / plate" position.
-        let finalT = Double(n - 1)
+        // 4. Estimate the plate/catch sample robustly. Prefer the pipeline's
+        // plate estimate when available, but place it on the same time axis by
+        // solving the tail trajectory for the matching Y. Otherwise use a
+        // weighted tail fit at the last observed frame instead of trusting one
+        // potentially jittery final detection.
+        let endpoint = estimateEndpoint(
+            ts: ts,
+            xs: xs,
+            ys: ys,
+            weights: weights,
+            speedInfo: speedInfo,
+            firstT: firstT,
+            lastT: lastT,
+            flightTime: flightTime
+        )
+        let finalT = endpoint.t
         let predictedX = slopeX * finalT + interceptX
         let predictedY = slopeY * finalT + interceptY
-        let catchX = xs[n - 1]
-        let catchY = ys[n - 1]
+        let catchX = endpoint.x
+        let catchY = endpoint.y
 
         // 5. Deviation in pixels → cm (using independent X/Y scales so a
         // non-square aspect ratio in the zone doesn't bias one axis).
@@ -176,9 +208,11 @@ final class BallKinematicsAnalyzer {
         let fitScore = clampD((dirR2 - 0.4) / 0.55, 0.0, 1.0) // r2 ∈ [0.4,0.95] → 0..1
         let ptScore  = clampD(Double(n - 8) / 12.0, 0.1, 1.0)
         let ftScore  = clampD(1.0 - abs(flightTime - 0.5) / 0.6, 0.2, 1.0)
+        let actualRatio = clampD(weights.reduce(0, +) / Double(max(1, weights.count)), 0.0, 1.0)
+        let endpointScore = endpoint.usedPlateEstimate ? 0.95 : 0.75
         let clipMult: Double = wasClamped ? 0.55 : 1.0
         out.breakConfidence = clampD(
-            (0.45 * fitScore + 0.3 * ptScore + 0.25 * ftScore) * clipMult,
+            (0.38 * fitScore + 0.22 * ptScore + 0.18 * ftScore + 0.12 * actualRatio + 0.10 * endpointScore) * clipMult,
             0.0, 1.0
         )
 
@@ -207,6 +241,104 @@ final class BallKinematicsAnalyzer {
         return out
     }
 
+    private func smoothSamples(_ samples: [BallTrajectorySample], window: Int = 3) -> [BallTrajectorySample] {
+        guard samples.count >= 3 else { return samples }
+        let half = window / 2
+        var out: [BallTrajectorySample] = []
+        out.reserveCapacity(samples.count)
+        for i in 0..<samples.count {
+            let lo = max(0, i - half)
+            let hi = min(samples.count - 1, i + half)
+            var sx = 0.0, sy = 0.0, sw = 0.0
+            var syntheticVotes = 0
+            for j in lo...hi {
+                let w = samples[j].isSynthetic ? Self.SYNTHETIC_SAMPLE_WEIGHT : 1.0
+                sx += Double(samples[j].point.x) * w
+                sy += Double(samples[j].point.y) * w
+                sw += w
+                if samples[j].isSynthetic { syntheticVotes += 1 }
+            }
+            let point = CGPoint(x: sx / max(sw, 1e-9), y: sy / max(sw, 1e-9))
+            out.append(BallTrajectorySample(
+                frameIndex: samples[i].frameIndex,
+                point: point,
+                isSynthetic: syntheticVotes > (hi - lo + 1) / 2
+            ))
+        }
+        out[0] = samples[0]
+        out[out.count - 1] = samples[samples.count - 1]
+        return out
+    }
+
+    private func filterOutliers(_ samples: [BallTrajectorySample]) -> [BallTrajectorySample] {
+        guard samples.count >= 6 else { return samples }
+        var speeds: [Double] = []
+        for i in 1..<samples.count {
+            let a = samples[i - 1]
+            let b = samples[i]
+            let dt = Double(max(1, b.frameIndex - a.frameIndex))
+            speeds.append(hypot(Double(b.point.x - a.point.x), Double(b.point.y - a.point.y)) / dt)
+        }
+        let med = median(speeds)
+        guard med > 0 else { return samples }
+        let threshold = max(12.0, med * 4.0)
+
+        var kept: [BallTrajectorySample] = [samples[0]]
+        for i in 1..<samples.count {
+            let prev = kept.last ?? samples[i - 1]
+            let cur = samples[i]
+            let dt = Double(max(1, cur.frameIndex - prev.frameIndex))
+            let speed = hypot(Double(cur.point.x - prev.point.x), Double(cur.point.y - prev.point.y)) / dt
+            if speed <= threshold || i == samples.count - 1 {
+                kept.append(cur)
+            }
+        }
+        return kept.count >= 8 ? kept : samples
+    }
+
+    private func estimateEndpoint(
+        ts: [Double],
+        xs: [Double],
+        ys: [Double],
+        weights: [Double],
+        speedInfo: SpeedInfo,
+        firstT: Double,
+        lastT: Double,
+        flightTime: Double
+    ) -> (t: Double, x: Double, y: Double, usedPlateEstimate: Bool) {
+        let n = ts.count
+        let tailCount = max(4, min(12, Int(ceil(Double(n) * 0.35))))
+        let start = max(0, n - tailCount)
+        let tailRange = Array(start..<n)
+        let tailTs = tailRange.map { ts[$0] }
+        let tailXs = tailRange.map { xs[$0] }
+        let tailYs = tailRange.map { ys[$0] }
+        let tailWeights = tailRange.map { weights[$0] }
+
+        let (tailSlopeX, tailInterceptX, _) = weightedLinearFit(tailTs, tailXs, tailWeights)
+        let (tailSlopeY, tailInterceptY, _) = weightedLinearFit(tailTs, tailYs, tailWeights)
+
+        if let catchPoint = speedInfo.catchPoint, finite(catchPoint) {
+            let catchX = Double(catchPoint.x)
+            let catchY = Double(catchPoint.y)
+            var targetT = lastT
+            if abs(tailSlopeY) > 0.05 {
+                let solvedT = (catchY - tailInterceptY) / tailSlopeY
+                let observedSpan = max(1.0, lastT - firstT)
+                let approxFps = observedSpan / max(0.05, flightTime)
+                let maxForwardFrames = max(3.0, approxFps * 0.20)
+                if solvedT >= firstT && solvedT <= lastT + maxForwardFrames {
+                    targetT = solvedT
+                }
+            }
+            return (targetT, catchX, catchY, true)
+        }
+
+        let x = tailSlopeX * lastT + tailInterceptX
+        let y = tailSlopeY * lastT + tailInterceptY
+        return (lastT, x, y, false)
+    }
+
     /// Simple OLS linear fit.  Returns (slope, intercept, R²).
     private func linearFit(_ xs: [Double], _ ys: [Double]) -> (Double, Double, Double) {
         let n = Double(xs.count)
@@ -229,6 +361,47 @@ final class BallKinematicsAnalyzer {
             return max(0.0, 1.0 - (syy - slope * sxy) / syy)
         }()
         return (slope, intercept, r2)
+    }
+
+    /// Weighted OLS linear fit. Returns (slope, intercept, weighted R²).
+    private func weightedLinearFit(_ xs: [Double], _ ys: [Double], _ weights: [Double]) -> (Double, Double, Double) {
+        guard xs.count == ys.count, ys.count == weights.count, xs.count > 1 else {
+            return (0, ys.first ?? 0, 0)
+        }
+        let sw = max(weights.reduce(0, +), 1e-9)
+        let mx = zip(xs, weights).reduce(0.0) { $0 + $1.0 * $1.1 } / sw
+        let my = zip(ys, weights).reduce(0.0) { $0 + $1.0 * $1.1 } / sw
+        var sxx = 0.0, sxy = 0.0, syy = 0.0
+        for i in 0..<xs.count {
+            let w = max(0.0, weights[i])
+            let dx = xs[i] - mx
+            let dy = ys[i] - my
+            sxx += w * dx * dx
+            sxy += w * dx * dy
+            syy += w * dy * dy
+        }
+        guard sxx > 1e-9 else { return (0, my, 0) }
+        let slope = sxy / sxx
+        let intercept = my - slope * mx
+        let r2: Double = {
+            guard syy > 1e-9 else { return 1.0 }
+            return clampD(1.0 - (syy - slope * sxy) / syy, 0.0, 1.0)
+        }()
+        return (slope, intercept, r2)
+    }
+
+    private func median(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        if sorted.count % 2 == 0 {
+            return (sorted[mid - 1] + sorted[mid]) / 2.0
+        }
+        return sorted[mid]
+    }
+
+    private func finite(_ p: CGPoint) -> Bool {
+        return p.x.isFinite && p.y.isFinite
     }
 
     private func clampD(_ v: Double, _ lo: Double, _ hi: Double) -> Double {

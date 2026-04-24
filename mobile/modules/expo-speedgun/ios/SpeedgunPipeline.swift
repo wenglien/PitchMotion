@@ -398,6 +398,15 @@ final class SpeedgunPipeline {
         let trajectoryPoints: [CGPoint] = frameInfos
             .filter { $0.ballInFrame }
             .map { $0.ballCenter }
+        let trajectorySamples: [BallTrajectorySample] = frameInfos
+            .filter { $0.ballInFrame }
+            .map {
+                BallTrajectorySample(
+                    frameIndex: $0.frameIndex,
+                    point: $0.ballCenter,
+                    isSynthetic: $0.ballLostTracking
+                )
+            }
 
         // Validate pose release:
         // 1. Confidence must be ≥ 0.5 (multi-signal agreement, not single weak signal)
@@ -531,6 +540,7 @@ final class SpeedgunPipeline {
             reportProgress("calculating", 0.69, "Analyzing break & spin...")
             let kinematics = BallKinematicsAnalyzer().analyze(
                 trajectory: trajectoryPoints,
+                samples: trajectorySamples,
                 speedInfo: speedInfo,
                 frameWidth: displayWidth,
                 frameHeight: displayHeight,
