@@ -53,7 +53,7 @@ final class FrameInterpolator {
                 .url(forResource: "FrameInterpolator", withExtension: "metallib"),
            let lib = try? dev.makeLibrary(URL: bundleURL) {
             library = lib
-        } else if let lib = try? dev.makeDefaultLibrary() {
+        } else if let lib = dev.makeDefaultLibrary() {
             library = lib
         } else {
             throw FrameInterpolatorError.shaderNotFound
@@ -166,14 +166,6 @@ final class FrameInterpolator {
                                     into flowTexture: MTLTexture) -> Bool {
         let W = CVPixelBufferGetWidth(src)
         let H = CVPixelBufferGetHeight(src)
-
-        var flowBuffer: CVPixelBuffer?
-        let status = CVPixelBufferCreate(
-            kCFAllocatorDefault, W, H,
-            kCVPixelFormatType_TwoComponent32Float,   // rg32float
-            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary,
-            &flowBuffer)
-        guard status == kCVReturnSuccess, let flow = flowBuffer else { return false }
 
         let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: dst)
         request.computationAccuracy = .medium   // fast enough for real-time pre-process

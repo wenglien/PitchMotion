@@ -45,7 +45,6 @@ interface OfflineAnalysisCallbacks {
 
 export function useOfflineAnalysis() {
   const abortRef = useRef(false);
-  const debugRunIdRef = useRef<string>('');
 
   const analyze = useCallback(
     async (
@@ -60,13 +59,6 @@ export function useOfflineAnalysis() {
       callbacks?: OfflineAnalysisCallbacks,
     ): Promise<PitchResult> => {
       abortRef.current = false;
-      debugRunIdRef.current = `offline-${Date.now()}`;
-      // #region agent log
-      console.log(`[DBG-cfe8be] useOfflineAnalysis analyze start runId=${debugRunIdRef.current}`);
-      // #endregion
-      // #region agent log
-      fetch('http://127.0.0.1:7817/ingest/2f29f838-8dcb-4b7f-b65b-0aaee978ffe2',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'cfe8be'},body:JSON.stringify({sessionId:'cfe8be',runId:debugRunIdRef.current,hypothesisId:'H0',location:'useOfflineAnalysis.ts:60',message:'Offline analysis started',data:{videoUri},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
 
       // Subscribe to progress events from native module
       const sub = addProgressListener((event) => {
@@ -77,16 +69,6 @@ export function useOfflineAnalysis() {
 
         callbacks?.onStage?.(stageId);
         callbacks?.onMessage?.(userMsg);
-        // #region agent log
-        if (event.stage === 'overlay' || event.stage === 'done') {
-          console.log(`[DBG-cfe8be] useOfflineAnalysis event stage=${event.stage} progress=${event.progress} msg=${event.message}`);
-        }
-        // #endregion
-        // #region agent log
-        if (event.stage === 'overlay' || event.stage === 'done') {
-          fetch('http://127.0.0.1:7817/ingest/2f29f838-8dcb-4b7f-b65b-0aaee978ffe2',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'cfe8be'},body:JSON.stringify({sessionId:'cfe8be',runId:debugRunIdRef.current,hypothesisId:'H0',location:'useOfflineAnalysis.ts:74',message:'Native progress event',data:{stage:event.stage,progress:event.progress,message:event.message},timestamp:Date.now()})}).catch(()=>{});
-        }
-        // #endregion
 
         // Map progress (0-1) to percentage for the overall pipeline
         // We estimate: detection=40%, tracking=15%, speed=10%, overlay=30%, other=5%
@@ -129,12 +111,6 @@ export function useOfflineAnalysis() {
         });
 
         if (raw.error) {
-          // #region agent log
-          console.log(`[DBG-cfe8be] useOfflineAnalysis native error=${String(raw.error)}`);
-          // #endregion
-          // #region agent log
-          fetch('http://127.0.0.1:7817/ingest/2f29f838-8dcb-4b7f-b65b-0aaee978ffe2',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'cfe8be'},body:JSON.stringify({sessionId:'cfe8be',runId:debugRunIdRef.current,hypothesisId:'H0',location:'useOfflineAnalysis.ts:120',message:'Native analyze returned error',data:{error:raw.error},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           throw new Error(raw.error as string);
         }
 
@@ -191,12 +167,6 @@ export function useOfflineAnalysis() {
         return result;
       } finally {
         sub.remove();
-        // #region agent log
-        console.log(`[DBG-cfe8be] useOfflineAnalysis finalize runId=${debugRunIdRef.current}`);
-        // #endregion
-        // #region agent log
-        fetch('http://127.0.0.1:7817/ingest/2f29f838-8dcb-4b7f-b65b-0aaee978ffe2',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'cfe8be'},body:JSON.stringify({sessionId:'cfe8be',runId:debugRunIdRef.current,hypothesisId:'H0',location:'useOfflineAnalysis.ts:153',message:'Offline analysis listener removed',data:{aborted:abortRef.current},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
       }
     },
     [],

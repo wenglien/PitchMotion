@@ -652,7 +652,7 @@ final class OverlayGenerator {
 
         // 3) Gentle 3-tap smoothing on each landmark channel to hide residual jitter.
         func smoothSeries(_ extract: (PoseLandmarks) -> CGPoint?) -> [CGPoint?] {
-            var raw = out.map { $0.flatMap(extract) }
+            let raw = out.map { $0.flatMap(extract) }
             var smoothed = raw
             for i in 1..<(raw.count - 1) {
                 guard let a = raw[i - 1], let b = raw[i], let c = raw[i + 1] else { continue }
@@ -661,7 +661,6 @@ final class OverlayGenerator {
                     y: (a.y + 2 * b.y + c.y) / 4
                 )
             }
-            _ = raw
             return smoothed
         }
         if out.count >= 3 {

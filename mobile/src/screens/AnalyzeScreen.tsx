@@ -4,7 +4,6 @@ import {
   Alert, Linking,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
 import { useNavigation } from '@react-navigation/native';
 import { Colors } from '../theme';
 import VideoPlayer from '../components/VideoPlayer';
@@ -16,38 +15,6 @@ import { useOfflineAnalysis } from '../hooks/useOfflineAnalysis';
 import AnalysisProgress from '../components/AnalysisProgress';
 
 const MAX_MB = 50;
-const DEBUG_ENDPOINT = 'http://127.0.0.1:7817/ingest/2f29f838-8dcb-4b7f-b65b-0aaee978ffe2';
-const DEBUG_SESSION_ID = 'cfe8be';
-const DEBUG_FILE_URI = `${FileSystem.documentDirectory ?? ''}debug-cfe8be.log`;
-
-function debugLog(hypothesisId: string, location: string, message: string, data: Record<string, unknown> = {}) {
-  const payload = {
-    sessionId: DEBUG_SESSION_ID,
-    runId: `analyze-screen-${Date.now()}`,
-    hypothesisId,
-    location,
-    message,
-    data,
-    timestamp: Date.now(),
-  };
-  // #region agent log
-  fetch(DEBUG_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Debug-Session-Id': DEBUG_SESSION_ID,
-    },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
-  if (FileSystem.documentDirectory) {
-    const line = `${JSON.stringify(payload)}\n`;
-    FileSystem.writeAsStringAsync(DEBUG_FILE_URI, line, { append: true }).catch(() => {});
-  }
-  // #region agent log
-  console.log(`[DBG-cfe8be] ${location} ${message} ${JSON.stringify(data)}`);
-  // #endregion
-  // #endregion
-}
 
 export default function AnalyzeScreen() {
   const { settings } = useSettings();
@@ -121,10 +88,6 @@ export default function AnalyzeScreen() {
 
   const onAnalyzeOffline = async () => {
     if (!videoUri || analyzing) return;
-    debugLog('H6', 'AnalyzeScreen.tsx:onAnalyzeOffline', 'Offline analysis invoked', {
-      analysisMode: settings.analysisMode,
-      hasVideoUri: !!videoUri,
-    });
     setAnalyzing(true);
     resetAnalysis();
     const initEntry = { msg: '[DEBUG] mode=offline', isError: false };
@@ -136,9 +99,6 @@ export default function AnalyzeScreen() {
     setStatusType('');
 
     try {
-      // #region agent log
-      console.log('[DBG-cfe8be] onAnalyzeOffline start');
-      // #endregion
       const result = await analyzeOffline(
         videoUri,
         {
@@ -150,15 +110,9 @@ export default function AnalyzeScreen() {
         },
         {
           onStage: (stageId) => {
-            if (stageId === 'overlay' || stageId === 'done') {
-              debugLog('H6', 'AnalyzeScreen.tsx:onAnalyzeOffline:onStage', 'Offline stage event', { stageId });
-            }
             setCurrentStage(stageId);
           },
           onMessage: (msg) => {
-            if (/overlay|encoding|生成/i.test(msg)) {
-              debugLog('H6', 'AnalyzeScreen.tsx:onAnalyzeOffline:onMessage', 'Offline overlay message', { msg });
-            }
             setStageMessages((prev) => {
               const last = prev[prev.length - 1];
               if (last === msg) return prev;
@@ -182,9 +136,6 @@ export default function AnalyzeScreen() {
       addPitch(result);
       navigation.navigate('Result');
     } catch (err: any) {
-      // #region agent log
-      console.log(`[DBG-cfe8be] onAnalyzeOffline error ${err?.message || ''}`);
-      // #endregion
       setStatusMsg(err.message || '離線分析失敗。');
       setStatusType('error');
     } finally {
@@ -194,11 +145,6 @@ export default function AnalyzeScreen() {
 
   const onAnalyzeOnline = async () => {
     if (!videoUri || analyzing) return;
-    debugLog('H7', 'AnalyzeScreen.tsx:onAnalyzeOnline', 'Online analysis invoked', {
-      analysisMode: settings.analysisMode,
-      hasVideoUri: !!videoUri,
-      backendUrl: settings.backendUrl,
-    });
     setAnalyzing(true);
     resetAnalysis();
     const initEntry2 = { msg: '[DEBUG] mode=online', isError: false };
@@ -208,9 +154,6 @@ export default function AnalyzeScreen() {
     setStatusType('');
 
     try {
-      // #region agent log
-      console.log('[DBG-cfe8be] onAnalyzeOnline start');
-      // #endregion
       const result = await analyzeVideo(
         settings.backendUrl,
         videoUri,
@@ -232,12 +175,6 @@ export default function AnalyzeScreen() {
           const parsed = parseLog(raw);
           if (parsed) {
             if (parsed.stageId) {
-              if (parsed.stageId === 'overlay' || parsed.stageId === 'done') {
-                debugLog('H7', 'AnalyzeScreen.tsx:onAnalyzeOnline:parsedStage', 'Online parsed stage', {
-                  stageId: parsed.stageId,
-                  userMsg: parsed.userMsg,
-                });
-              }
               setCurrentStage(parsed.stageId);
             }
             if (!parsed.isError) {
@@ -250,12 +187,6 @@ export default function AnalyzeScreen() {
           }
 
           if (raw && !/NORM_RECT|XNNPACK|inference_feedback|gl_context/.test(raw)) {
-            if (/overlay|encoding|ffmpeg|error|failed/i.test(raw)) {
-              debugLog('H7', 'AnalyzeScreen.tsx:onAnalyzeOnline:rawLog', 'Online raw technical log', {
-                level: entry.level,
-                raw,
-              });
-            }
             const cleanMsg = raw.replace(/^[\w.]+\s*[–-]\s*/, '').trim();
             const newEntry2 = { msg: cleanMsg, isError: entry.level === 'ERROR' };
             rawLogsRef.current = [...rawLogsRef.current.slice(-200), newEntry2];
@@ -272,9 +203,6 @@ export default function AnalyzeScreen() {
       addPitch(result);
       navigation.navigate('Result');
     } catch (err: any) {
-      // #region agent log
-      console.log(`[DBG-cfe8be] onAnalyzeOnline error ${err?.message || ''}`);
-      // #endregion
       setStatusMsg(err.message || '分析失敗。');
       setStatusType('error');
     } finally {
@@ -292,9 +220,6 @@ export default function AnalyzeScreen() {
     // so users can still get overlay output instead of a stalled online flow.
     const healthy = await checkHealth(settings.backendUrl);
     if (!healthy) {
-      debugLog('H7', 'AnalyzeScreen.tsx:onAnalyze', 'Backend health check failed, fallback to offline', {
-        backendUrl: settings.backendUrl,
-      });
       setRawLogs((prev) => [...prev.slice(-200), { msg: `ℹ️ 後端無法連線，自動改用裝置端離線分析`, isError: false }]);
       await onAnalyzeOffline();
       return;

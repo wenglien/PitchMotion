@@ -19,7 +19,7 @@ export default function VideoPlayer({ uri, style }: Props) {
         style={StyleSheet.absoluteFill}
         nativeControls
         contentFit="contain"
-        allowsFullscreen
+        fullscreenOptions={{ enable: true }}
       />
     </View>
   );

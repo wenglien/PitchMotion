@@ -110,8 +110,6 @@ final class SpeedgunPipeline {
         var rawDetections: [RawDetection] = []
         var frameInfos: [FrameInfo] = []
         var frameIndex = 0          // counts effective frames (incl. interpolated)
-        var lastDetectionFrame = -1
-        var lastBallDetectedFrame = -1   // frameIndex of last ball detection
         var ballDetectedCount = 0        // total number of frames where ball was seen
         // Run pose ~10 times per second in REAL time (not playback time).
         // Must use effectiveFps (display fps) here because frameIndex increments at effectiveFps rate.
@@ -214,8 +212,6 @@ final class SpeedgunPipeline {
                 fi.ballColor = (255, 30, 30)
                 fi.ballArea = best.area
                 yolo.kalmanUpdate(cx: best.cx, cy: best.cy)
-                lastDetectionFrame = frameIndex
-                lastBallDetectedFrame = frameIndex
                 ballDetectedCount += 1
             }
 
@@ -980,7 +976,7 @@ final class SpeedgunPipeline {
 
         // Convert to per-frame RMS values, sorted by frame index
         let sortedFrames = frameRMS.keys.sorted()
-        var rmsValues: [(frameIdx: Int, rms: Double)] = sortedFrames.compactMap { idx in
+        let rmsValues: [(frameIdx: Int, rms: Double)] = sortedFrames.compactMap { idx in
             guard let bucket = frameRMS[idx], bucket.count > 0 else { return nil }
             return (idx, sqrt(bucket.sumSq / Double(bucket.count)))
         }
