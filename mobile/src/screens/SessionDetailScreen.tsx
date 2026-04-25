@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, FlatList, StyleSheet } from 'react-native';
 import { RouteProp, useRoute } from '@react-navigation/native';
-import { Colors, Spacing, Radius, FontSize } from '../theme';
+import { Colors, Spacing, Radius, FontSize, Shadows } from '../theme';
 import { Session, PitchResult } from '../types';
 import { KMH_TO_MPH, getSpeedKmh } from '../utils/conversions';
 import {
@@ -202,8 +202,8 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
   },
-  sessionDate: { fontSize: FontSize.xl, fontWeight: '700', color: Colors.text },
-  sessionCount: { fontSize: FontSize.md, color: Colors.textMuted, fontWeight: '500' },
+  sessionDate: { fontSize: 26, fontWeight: '900', color: Colors.text },
+  sessionCount: { fontSize: FontSize.md, color: Colors.textMuted, fontWeight: '700' },
   emptyWrap: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 24 },
   emptyText: { fontSize: FontSize.md, color: Colors.textMuted },
   card: {
@@ -214,13 +214,9 @@ const styles = StyleSheet.create({
     padding: Spacing.xl,
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    ...Shadows.soft,
   },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: '800', color: Colors.text },
   sectionSub: { fontSize: FontSize.sm, color: Colors.textMuted, marginTop: 2 },
   divider: { height: 1, backgroundColor: Colors.border, marginTop: Spacing.md, marginBottom: Spacing.sm },
   tableRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.xs },
@@ -231,7 +227,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     color: Colors.textMuted,
-    fontWeight: '600',
+    fontWeight: '800',
     textAlign: 'center',
   },
   tableData: { flex: 1, fontSize: FontSize.md, color: Colors.text, textAlign: 'center' },
@@ -254,7 +250,7 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
     alignItems: 'center',
   },
-  statValue: { fontSize: FontSize.xxl, fontWeight: '700', color: Colors.text, lineHeight: 30 },
+  statValue: { fontSize: FontSize.xxl, fontWeight: '900', color: Colors.text, lineHeight: 30, fontVariant: ['tabular-nums'] },
   statLabel: {
     fontSize: FontSize.xs,
     textTransform: 'uppercase',

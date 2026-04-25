@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet,
-  Alert, Linking,
+  Alert, Linking, useWindowDimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useNavigation } from '@react-navigation/native';
-import { Colors } from '../theme';
+import { Colors, Layout, Radius, Shadows, Spacing } from '../theme';
 import VideoPlayer from '../components/VideoPlayer';
 import { useSettings } from '../context/SettingsContext';
 import { useResult } from '../context/ResultContext';
@@ -17,6 +17,7 @@ import AnalysisProgress from '../components/AnalysisProgress';
 const MAX_MB = 50;
 
 export default function AnalyzeScreen() {
+  const { width } = useWindowDimensions();
   const { settings } = useSettings();
   const { setResult, addPitch, setAnalysisLogs } = useResult();
   const { analyze: analyzeOffline } = useOfflineAnalysis();
@@ -228,11 +229,12 @@ export default function AnalyzeScreen() {
     await onAnalyzeOnline();
   };
   const isOffline = settings.analysisMode === 'offline';
+  const panelWidth = Math.min(width - 32, Layout.maxWidth);
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
       {analyzing ? (
-        <View style={{ marginTop: 16 }}>
+        <View style={[styles.responsivePane, { width: panelWidth, marginTop: 16 }]}>
           <AnalysisProgress
             uploadPct={uploadPct}
             stageId={currentStage}
@@ -250,7 +252,37 @@ export default function AnalyzeScreen() {
           </TouchableOpacity>
         </View>
       ) : (
-        <>
+        <View style={[styles.responsivePane, { width: panelWidth }]}>
+          <View style={styles.heroPanel}>
+            <View style={styles.heroTopRow}>
+              <View>
+                <Text style={styles.eyebrow}>PITCH LAB</Text>
+                <Text style={styles.heroTitle}>投球分析</Text>
+              </View>
+              <View style={styles.liveBadge}>
+                <View style={[styles.modeDot, { backgroundColor: isOffline ? Colors.green : Colors.accent }]} />
+                <Text style={styles.liveBadgeText}>{isOffline ? 'ON DEVICE' : 'SERVER'}</Text>
+              </View>
+            </View>
+            <Text style={styles.heroCopy}>
+              上傳慢動作影片，系統會偵測球路軌跡、出手速度、落點與位移資料。
+            </Text>
+            <View style={styles.heroMetricRow}>
+              <View style={styles.heroMetric}>
+                <Text style={styles.heroMetricValue}>{settings.moundDistanceM > 0 ? settings.moundDistanceM.toFixed(1) : 'AUTO'}</Text>
+                <Text style={styles.heroMetricLabel}>距離 m</Text>
+              </View>
+              <View style={styles.heroMetric}>
+                <Text style={styles.heroMetricValue}>{settings.confThreshold.toFixed(2)}</Text>
+                <Text style={styles.heroMetricLabel}>信心閾值</Text>
+              </View>
+              <View style={styles.heroMetric}>
+                <Text style={styles.heroMetricValue}>{MAX_MB}</Text>
+                <Text style={styles.heroMetricLabel}>MB 上限</Text>
+              </View>
+            </View>
+          </View>
+
           {/* Mode badge */}
           <View style={styles.modeBadge}>
             <View style={[styles.modeDot, { backgroundColor: isOffline ? '#10b981' : '#3b82f6' }]} />
@@ -309,11 +341,11 @@ export default function AnalyzeScreen() {
               {'• Keep the full pitching motion in frame'}
             </Text>
           </View>
-        </>
+        </View>
       )}
 
       {/* Analyze button */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+      <View style={[styles.actionWrap, { width: panelWidth }]}>
         <TouchableOpacity
           style={[styles.analyzeBtn, (!videoUri || analyzing) && styles.analyzeBtnDisabled]}
           onPress={onAnalyze}
@@ -345,7 +377,87 @@ const styles = StyleSheet.create({
   },
   content: {
     flexGrow: 1,
+    alignItems: 'center',
+    paddingTop: Spacing.md,
     paddingBottom: 80,
+  },
+  responsivePane: {
+    alignSelf: 'center',
+  },
+  heroPanel: {
+    backgroundColor: Colors.panel,
+    borderRadius: Radius.xxl,
+    padding: Spacing.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    ...Shadows.card,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+  },
+  eyebrow: {
+    color: Colors.cyan,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.6,
+    marginBottom: 6,
+  },
+  heroTitle: {
+    color: Colors.textInverse,
+    fontSize: 34,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  heroCopy: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: Spacing.md,
+  },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  liveBadgeText: {
+    color: Colors.textInverse,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  heroMetricRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginTop: Spacing.lg,
+  },
+  heroMetric: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: Spacing.md,
+  },
+  heroMetricValue: {
+    color: Colors.textInverse,
+    fontSize: 18,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  heroMetricLabel: {
+    color: '#94a3b8',
+    fontSize: 10,
+    marginTop: 3,
+    fontWeight: '800',
   },
   modeBadge: {
     flexDirection: 'row',
@@ -353,10 +465,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 8,
-    marginHorizontal: 16,
     marginTop: 12,
     backgroundColor: Colors.surface,
-    borderRadius: 10,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
   },
@@ -371,16 +482,16 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   dropZone: {
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderStyle: 'dashed',
-    borderColor: Colors.border,
-    borderRadius: 18,
+    borderColor: Colors.borderStrong,
+    borderRadius: Radius.xxl,
     paddingVertical: 48,
     paddingHorizontal: 24,
     alignItems: 'center',
-    marginHorizontal: 16,
-    marginTop: 8,
+    marginTop: Spacing.md,
     backgroundColor: Colors.surface,
+    ...Shadows.soft,
   },
   dropTitle: {
     fontSize: 18,
@@ -397,15 +508,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 16,
+    borderRadius: Radius.xl,
     padding: 8,
-    marginHorizontal: 16,
-    marginTop: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    marginTop: Spacing.md,
+    ...Shadows.soft,
   },
   video: {
     width: '100%',
@@ -441,15 +547,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 16,
+    borderRadius: Radius.xl,
     padding: 20,
-    marginHorizontal: 16,
-    marginTop: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    marginTop: Spacing.md,
+    ...Shadows.soft,
   },
   tipsTitle: {
     fontSize: 14,
@@ -473,10 +574,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textMuted,
   },
+  actionWrap: {
+    alignSelf: 'center',
+    paddingTop: 16,
+  },
   analyzeBtn: {
     backgroundColor: Colors.accent,
-    height: 52,
-    borderRadius: 14,
+    height: 54,
+    borderRadius: Radius.xl,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: 'rgba(37,99,235,0.25)',

@@ -14,7 +14,7 @@ import { SessionPitch } from '../types';
 
 // ── Strike-zone bounds in raw frame-normalised coords ────────────────────
 // Must match STRIKE_ZONE_* in Swift/Python and OverlayGenerator.
-const DEFAULT_ZONE = { xMin: 0.33, xMax: 0.67, yMin: 0.56, yMax: 0.86 };
+const DEFAULT_ZONE = { xMin: 0.33, xMax: 0.67, yMin: 0.59, yMax: 0.83 };
 const COL_LABELS = ['In', 'Mid', 'Out'];
 const ROW_LABELS = ['High', 'Mid', 'Low'];
 

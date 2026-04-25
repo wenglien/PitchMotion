@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Colors } from '../theme';
+import { Colors, Radius, Shadows, Spacing } from '../theme';
 import { PitchResult } from '../types';
 import { kmhToMph, pitchColor, formatTime, formatDate, shortMethod } from '../utils/conversions';
 import { generateCoachingComment } from '../utils/coaching';
@@ -91,16 +91,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 16,
-    padding: 14,
-    paddingBottom: 12,
-    marginHorizontal: 12,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    ...Shadows.soft,
   },
   header: {
     flexDirection: 'row',
@@ -122,7 +117,7 @@ const styles = StyleSheet.create({
   typeBadge: {
     paddingHorizontal: 12,
     paddingVertical: 4,
-    borderRadius: 99,
+    borderRadius: 999,
   },
   typeBadgeText: {
     fontSize: 12,
@@ -140,7 +135,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface2,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 10,
+    borderRadius: Radius.md,
     padding: 8,
     paddingHorizontal: 6,
     alignItems: 'center',
@@ -154,7 +149,7 @@ const styles = StyleSheet.create({
   },
   cellValue: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
     color: Colors.text,
     lineHeight: 16,
   },
@@ -166,8 +161,8 @@ const styles = StyleSheet.create({
   comment: {
     backgroundColor: 'rgba(37, 99, 235, 0.05)',
     borderWidth: 1,
-    borderColor: 'rgba(37, 99, 235, 0.18)',
-    borderRadius: 10,
+    borderColor: 'rgba(14, 165, 233, 0.2)',
+    borderRadius: Radius.md,
     padding: 8,
     paddingHorizontal: 10,
     paddingBottom: 10,

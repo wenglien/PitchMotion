@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Colors } from '../theme';
+import { Colors, Radius } from '../theme';
 
 interface MiniCardData {
   label: string;
@@ -39,7 +39,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface2,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 14,
+    borderRadius: Radius.xl,
     padding: 14,
     alignItems: 'center',
   },
@@ -52,7 +52,7 @@ const styles = StyleSheet.create({
   },
   value: {
     fontSize: 22,
-    fontWeight: '700',
+    fontWeight: '800',
     color: Colors.text,
   },
   sub: {

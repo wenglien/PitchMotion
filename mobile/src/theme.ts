@@ -1,15 +1,22 @@
 export const Colors = {
-  bg: '#f4f6f9',
+  bg: '#edf2f7',
+  bgDeep: '#0b1120',
   surface: '#ffffff',
-  surface2: '#eef1f6',
-  border: '#dde2ec',
-  accent: '#2563eb',
-  accent2: '#6d28d9',
-  green: '#059669',
-  yellow: '#d97706',
-  red: '#dc2626',
-  text: '#111827',
-  textMuted: '#6b7280',
+  surface2: '#f1f5f9',
+  surface3: '#e2e8f0',
+  panel: '#111827',
+  panel2: '#172033',
+  border: '#d6deea',
+  borderStrong: '#b6c2d2',
+  accent: '#0ea5e9',
+  accent2: '#7c3aed',
+  cyan: '#06b6d4',
+  green: '#10b981',
+  yellow: '#f59e0b',
+  red: '#ef4444',
+  text: '#0f172a',
+  textMuted: '#64748b',
+  textInverse: '#f8fafc',
 };
 
 export const PitchColors: Record<string, string> = {
@@ -35,14 +42,15 @@ export const Spacing = {
   lg: 16,
   xl: 20,
   xxl: 24,
+  xxxl: 32,
 };
 
 export const Radius = {
   sm: 8,
   md: 10,
-  lg: 14,
+  lg: 12,
   xl: 16,
-  xxl: 20,
+  xxl: 24,
 };
 
 export const FontSize = {
@@ -53,4 +61,25 @@ export const FontSize = {
   xl: 17,
   xxl: 22,
   hero: 88,
+};
+
+export const Layout = {
+  maxWidth: 760,
+};
+
+export const Shadows = {
+  card: {
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 4,
+  },
+  soft: {
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 2,
+  },
 };

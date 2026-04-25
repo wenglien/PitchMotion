@@ -12,8 +12,8 @@ let MLB_MOUND_DISTANCE_M: Double = 18.44
 // StrikeZone defaults so analysis, overlay, and result charts agree.
 let STRIKE_ZONE_X_MIN: Double = 0.33
 let STRIKE_ZONE_X_MAX: Double = 0.67
-let STRIKE_ZONE_Y_MIN: Double = 0.56
-let STRIKE_ZONE_Y_MAX: Double = 0.86
+let STRIKE_ZONE_Y_MIN: Double = 0.59
+let STRIKE_ZONE_Y_MAX: Double = 0.83
 
 let DEFAULT_STRIKE_ZONE: [String: Double] = [
     "x_min": STRIKE_ZONE_X_MIN,

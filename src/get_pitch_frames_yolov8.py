@@ -524,8 +524,8 @@ KALMAN_AREA_HI_RATIO     = 5.00   # 接受的最大面積倍率（球接近鏡�
 # armpits, roughly 25-30% of frame height centred around 0.72-0.78.
 STRIKE_ZONE_X_MIN = 0.33
 STRIKE_ZONE_X_MAX = 0.67
-STRIKE_ZONE_Y_MIN = 0.56
-STRIKE_ZONE_Y_MAX = 0.86
+STRIKE_ZONE_Y_MIN = 0.59
+STRIKE_ZONE_Y_MAX = 0.83
 
 
 def _clamp_float(v: float, lo: float, hi: float) -> float:

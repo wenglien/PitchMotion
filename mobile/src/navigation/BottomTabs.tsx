@@ -25,20 +25,20 @@ export default function BottomTabs() {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerStyle: { backgroundColor: Colors.bg, shadowColor: 'transparent', elevation: 0 },
-        headerTitleStyle: { fontWeight: '700', color: Colors.text, fontSize: 18 },
+        headerTitleStyle: { fontWeight: '800', color: Colors.text, fontSize: 18 },
         tabBarStyle: {
           backgroundColor: Colors.surface,
           borderTopWidth: 1,
           borderTopColor: Colors.border,
-          height: 60,
-          paddingBottom: 8,
+          height: 68,
+          paddingBottom: 10,
           paddingTop: 8,
         },
         tabBarActiveTintColor: Colors.accent,
         tabBarInactiveTintColor: Colors.textMuted,
         tabBarLabelStyle: {
-          fontSize: 13,
-          fontWeight: '600',
+          fontSize: 11,
+          fontWeight: '800',
           letterSpacing: 0.1,
         },
         tabBarIcon: ({ color, size }) => (

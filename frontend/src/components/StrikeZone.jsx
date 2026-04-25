@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // so the dot/strike classification shown here matches the overlay drawn on
 // the analysed video. Any per-job value in speed_info.plate_zone should be
 // preferred via the zoneOverride prop.
-const DEFAULT_ZONE = { xMin: 0.33, xMax: 0.67, yMin: 0.56, yMax: 0.86 };
+const DEFAULT_ZONE = { xMin: 0.33, xMax: 0.67, yMin: 0.59, yMax: 0.83 };
 const COL_LABELS = ["In", "Mid", "Out"];
 const ROW_LABELS = ["High", "Mid", "Low"];
 

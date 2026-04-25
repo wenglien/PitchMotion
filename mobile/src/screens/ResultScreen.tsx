@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Linking, Alert } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Linking, Alert, useWindowDimensions } from 'react-native';
 import * as Sharing from 'expo-sharing';
-import { Colors, Spacing, Radius, FontSize } from '../theme';
+import { Colors, Spacing, Radius, FontSize, Layout, Shadows } from '../theme';
 import VideoPlayer from '../components/VideoPlayer';
 import { useResult } from '../context/ResultContext';
 import { useSettings } from '../context/SettingsContext';
@@ -11,6 +11,7 @@ import BreakChart from '../components/BreakChart';
 import { useNavigation } from '@react-navigation/native';
 
 export default function ResultScreen() {
+  const { width } = useWindowDimensions();
   const { result, sessionPitches, clearPitches, analysisLogs } = useResult();
   const { settings } = useSettings();
   const navigation = useNavigation<any>();
@@ -45,6 +46,8 @@ export default function ResultScreen() {
   const pitchConf = si.pitch_confidence ? Math.round(si.pitch_confidence * 100) : null;
   const method = shortMethod(si.calculation_method);
   const hasWarn = !!si.trajectory_quality_warning;
+  const panelWidth = Math.min(width - 32, Layout.maxWidth);
+  const speedFontSize = width < 380 ? 66 : 82;
 
   const baseUrl = settings.backendUrl;
 
@@ -86,7 +89,7 @@ export default function ResultScreen() {
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
 
       {/* ── Hero Card ─────────────────────────────────────── */}
-      <View style={styles.heroCard}>
+      <View style={[styles.heroCard, { width: panelWidth }]}>
         {/* Pitch type badge row */}
         {pitchType && (
           <View style={styles.badgeRow}>
@@ -103,7 +106,7 @@ export default function ResultScreen() {
         <View style={styles.speedWrap}>
           {primaryMph !== null ? (
             <>
-              <Text style={styles.speedNum}>{primaryMph}</Text>
+              <Text style={[styles.speedNum, { fontSize: speedFontSize, lineHeight: speedFontSize }]}>{primaryMph}</Text>
               <View style={styles.speedMeta}>
                 <Text style={styles.speedUnit}>mph</Text>
                 <Text style={styles.speedKmh}>{primaryKmh?.toFixed(1)} km/h</Text>
@@ -118,21 +121,19 @@ export default function ResultScreen() {
         <View style={styles.heroDivider} />
 
         {/* Stats row */}
-        <View style={styles.statsRow}>
+        <View style={styles.statsGrid}>
           <View style={styles.statItem}>
             <Text style={styles.statVal}>
               {maxKmh !== null ? kmhToMph(maxKmh) : '—'}
             </Text>
             <Text style={styles.statLbl}>最高 mph</Text>
           </View>
-          <View style={styles.statDivider} />
           <View style={styles.statItem}>
             <Text style={styles.statVal}>
               {distM !== null ? distM.toFixed(1) : '—'}
             </Text>
             <Text style={styles.statLbl}>距離 m</Text>
           </View>
-          <View style={styles.statDivider} />
           <View style={styles.statItem}>
             <Text style={styles.statVal}>
               {flightS !== null ? flightS.toFixed(3) : '—'}
@@ -163,13 +164,13 @@ export default function ResultScreen() {
 
 
       {/* ── Strike Zone ───────────────────────────────────── */}
-      <View style={styles.card}>
+      <View style={[styles.card, { width: panelWidth }]}>
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitle}>好球帶落點</Text>
           <Text style={styles.cardSub}>本次練習 {sessionPitches.length} 球</Text>
         </View>
         <View style={styles.divider} />
-        <View style={{ alignItems: 'center', marginTop: Spacing.md }}>
+        <View style={styles.visualWrap}>
           <StrikeZone pitches={sessionPitches} zoneOverride={zoneOverride} />
         </View>
         {sessionPitches.length > 0 && (
@@ -181,7 +182,7 @@ export default function ResultScreen() {
 
       {/* ── Break Analysis ────────────────────────────────── */}
       {hasBreakChart && (
-        <View style={styles.card}>
+        <View style={[styles.card, { width: panelWidth }]}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>球路動態分析</Text>
             <Text style={styles.cardSub}>位移 Break</Text>
@@ -220,7 +221,7 @@ export default function ResultScreen() {
 
       {/* ── Overlay Video ─────────────────────────────────── */}
       {overlayUrl && !overlayUrl.includes('/dev/') && (
-        <View style={styles.videoCard}>
+        <View style={[styles.videoCard, { width: panelWidth }]}>
           <View style={styles.videoCardHeader}>
             <Text style={styles.cardTitle}>分析影片</Text>
             <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload} activeOpacity={0.75}>
@@ -236,7 +237,7 @@ export default function ResultScreen() {
 
       {/* ── Original Video ────────────────────────────────── */}
       {originalUrl && (
-        <View style={styles.videoCard}>
+        <View style={[styles.videoCard, { width: panelWidth }]}>
           <Text style={styles.cardTitle}>原始錄影</Text>
           <View style={{ height: Spacing.sm }} />
           <VideoPlayer uri={originalUrl} style={styles.videoPlayer} />
@@ -245,7 +246,7 @@ export default function ResultScreen() {
 
       {/* ── 偵測詳情 ──────────────────────────────────────── */}
       {result.yolo_ball_in_frame_count !== undefined && (
-        <View style={styles.card}>
+        <View style={[styles.card, { width: panelWidth }]}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>偵測詳情</Text>
           </View>
@@ -297,7 +298,7 @@ export default function ResultScreen() {
 
       {/* ── Console Log ───────────────────────────────────── */}
       {analysisLogs.length > 0 && (
-        <View style={styles.card}>
+        <View style={[styles.card, { width: panelWidth }]}>
           <TouchableOpacity
             style={styles.logHeader}
             onPress={() => {
@@ -341,7 +342,7 @@ export default function ResultScreen() {
       )}
 
       {/* ── CTA ───────────────────────────────────────────── */}
-      <View style={styles.ctaWrap}>
+      <View style={[styles.ctaWrap, { width: panelWidth }]}>
         <TouchableOpacity
           style={styles.ctaBtn}
           onPress={() => navigation.navigate('Analyze')}
@@ -357,7 +358,7 @@ export default function ResultScreen() {
 
 const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: Colors.bg },
-  content: { paddingTop: Spacing.md, paddingBottom: 40 },
+  content: { paddingTop: Spacing.md, paddingBottom: 40, alignItems: 'center' },
 
   emptyContainer: {
     flex: 1,
@@ -371,19 +372,14 @@ const styles = StyleSheet.create({
 
   /* Hero */
   heroCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.panel,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: 'rgba(255,255,255,0.08)',
     borderRadius: Radius.xxl,
-    marginHorizontal: Spacing.lg,
     paddingHorizontal: Spacing.xl,
     paddingTop: Spacing.xl,
     paddingBottom: Spacing.lg,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07,
-    shadowRadius: 6,
-    elevation: 3,
+    ...Shadows.card,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -406,38 +402,44 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
   },
   speedNum: {
-    fontSize: 80,
     fontWeight: '800',
-    lineHeight: 80,
-    letterSpacing: -3,
-    color: Colors.accent,
+    letterSpacing: 0,
+    color: Colors.textInverse,
   },
   speedMeta: { paddingBottom: 10, gap: 2 },
   speedUnit: {
     fontSize: FontSize.xxl,
     fontWeight: '600',
-    color: Colors.textMuted,
+    color: '#94a3b8',
     lineHeight: FontSize.xxl + 2,
   },
-  speedKmh: { fontSize: FontSize.md, color: Colors.textMuted },
-  speedNA: { fontSize: FontSize.xl, color: Colors.textMuted, paddingVertical: 24 },
+  speedKmh: { fontSize: FontSize.md, color: '#94a3b8' },
+  speedNA: { fontSize: FontSize.xl, color: '#94a3b8', paddingVertical: 24 },
 
-  heroDivider: { height: 1, backgroundColor: Colors.border, marginVertical: Spacing.md },
+  heroDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.1)', marginVertical: Spacing.md },
 
-  statsRow: {
+  statsGrid: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: Spacing.sm,
   },
-  statItem: { flex: 1, alignItems: 'center' },
-  statVal: { fontSize: FontSize.xl, fontWeight: '700', color: Colors.text },
+  statItem: {
+    flex: 1,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: Radius.lg,
+    paddingVertical: Spacing.md,
+  },
+  statVal: { fontSize: FontSize.xl, fontWeight: '800', color: Colors.textInverse, fontVariant: ['tabular-nums'] },
   statLbl: {
     fontSize: FontSize.xs,
-    color: Colors.textMuted,
+    color: '#94a3b8',
     marginTop: 3,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
-  statDivider: { width: 1, height: 36, backgroundColor: Colors.border },
 
   chipRow: {
     flexDirection: 'row',
@@ -471,13 +473,8 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     borderRadius: Radius.xl,
     padding: Spacing.xl,
-    marginHorizontal: Spacing.lg,
     marginTop: Spacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    ...Shadows.soft,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -487,6 +484,10 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text },
   cardSub: { fontSize: FontSize.sm, color: Colors.textMuted },
   divider: { height: 1, backgroundColor: Colors.border, marginTop: Spacing.md },
+  visualWrap: {
+    alignItems: 'center',
+    marginTop: Spacing.md,
+  },
 
   clearBtn: { marginTop: Spacing.md, alignItems: 'center', paddingVertical: Spacing.sm },
   clearBtnText: { fontSize: FontSize.md, color: Colors.accent, fontWeight: '600' },
@@ -566,13 +567,8 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     borderRadius: Radius.xl,
     padding: Spacing.lg,
-    marginHorizontal: Spacing.lg,
     marginTop: Spacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    ...Shadows.soft,
   },
   videoCardHeader: {
     flexDirection: 'row',
@@ -629,7 +625,7 @@ const styles = StyleSheet.create({
   },
 
   /* CTA */
-  ctaWrap: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.lg, paddingBottom: 8 },
+  ctaWrap: { paddingTop: Spacing.lg, paddingBottom: 8 },
   ctaBtn: {
     backgroundColor: Colors.accent,
     height: 50,

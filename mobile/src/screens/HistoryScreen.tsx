@@ -4,7 +4,7 @@ import {
   StyleSheet, Alert,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { Colors, Spacing, Radius, FontSize } from '../theme';
+import { Colors, Spacing, Radius, FontSize, Shadows } from '../theme';
 import { Session } from '../types';
 import { groupIntoSessions } from '../utils/coaching';
 import { KMH_TO_MPH, getSpeedKmh } from '../utils/conversions';
@@ -210,15 +210,11 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     padding: Spacing.lg,
     marginBottom: Spacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    ...Shadows.soft,
   },
   cardFirst: {
     borderColor: Colors.accent,
-    borderWidth: 1.5,
+    backgroundColor: '#f8fbff',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -228,7 +224,7 @@ const styles = StyleSheet.create({
   },
   cardDate: {
     fontSize: FontSize.lg,
-    fontWeight: '700',
+    fontWeight: '800',
     color: Colors.text,
   },
   cardArrow: {
@@ -245,7 +241,7 @@ const styles = StyleSheet.create({
   },
   statValue: {
     fontSize: FontSize.xxl,
-    fontWeight: '700',
+    fontWeight: '900',
     color: Colors.text,
     lineHeight: 28,
   },
