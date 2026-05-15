@@ -16,7 +16,12 @@ final class VideoDecoder {
     let naturalSize: CGSize
 
     private var reader: AVAssetReader?
-    private var output: AVAssetReaderTrackOutput?
+    // AVAssetReaderTrackOutput delivers frames at naturalSize (sensor orientation).
+    // For iPhone portrait recordings the natural pixels are landscape with a 90°
+    // preferredTransform — without applying that transform, downstream code
+    // would receive landscape frames while expecting portrait. Use
+    // AVAssetReaderVideoCompositionOutput to bake the rotation into the output.
+    private var output: AVAssetReaderOutput?
     // Retain the last sample buffer so the CVPixelBuffer it owns stays alive
     // until the next call to nextFrame(). Without this, the CVPixelBuffer returned
     // by CMSampleBufferGetImageBuffer() becomes a dangling pointer the moment
@@ -174,8 +179,35 @@ final class VideoDecoder {
         let outputSettings: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
         ]
-        let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: outputSettings)
-        output.alwaysCopiesSampleData = false
+
+        let output: AVAssetReaderOutput
+        let needsRotation = !videoTrack.preferredTransform.isIdentity
+        if needsRotation {
+            // Build a video composition that applies preferredTransform so the
+            // delivered frames are oriented to match displayWidth × displayHeight.
+            let composition = AVMutableVideoComposition()
+            composition.renderSize = CGSize(width: displayWidth, height: displayHeight)
+            composition.frameDuration = CMTime(value: 1, timescale: Int32(max(1, fps)))
+
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(start: .zero, duration: asset.duration)
+            let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
+            layerInstruction.setTransform(videoTrack.preferredTransform, at: .zero)
+            instruction.layerInstructions = [layerInstruction]
+            composition.instructions = [instruction]
+
+            let compOutput = AVAssetReaderVideoCompositionOutput(
+                videoTracks: [videoTrack],
+                videoSettings: outputSettings
+            )
+            compOutput.videoComposition = composition
+            compOutput.alwaysCopiesSampleData = false
+            output = compOutput
+        } else {
+            let trackOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: outputSettings)
+            trackOutput.alwaysCopiesSampleData = false
+            output = trackOutput
+        }
 
         guard reader.canAdd(output) else {
             throw SpeedgunError.videoLoadFailed("Cannot add video output to reader")

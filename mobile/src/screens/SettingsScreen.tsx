@@ -11,7 +11,7 @@ import type { AnalysisMode } from '../types';
 export default function SettingsScreen() {
   const { settings, updateSettings } = useSettings();
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<boolean | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; ms: number; msg: string } | null>(null);
 
   // Local string state so decimal-point mid-input isn't swallowed by parseFloat
   const [moundText, setMoundText] = useState(
@@ -28,11 +28,27 @@ export default function SettingsScreen() {
   const [zyMaxText, setZyMaxText] = useState(settings.strikeZone ? String(settings.strikeZone.yMax) : '');
 
   const onTestConnection = async () => {
+    const url = settings.backendUrl.trim();
+    if (!url) {
+      setTestResult({ ok: false, ms: 0, msg: '請先輸入 Backend URL' });
+      return;
+    }
     setTesting(true);
     setTestResult(null);
-    const ok = await checkHealth(settings.backendUrl);
-    setTestResult(ok);
-    setTesting(false);
+    const t0 = Date.now();
+    try {
+      const ok = await checkHealth(url);
+      const ms = Date.now() - t0;
+      setTestResult(
+        ok
+          ? { ok: true, ms, msg: `連線成功（${ms} ms）` }
+          : { ok: false, ms, msg: `伺服器無回應或回傳錯誤狀態` },
+      );
+    } catch {
+      setTestResult({ ok: false, ms: Date.now() - t0, msg: '連線失敗，請檢查 URL 與網路' });
+    } finally {
+      setTesting(false);
+    }
   };
 
   const isOffline = settings.analysisMode === 'offline';
@@ -69,15 +85,22 @@ export default function SettingsScreen() {
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Analysis Mode */}
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Analysis Mode</Text>
+          <Text style={styles.sectionTitle}>分析模式</Text>
           <View style={styles.modeRow}>
             <TouchableOpacity
               style={[styles.modeBtn, isOffline && styles.modeBtnActive]}
               onPress={() => updateSettings({ analysisMode: 'offline' as AnalysisMode })}
               activeOpacity={0.7}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: isOffline }}
+              accessibilityLabel="離線模式，裝置端 AI 運算"
             >
               <Text style={styles.modeBtnIcon}>📱</Text>
               <Text style={[styles.modeBtnLabel, isOffline && styles.modeBtnLabelActive]}>
@@ -89,6 +112,9 @@ export default function SettingsScreen() {
               style={[styles.modeBtn, !isOffline && styles.modeBtnActive]}
               onPress={() => updateSettings({ analysisMode: 'online' as AnalysisMode })}
               activeOpacity={0.7}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: !isOffline }}
+              accessibilityLabel="線上模式，上傳到伺服器運算"
             >
               <Text style={styles.modeBtnIcon}>☁️</Text>
               <Text style={[styles.modeBtnLabel, !isOffline && styles.modeBtnLabelActive]}>
@@ -107,41 +133,53 @@ export default function SettingsScreen() {
         {/* Backend URL — only show in online mode */}
         {!isOffline && (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Server Connection</Text>
+            <Text style={styles.sectionTitle}>伺服器連線</Text>
 
             <View style={styles.field}>
               <Text style={styles.label}>Backend URL</Text>
               <TextInput
                 style={styles.input}
                 value={settings.backendUrl}
-                onChangeText={(v) => updateSettings({ backendUrl: v })}
-                placeholder="http://localhost:8000"
+                onChangeText={(v) => {
+                  updateSettings({ backendUrl: v });
+                  if (testResult) setTestResult(null);  // invalidate stale result
+                }}
+                placeholder="https://your-server.example.com"
                 placeholderTextColor={Colors.textMuted}
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="url"
+                returnKeyType="done"
+                clearButtonMode="while-editing"
+                accessibilityLabel="後端伺服器網址"
               />
               <Text style={styles.hint}>
-                Simulator: http://localhost:8000{'\n'}
-                Physical device: use your Mac's LAN IP or ngrok URL
+                需要 backend 服務時才需要填寫；如果你只想用裝置端 AI，請改回離線模式。{'\n'}
+                範例：自架 server (https://...) 或 ngrok / Tailscale 隧道網址。
               </Text>
             </View>
 
             <TouchableOpacity
-              style={styles.testBtn}
+              style={[styles.testBtn, (!settings.backendUrl.trim() || testing) && { opacity: 0.5 }]}
               onPress={onTestConnection}
-              disabled={testing}
+              disabled={testing || !settings.backendUrl.trim()}
               activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: testing || !settings.backendUrl.trim(), busy: testing }}
+              accessibilityLabel="測試後端伺服器連線"
             >
               {testing ? (
-                <ActivityIndicator size="small" color="#fff" />
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <ActivityIndicator size="small" color="#fff" />
+                  <Text style={styles.testBtnText}>測試中…</Text>
+                </View>
               ) : (
-                <Text style={styles.testBtnText}>Test Connection</Text>
+                <Text style={styles.testBtnText}>測試連線</Text>
               )}
             </TouchableOpacity>
             {testResult !== null && (
-              <Text style={[styles.testResult, { color: testResult ? Colors.green : Colors.red }]}>
-                {testResult ? '✓ Connected successfully' : '✗ Connection failed'}
+              <Text style={[styles.testResult, { color: testResult.ok ? Colors.green : Colors.red }]}>
+                {testResult.ok ? '✓ ' : '✗ '}{testResult.msg}
               </Text>
             )}
           </View>
@@ -149,10 +187,10 @@ export default function SettingsScreen() {
 
         {/* Analysis Parameters */}
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Analysis Parameters</Text>
+          <Text style={styles.sectionTitle}>分析參數</Text>
 
           <View style={styles.field}>
-            <Text style={styles.label}>投打距離 Pitcher→Home Plate (m)</Text>
+            <Text style={styles.label}>投打距離 (公尺)</Text>
             <TextInput
               style={styles.input}
               value={moundText}
@@ -166,6 +204,8 @@ export default function SettingsScreen() {
               keyboardType="decimal-pad"
               placeholder="請量測實際距離 (例如 7.0)"
               placeholderTextColor={Colors.textMuted}
+              returnKeyType="done"
+              accessibilityLabel="投打距離（公尺），影響球速計算準度"
             />
             <Text style={styles.hint}>
               ⚠️ 此數值直接影響球速準度。請務必自行量測。{'\n'}
@@ -175,7 +215,7 @@ export default function SettingsScreen() {
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>投手身高 Pitcher Height (m, 選填)</Text>
+            <Text style={styles.label}>投手身高 (公尺，選填)</Text>
             <TextInput
               style={styles.input}
               value={pitcherHeightText}
@@ -193,6 +233,8 @@ export default function SettingsScreen() {
               keyboardType="decimal-pad"
               placeholder="例如 1.75"
               placeholderTextColor={Colors.textMuted}
+              returnKeyType="done"
+              accessibilityLabel="投手身高（公尺），可選"
             />
             <Text style={styles.hint}>
               若留空會用肩寬估距；填入身高時改用全身高，對側身姿勢更穩。
@@ -200,7 +242,7 @@ export default function SettingsScreen() {
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>Stride Correction (metres)</Text>
+            <Text style={styles.label}>跨步補償距離 (公尺)</Text>
             <TextInput
               style={styles.input}
               value={strideText}
@@ -212,7 +254,10 @@ export default function SettingsScreen() {
                 updateSettings({ strideCorrectionM: val });
               }}
               keyboardType="decimal-pad"
+              placeholder="例如 1.7"
               placeholderTextColor={Colors.textMuted}
+              returnKeyType="done"
+              accessibilityLabel="跨步補償（公尺）"
             />
             <Text style={styles.hint}>
               投手跨步距離（公尺），從投球距離中扣除以提升準確度，不確定請填 0
@@ -220,7 +265,7 @@ export default function SettingsScreen() {
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>Detection Confidence Threshold</Text>
+            <Text style={styles.label}>偵測信心閾值</Text>
             <TextInput
               style={styles.input}
               value={confText}
@@ -232,70 +277,52 @@ export default function SettingsScreen() {
                 updateSettings({ confThreshold: val });
               }}
               keyboardType="decimal-pad"
+              placeholder="0.03"
               placeholderTextColor={Colors.textMuted}
+              returnKeyType="done"
+              accessibilityLabel="偵測信心閾值，數值越小偵測越多"
             />
             <Text style={styles.hint}>
-              Lower = more detections but more noise. Recommended: 0.03–0.10.
+              數值越小 = 偵測到的球越多，但雜訊也較高。建議 0.03–0.10。
             </Text>
           </View>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Strike Zone Calibration</Text>
+          <Text style={styles.sectionTitle}>好球帶校正</Text>
           <Text style={styles.hint}>
             主審視角框線座標，0–1 代表影片畫面比例。預設 x 0.33–0.67，y 0.56–0.86。
           </Text>
           <View style={styles.zoneGrid}>
-            <View style={styles.zoneField}>
-              <Text style={styles.label}>x_min</Text>
-              <TextInput
-                style={styles.input}
-                value={zxMinText}
-                onChangeText={setZxMinText}
-                onBlur={commitStrikeZone}
-                keyboardType="decimal-pad"
-                placeholder="0.33"
-                placeholderTextColor={Colors.textMuted}
-              />
-            </View>
-            <View style={styles.zoneField}>
-              <Text style={styles.label}>x_max</Text>
-              <TextInput
-                style={styles.input}
-                value={zxMaxText}
-                onChangeText={setZxMaxText}
-                onBlur={commitStrikeZone}
-                keyboardType="decimal-pad"
-                placeholder="0.67"
-                placeholderTextColor={Colors.textMuted}
-              />
-            </View>
-            <View style={styles.zoneField}>
-              <Text style={styles.label}>y_min</Text>
-              <TextInput
-                style={styles.input}
-                value={zyMinText}
-                onChangeText={setZyMinText}
-                onBlur={commitStrikeZone}
-                keyboardType="decimal-pad"
-                placeholder="0.56"
-                placeholderTextColor={Colors.textMuted}
-              />
-            </View>
-            <View style={styles.zoneField}>
-              <Text style={styles.label}>y_max</Text>
-              <TextInput
-                style={styles.input}
-                value={zyMaxText}
-                onChangeText={setZyMaxText}
-                onBlur={commitStrikeZone}
-                keyboardType="decimal-pad"
-                placeholder="0.86"
-                placeholderTextColor={Colors.textMuted}
-              />
-            </View>
+            {([
+              ['x_min', zxMinText, setZxMinText, '0.33', '好球帶左邊界'],
+              ['x_max', zxMaxText, setZxMaxText, '0.67', '好球帶右邊界'],
+              ['y_min', zyMinText, setZyMinText, '0.56', '好球帶上邊界'],
+              ['y_max', zyMaxText, setZyMaxText, '0.86', '好球帶下邊界'],
+            ] as const).map(([label, value, setter, placeholder, a11y]) => (
+              <View key={label} style={styles.zoneField}>
+                <Text style={styles.label}>{label}</Text>
+                <TextInput
+                  style={styles.input}
+                  value={value}
+                  onChangeText={setter}
+                  onBlur={commitStrikeZone}
+                  keyboardType="decimal-pad"
+                  placeholder={placeholder}
+                  placeholderTextColor={Colors.textMuted}
+                  returnKeyType="done"
+                  accessibilityLabel={a11y}
+                />
+              </View>
+            ))}
           </View>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={resetStrikeZone} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={resetStrikeZone}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="重置好球帶為預設值"
+          >
             <Text style={styles.secondaryBtnText}>重置為預設</Text>
           </TouchableOpacity>
           {settings.strikeZone && (
@@ -308,15 +335,15 @@ export default function SettingsScreen() {
 
         {/* About */}
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>About</Text>
+          <Text style={styles.sectionTitle}>關於</Text>
           <Text style={styles.aboutText}>
             <Text style={{ color: Colors.text, fontWeight: '700' }}>SpeedGun</Text>
-            {'\n'}AI-powered baseball pitch speed analyser.
-            {'\n'}
+            {'\n'}AI 棒球球速與球路分析工具。
+            {'\n\n'}
             {isOffline
-              ? 'Select a video → on-device AI analysis → instant speed readout.'
-              : 'Upload a video → get instant mph / km/h readout.'}
-            {'\n\n'}Powered by YOLO ball detection, body pose estimation, and a physics-based speed calculator.
+              ? '選擇影片 → 裝置端 AI 分析 → 即時取得球速與位移資料。'
+              : '上傳影片 → 伺服器分析 → 即時取得 mph / km/h 球速。'}
+            {'\n\n'}採用 YOLO 棒球偵測、身體姿勢估測，以及物理模型球速計算。
           </Text>
         </View>
       </ScrollView>

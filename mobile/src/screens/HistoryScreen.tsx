@@ -76,6 +76,9 @@ export default function HistoryScreen() {
         style={[styles.card, index === 0 && styles.cardFirst]}
         onPress={() => navigation.navigate('SessionDetail', { session: item })}
         activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`${dateLabel} 練習，共 ${records.length} 球${avgMph ? `，均速 ${avgMph} mph` : ''}${maxMph ? `，最高 ${maxMph} mph` : ''}`}
+        accessibilityHint="點擊查看詳細投球紀錄"
       >
         {/* Date row */}
         <View style={styles.cardHeader}>
@@ -146,7 +149,13 @@ export default function HistoryScreen() {
         ListHeaderComponent={
           <View style={styles.listHeader}>
             <Text style={styles.listHeaderText}>{sessions.length} 次練習</Text>
-            <TouchableOpacity onPress={onClearAll} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <TouchableOpacity
+              onPress={onClearAll}
+              hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
+              accessibilityRole="button"
+              accessibilityLabel="清除所有歷史投球紀錄"
+              accessibilityHint="此動作無法復原"
+            >
               <Text style={styles.clearBtn}>清除全部</Text>
             </TouchableOpacity>
           </View>

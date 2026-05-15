@@ -9,12 +9,19 @@ final class BallSpeedCalculator {
     let videoHeight: Int
     let theoreticalDistance: Double?
     let strideCorrectionM: Double
+    /// Whether to subtract strideCorrectionM from theoreticalDistance.
+    /// Only true when the user manually entered the rubber-to-plate distance — for
+    /// pose_estimated / default sources the geometry is direct cam-to-pitcher (or a
+    /// rough fallback) and a second 1.7m subtraction would either double-count or
+    /// guess a stride that wasn't actually thrown.
+    let applyStrideCorrection: Bool
     var pixelsPerMeter: Double?
     var nearY: Int?
     var farY: Int?
 
     var effectiveDistance: Double? {
         guard let d = theoreticalDistance else { return nil }
+        guard applyStrideCorrection else { return max(d, 1.0) }
         return max(d - strideCorrectionM, 1.0)
     }
 
@@ -23,13 +30,15 @@ final class BallSpeedCalculator {
         videoWidth: Int,
         videoHeight: Int,
         theoreticalDistance: Double? = nil,
-        strideCorrectionM: Double? = nil
+        strideCorrectionM: Double? = nil,
+        applyStrideCorrection: Bool = true
     ) {
         self.fps = max(1, fps)
         self.videoWidth = videoWidth
         self.videoHeight = videoHeight
         self.theoreticalDistance = theoreticalDistance
         self.strideCorrectionM = strideCorrectionM ?? DEFAULT_STRIDE_CORRECTION
+        self.applyStrideCorrection = applyStrideCorrection
     }
 
     // MARK: - Perspective Correction
@@ -52,9 +61,14 @@ final class BallSpeedCalculator {
         if let release = releaseFrameIdx, let first = firstBallFrameIdx, first > release {
             let raw = Double(max(1, first - release))
             if raw > maxPreFrames {
+                NSLog("[BallSpeedCalculator] Pre-detect gap %.0f frames exceeds cap %.0f, using fallback %.0f",
+                      raw, maxPreFrames, fallback)
                 return fallback
             }
-            return raw
+            // A pose release that lands too close to the first ball detection makes
+            // flight time too short and inflates speed. Treat pose as a lower bound,
+            // not as permission to use an unrealistically tiny pre-detect gap.
+            return max(raw, fallback)
         }
         return fallback
     }
@@ -67,27 +81,34 @@ final class BallSpeedCalculator {
     ) -> Double {
         var rawTime: Double?
 
-        // Priority 1: pose release → last endpoint (which may be audio catch or YOLO last).
-        // releaseFrameIdx has already been validated by SpeedgunPipeline to be within
-        // MAX_PRE_DETECT_SEC before firstBallFrame, so this is safe.
-        if let release = releaseFrameIdx, let last = lastBallFrameIdx, last > release {
-            rawTime = Double(last - release) / Double(fps)
-        }
-
-        // Priority 2: firstBallFrame + pre-detection offset → last endpoint.
-        // Used when pose release is not available.
-        if rawTime == nil, let first = firstBallFrameIdx, let last = lastBallFrameIdx, last > first {
+        // Priority 1: first ball → endpoint + release-to-first compensation.
+        // This is deliberately more stable than raw pose-release → endpoint:
+        // when scene changes or pose jitters, release can land only a few frames
+        // before the first ball detection, which shortens flight time and causes
+        // 100+ mph spikes. Audio catch can still be the endpoint via lastBallFrameIdx.
+        if let first = firstBallFrameIdx, let last = lastBallFrameIdx, last > first {
             let detFrames = Double(last - first)
             let preFrames = estimateFramesElapsed(
                 releaseFrameIdx: releaseFrameIdx,
                 firstBallFrameIdx: first
             )
             rawTime = max(1.0, detFrames + preFrames) / Double(fps)
+            NSLog("[BallSpeedCalculator] Flight time: first(%d)->last(%d)=%.0f + pre=%.0f frames -> %.3fs",
+                  first, last, detFrames, preFrames, rawTime ?? 0)
+        }
+
+        // Priority 2: raw release → endpoint only when no first-ball anchor exists.
+        if rawTime == nil, let release = releaseFrameIdx, let last = lastBallFrameIdx, last > release {
+            rawTime = Double(last - release) / Double(fps)
+            NSLog("[BallSpeedCalculator] Flight time fallback: release(%d)->last(%d) -> %.3fs",
+                  release, last, rawTime ?? 0)
         }
 
         // Last resort: trajectory point count
         if rawTime == nil {
             rawTime = Double(max(1, numTrajectoryPoints)) / Double(fps)
+            NSLog("[BallSpeedCalculator] Flight time last-resort: points=%d fps=%d -> %.3fs",
+                  numTrajectoryPoints, fps, rawTime ?? 0)
         }
 
         let time0 = rawTime ?? MIN_FLIGHT_TIME_SEC
@@ -110,15 +131,19 @@ final class BallSpeedCalculator {
     /// Estimate total flight time using ball area growth rate (optical looming).
     ///
     /// In a catcher-POV video the ball approaches the camera, so its projected
-    /// area A(t) grows as  A ∝ 1/(d-v*t)².  Near contact the looming rate
-    /// dA/dt ≈ 2*A*v/d  →  TTC ≈ 2*A / (dA/dt).
+    /// area follows  A(t) = K / (d − v·t)².  Substituting y = 1/√A gives an
+    /// exact linear relationship  y(t) = (d − v·t) / √K  with slope −v/√K and
+    /// intercept d/√K.  The contact instant is the zero-crossing  t_contact = −b/m.
     ///
-    /// We fit a linear regression to A(t) over the observed track to get a
-    /// stable dA/dt, then use TTC from the first detected frame as total flight
-    /// time (from release ≈ firstFrame − preFrames).
+    /// Why 1/√A and not raw A:
+    ///   A vs t is strongly convex near contact (∝ 1/(d−v·t)²), so a linear
+    ///   regression of A vs t recovers the *average* dA/dt — much larger than
+    ///   the instantaneous slope at t_first.  Plugging that into the closed-form
+    ///   TTC = 2·A_first/(dA/dt|_{t_first}) systematically underestimates flight
+    ///   time and inflates speed by ~30–50% on a typical 4× looming clip.
+    ///   The 1/√A linearization is exact for the looming model, removing that bias.
     ///
     /// Returns nil if area data is insufficient or the estimate is implausible.
-    /// TTC estimate along with a status string explaining success/failure reason.
     /// Status: "used" | "fallback_samples" | "fallback_growth" | "fallback_slope" | "fallback_range"
     func estimateTTCWithStatus(frameInfos: [FrameInfo]) -> (Double?, String) {
         // Collect (frameIndex, area) pairs with valid area
@@ -140,27 +165,39 @@ final class BallSpeedCalculator {
             return (nil, "fallback_growth")
         }
 
-        // Linear regression: A = slope * t + intercept
+        // Linear regression on y = 1/√A against t. Exact for A ∝ 1/(d−v·t)².
         let ts = samples.map { $0.0 }
-        let as_ = samples.map { $0.1 }
+        let ys = samples.map { 1.0 / sqrt(max($0.1, 1e-6)) }
         let n = Double(samples.count)
         let meanT = ts.reduce(0, +) / n
-        let meanA = as_.reduce(0, +) / n
+        let meanY = ys.reduce(0, +) / n
         var num = 0.0, den = 0.0
         for i in 0..<samples.count {
-            num += (ts[i] - meanT) * (as_[i] - meanA)
+            num += (ts[i] - meanT) * (ys[i] - meanY)
             den += (ts[i] - meanT) * (ts[i] - meanT)
         }
         guard den > 0 else { return (nil, "fallback_slope") }
-        let slope = num / den   // px²/frame
+        let slope = num / den           // d(1/√A)/dt; should be < 0 for approach
+        let intercept = meanY - slope * meanT
 
-        guard slope > 0 else {
-            NSLog("[BallSpeedCalculator] TTC fallback: non-positive slope %.2f", slope)
+        // Approach means y is decreasing, so slope must be negative.
+        guard slope < 0 else {
+            NSLog("[BallSpeedCalculator] TTC fallback: non-negative inv-sqrt slope %.4g (ball not approaching)",
+                  slope)
             return (nil, "fallback_slope")
         }
 
-        // TTC from first detection: TTC_frames = 2 * A_first / slope  (looming formula)
-        let ttcFrames = 2.0 * firstArea / slope
+        // Zero-crossing of y(t) = slope·t + intercept is the modeled contact instant.
+        let tContact = -intercept / slope
+        let tFirst   = ts.first!
+        let ttcFrames = tContact - tFirst
+
+        guard ttcFrames > 0 else {
+            NSLog("[BallSpeedCalculator] TTC fallback: non-positive ttcFrames=%.2f (tContact=%.2f, tFirst=%.2f)",
+                  ttcFrames, tContact, tFirst)
+            return (nil, "fallback_slope")
+        }
+
         let ttcSec = ttcFrames / Double(fps)
 
         // Sanity: TTC should be 0.15s–2.0s for realistic pitching distances
@@ -170,8 +207,8 @@ final class BallSpeedCalculator {
             return (nil, "fallback_range")
         }
 
-        NSLog("[BallSpeedCalculator] TTC estimate: %.3fs (slope=%.1f px²/frame, firstArea=%.0f px², n=%d)",
-              ttcSec, slope, firstArea, samples.count)
+        NSLog("[BallSpeedCalculator] TTC estimate: %.3fs (invSqrtSlope=%.4g, tContact=%.2f, tFirst=%.2f, n=%d)",
+              ttcSec, slope, tContact, tFirst, samples.count)
         return (ttcSec, "used")
     }
 
@@ -329,7 +366,7 @@ final class BallSpeedCalculator {
         info.totalDistanceM = distance
         info.effectiveDistanceM = distance
         info.moundDistanceM = theoreticalDistance
-        info.strideCorrectionM = strideCorrectionM
+        info.strideCorrectionM = applyStrideCorrection ? strideCorrectionM : 0
         info.flightTimeS = totalTime
         info.numFrames = numFrames
         info.calculationMethod = (ttcTime != nil) ? "ttc" : "theoretical"

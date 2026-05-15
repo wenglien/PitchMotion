@@ -30,6 +30,10 @@ export interface SpeedInfo {
   distance_source?: 'manual' | 'pose_estimated' | 'default';
   distance_warning?: string;
   ttc_status?: string;
+  release_frame_idx?: number;
+  release_frame_source?: 'pose' | 'fallback';
+  first_ball_frame_idx?: number;
+  catch_frame_idx?: number;
 }
 
 export interface StrikeZoneCalibration {
@@ -70,6 +74,10 @@ export interface SessionPitch {
   plate_y_norm: number | null;
   pitch_type: string | null;
   speed_kmh: number | null;
+  // Measured break (cm) — used by StrikeZone to draw a Statcast-style trajectory
+  // shape derived from real data instead of a generic Bezier per pitch.
+  horizontal_break_cm?: number | null;
+  induced_vertical_break_cm?: number | null;
   trajectory_points_norm?: TrajectoryPoint[];
 }
 
@@ -94,7 +102,11 @@ export const DEFAULT_SETTINGS: Settings = {
   moundDistanceM: 0,               // 預設不填，強制使用者輸入實際距離
   strideCorrectionM: 0,
   confThreshold: 0.03,
-  backendUrl: 'http://localhost:8000',
+  // Empty by default — offline mode (the default) doesn't need a backend, and
+  // a real localhost default would silently 'work' in the simulator while being
+  // permanently broken on every shipped device. Force users who switch to
+  // online mode to enter a real URL via Settings.
+  backendUrl: '',
   analysisMode: 'offline',
   pitcherHeightM: undefined,
   strikeZone: null,

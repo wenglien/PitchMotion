@@ -112,3 +112,8 @@ ios/*.xcodeproj/
 
 # iOS / MediaPipe model files (binary, distribute separately)
 *.task
+!mobile/modules/expo-speedgun/Resources/pose_landmarker_full.task
+!mobile/modules/expo-speedgun/Resources/pose_landmarker_heavy.task
+
+# Claude Code local state (worktrees, per-machine settings)
+.claude/

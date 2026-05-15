@@ -13,6 +13,7 @@ import { analyzeVideo, checkFileSize, checkHealth } from '../api';
 import { parseLog } from '../utils/pipelineStages';
 import { useOfflineAnalysis } from '../hooks/useOfflineAnalysis';
 import AnalysisProgress from '../components/AnalysisProgress';
+import { friendlyError, isCancellation } from '../utils/errors';
 
 const MAX_MB = 50;
 
@@ -35,6 +36,11 @@ export default function AnalyzeScreen() {
   const [showRaw, setShowRaw] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [statusType, setStatusType] = useState<'' | 'error' | 'success'>('');
+  const abortRef = useRef<AbortController | null>(null);
+
+  const cancelAnalysis = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   const resetAnalysis = () => {
     setUploadPct(0);
@@ -137,8 +143,13 @@ export default function AnalyzeScreen() {
       addPitch(result);
       navigation.navigate('Result');
     } catch (err: any) {
-      setStatusMsg(err.message || '離線分析失敗。');
-      setStatusType('error');
+      if (isCancellation(err)) {
+        setStatusMsg('已取消分析。');
+        setStatusType('');
+      } else {
+        setStatusMsg(friendlyError(err, { action: '離線分析' }) ?? '離線分析失敗。');
+        setStatusType('error');
+      }
     } finally {
       setAnalyzing(false);
     }
@@ -154,6 +165,8 @@ export default function AnalyzeScreen() {
     setStatusMsg('');
     setStatusType('');
 
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const result = await analyzeVideo(
         settings.backendUrl,
@@ -164,6 +177,7 @@ export default function AnalyzeScreen() {
           strideCorrectionM: settings.strideCorrectionM,
           confThreshold: settings.confThreshold,
           strikeZone: settings.strikeZone,
+          signal: controller.signal,
         },
         (pct) => {
           setUploadPct(pct);
@@ -204,9 +218,15 @@ export default function AnalyzeScreen() {
       addPitch(result);
       navigation.navigate('Result');
     } catch (err: any) {
-      setStatusMsg(err.message || '分析失敗。');
-      setStatusType('error');
+      if (isCancellation(err)) {
+        setStatusMsg('已取消分析。');
+        setStatusType('');
+      } else {
+        setStatusMsg(friendlyError(err, { action: '分析' }) ?? '分析失敗。');
+        setStatusType('error');
+      }
     } finally {
+      abortRef.current = null;
       setAnalyzing(false);
     }
   };
@@ -245,15 +265,33 @@ export default function AnalyzeScreen() {
           <TouchableOpacity
             style={styles.rawToggle}
             onPress={() => setShowRaw((v) => !v)}
+            hitSlop={{ top: 10, bottom: 10, left: 16, right: 16 }}
+            accessibilityRole="button"
+            accessibilityLabel={showRaw ? '隱藏技術詳情' : '查看技術詳情'}
           >
             <Text style={styles.rawToggleText}>
               {showRaw ? '▲ 隱藏技術詳情' : '▼ 查看技術詳情'}
             </Text>
           </TouchableOpacity>
+          {!isOffline && (
+            <TouchableOpacity
+              style={styles.cancelBtn}
+              onPress={cancelAnalysis}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="取消目前的上傳與分析"
+            >
+              <Text style={styles.cancelBtnText}>取消上傳 / 分析</Text>
+            </TouchableOpacity>
+          )}
         </View>
       ) : (
         <View style={[styles.responsivePane, { width: panelWidth }]}>
-          <View style={styles.heroPanel}>
+          <View
+            style={styles.heroPanel}
+            accessible
+            accessibilityLabel={`投球分析。模式：${isOffline ? '裝置端離線分析' : '伺服器分析'}。距離 ${settings.moundDistanceM > 0 ? settings.moundDistanceM.toFixed(1) + ' 公尺' : '自動估算'}。`}
+          >
             <View style={styles.heroTopRow}>
               <View>
                 <Text style={styles.eyebrow}>PITCH LAB</Text>
@@ -261,7 +299,7 @@ export default function AnalyzeScreen() {
               </View>
               <View style={styles.liveBadge}>
                 <View style={[styles.modeDot, { backgroundColor: isOffline ? Colors.green : Colors.accent }]} />
-                <Text style={styles.liveBadgeText}>{isOffline ? 'ON DEVICE' : 'SERVER'}</Text>
+                <Text style={styles.liveBadgeText}>{isOffline ? '離線' : '雲端'}</Text>
               </View>
             </View>
             <Text style={styles.heroCopy}>
@@ -296,23 +334,36 @@ export default function AnalyzeScreen() {
             style={styles.dropZone}
             onPress={pickVideo}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={videoUri ? '更換投球影片' : '從相簿選擇投球影片'}
+            accessibilityHint={`最大 ${MAX_MB} MB`}
           >
             <Text style={styles.dropTitle}>
-              {videoUri ? 'Video selected' : 'Select pitch video'}
+              {videoUri ? '已選擇影片' : '選擇投球影片'}
             </Text>
             <Text style={styles.dropSubtitle}>
-              {videoUri ? 'Tap to change video' : `Tap to choose from library\nMax ${MAX_MB} MB`}
+              {videoUri ? '點擊更換影片' : `點擊從相簿選取\n上限 ${MAX_MB} MB`}
             </Text>
           </TouchableOpacity>
 
           {/* Video preview */}
           {videoUri && (
             <View style={styles.previewCard}>
-              <VideoPlayer uri={videoUri} style={styles.video} />
+              <VideoPlayer uri={videoUri} aspectRatio={9 / 16} style={styles.video} />
               {videoMeta && (
                 <View style={styles.metaRow}>
-                  <Text style={styles.metaChip}>⏱ {videoMeta.durationS} s</Text>
-                  <Text style={styles.metaChip}>💾 {videoMeta.sizeMB} MB</Text>
+                  <Text
+                    style={styles.metaChip}
+                    accessibilityLabel={`影片長度 ${videoMeta.durationS} 秒`}
+                  >
+                    ⏱ {videoMeta.durationS} s
+                  </Text>
+                  <Text
+                    style={styles.metaChip}
+                    accessibilityLabel={`影片大小 ${videoMeta.sizeMB} MB`}
+                  >
+                    💾 {videoMeta.sizeMB} MB
+                  </Text>
                 </View>
               )}
             </View>
@@ -332,13 +383,13 @@ export default function AnalyzeScreen() {
           ) : null}
 
           {/* Tips */}
-          <View style={styles.tipsCard}>
-            <Text style={styles.tipsTitle}>Tips for best results</Text>
+          <View style={styles.tipsCard} accessible accessibilityRole="summary">
+            <Text style={styles.tipsTitle}>拍攝建議（提升準度）</Text>
             <Text style={styles.tipsBody}>
-              {'• Film from behind the pitcher or catcher at eye level\n'}
-              {'• Use slow-motion mode (120fps+) if available\n'}
-              {'• Ensure good lighting and a clear background\n'}
-              {'• Keep the full pitching motion in frame'}
+              {'• 從捕手後方平視拍攝，鏡頭對齊投手出手點\n'}
+              {'• 開啟慢動作（120fps 以上更佳）\n'}
+              {'• 光線充足、背景單純，避免大量觀眾或光斑\n'}
+              {'• 完整拍下從預備到接捕的所有動作'}
             </Text>
           </View>
         </View>
@@ -351,17 +402,24 @@ export default function AnalyzeScreen() {
           onPress={onAnalyze}
           disabled={!videoUri || analyzing}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !videoUri || analyzing, busy: analyzing }}
+          accessibilityLabel={
+            !videoUri ? '請先選擇影片'
+              : analyzing ? (isOffline ? '裝置分析進行中' : '伺服器分析進行中')
+              : (isOffline ? '開始離線分析' : '開始線上分析')
+          }
         >
           {analyzing ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <ActivityIndicator size="small" color="#fff" />
               <Text style={styles.analyzeBtnText}>
-                {isOffline ? '裝置分析中…' : 'Analysing…'}
+                {isOffline ? '裝置分析中…' : '上傳分析中…'}
               </Text>
             </View>
           ) : (
             <Text style={styles.analyzeBtnText}>
-              {isOffline ? '開始離線分析' : 'Analyse Pitch Speed'}
+              {isOffline ? '開始離線分析' : '開始線上分析'}
             </Text>
           )}
         </TouchableOpacity>
@@ -515,7 +573,6 @@ const styles = StyleSheet.create({
   },
   video: {
     width: '100%',
-    height: 240,
     borderRadius: 12,
     backgroundColor: '#000',
   },
@@ -573,6 +630,22 @@ const styles = StyleSheet.create({
   rawToggleText: {
     fontSize: 12,
     color: Colors.textMuted,
+  },
+  cancelBtn: {
+    alignSelf: 'center',
+    marginTop: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.4)',
+    backgroundColor: 'rgba(239,68,68,0.08)',
+  },
+  cancelBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.red,
+    letterSpacing: 0.3,
   },
   actionWrap: {
     alignSelf: 'center',

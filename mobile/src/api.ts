@@ -1,5 +1,12 @@
 import EventSource from 'react-native-sse';
 import { PitchResult, StrikeZoneCalibration } from './types';
+import { UserCancelledError } from './utils/errors';
+
+/** Returned by analyzeVideo so the caller (UI) can cancel an in-flight job. */
+export interface AnalyzeHandle {
+  promise: Promise<PitchResult>;
+  cancel: () => void;
+}
 
 export function checkFileSize(fileSize: number, maxMB = 50) {
   const maxBytes = maxMB * 1024 * 1024;
@@ -20,14 +27,21 @@ export function uploadVideo(
     strideCorrectionM?: number;
     confThreshold?: number;
     strikeZone?: StrikeZoneCalibration | null;
+    signal?: AbortSignal;
   } = {},
   onUploadProgress?: (pct: number) => void,
 ): Promise<{ job_id: string }> {
+  if (!baseUrl || baseUrl.trim() === '') {
+    return Promise.reject(new Error(
+      '尚未設定 Backend URL。請到「Settings → Backend URL」輸入伺服器位址，或將「Analysis Mode」切換為「離線分析」。'
+    ));
+  }
   const {
     moundDistanceM = 18.44,
     strideCorrectionM = 0,
     confThreshold = 0.03,
     strikeZone = null,
+    signal,
   } = opts;
 
   const form = new FormData();
@@ -57,6 +71,23 @@ export function uploadVideo(
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${baseUrl}/analyze`);
 
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      try { xhr.abort(); } catch {}
+      reject(new UserCancelledError('已取消上傳'));
+    };
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort);
+    }
+    const cleanup = () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+
     if (onUploadProgress) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable)
@@ -65,6 +96,8 @@ export function uploadVideo(
     }
 
     xhr.onload = () => {
+      cleanup();
+      if (aborted) return;
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           resolve(JSON.parse(xhr.responseText));
@@ -79,8 +112,14 @@ export function uploadVideo(
         reject(new Error(msg));
       }
     };
-    xhr.onerror = () => reject(new Error('網路錯誤，請確認連線後重試。'));
-    xhr.ontimeout = () => reject(new Error('上傳逾時，請稍後再試。'));
+    xhr.onerror = () => {
+      cleanup();
+      if (!aborted) reject(new Error('網路錯誤，請確認連線後重試。'));
+    };
+    xhr.ontimeout = () => {
+      cleanup();
+      if (!aborted) reject(new Error('上傳逾時，請稍後再試。'));
+    };
     xhr.timeout = 3 * 60 * 1000;
     xhr.send(form);
   });
@@ -115,30 +154,49 @@ export function streamLogs(
 export function waitForJob(
   baseUrl: string,
   jobId: string,
-  { intervalMs = 1500, timeoutMs = 10 * 60 * 1000 } = {},
+  { intervalMs = 1500, timeoutMs = 10 * 60 * 1000, signal }: { intervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<PitchResult> {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      reject(new UserCancelledError('已取消分析'));
+    };
+    if (signal) {
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener('abort', onAbort);
+    }
+    const cleanup = () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
 
     const poll = async () => {
+      if (signal?.aborted) return;
       if (Date.now() > deadline) {
+        cleanup();
         return reject(new Error('分析逾時，請稍後再試。'));
       }
       try {
-        const res = await fetch(`${baseUrl}/jobs/${jobId}`);
-        if (!res.ok) return reject(new Error(`Job status error: ${res.status}`));
+        const res = await fetch(`${baseUrl}/jobs/${jobId}`, { signal });
+        if (!res.ok) {
+          cleanup();
+          return reject(new Error(`Job status error: ${res.status}`));
+        }
         const info = await res.json();
 
-        if (info.status === 'done') return resolve(info.result);
-        if (info.status === 'error') return reject(new Error(info.error || '分析失敗'));
+        if (info.status === 'done') { cleanup(); return resolve(info.result); }
+        if (info.status === 'error') { cleanup(); return reject(new Error(info.error || '分析失敗')); }
 
-        setTimeout(poll, intervalMs);
+        timer = setTimeout(poll, intervalMs);
       } catch (err) {
+        cleanup();
         reject(err);
       }
     };
 
-    setTimeout(poll, intervalMs);
+    timer = setTimeout(poll, intervalMs);
   });
 }
 
@@ -151,13 +209,20 @@ export async function analyzeVideo(
     strideCorrectionM?: number;
     confThreshold?: number;
     strikeZone?: StrikeZoneCalibration | null;
+    signal?: AbortSignal;
   } = {},
   onProgress?: (pct: number) => void,
   onLog?: (entry: { level: string; message: string; ts: string }) => void,
 ): Promise<PitchResult> {
-  const { job_id } = await uploadVideo(baseUrl, videoUri, fileName, opts, (pct) => {
-    if (onProgress) onProgress(pct);
-  });
+  const { signal, ...uploadOpts } = opts;
+
+  const { job_id } = await uploadVideo(
+    baseUrl,
+    videoUri,
+    fileName,
+    { ...uploadOpts, signal },
+    (pct) => { if (onProgress) onProgress(pct); },
+  );
 
   let cancelLog: (() => void) | null = null;
   if (onLog) {
@@ -165,7 +230,7 @@ export async function analyzeVideo(
   }
 
   try {
-    const result = await waitForJob(baseUrl, job_id);
+    const result = await waitForJob(baseUrl, job_id, { signal });
     return result;
   } finally {
     if (cancelLog) cancelLog();

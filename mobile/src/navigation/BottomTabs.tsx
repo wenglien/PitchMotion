@@ -1,6 +1,7 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import { View } from 'react-native';
 import { Colors } from '../theme';
 import { BottomTabParamList } from './types';
 import { useResult } from '../context/ResultContext';
@@ -16,6 +17,13 @@ const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   Result: 'speedometer-outline',
   History: 'time-outline',
   Settings: 'settings-outline',
+};
+
+const TAB_LABELS: Record<string, string> = {
+  Analyze: '分析',
+  Result: '結果',
+  History: '紀錄',
+  Settings: '設定',
 };
 
 export default function BottomTabs() {
@@ -41,21 +49,42 @@ export default function BottomTabs() {
           fontWeight: '800',
           letterSpacing: 0.1,
         },
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons name={icons[route.name]} size={size} color={color} />
-        ),
+        tabBarIcon: ({ color, size, focused }) => {
+          const showDot = route.name === 'Result' && hasNewResult && !focused;
+          return (
+            <View>
+              <Ionicons name={icons[route.name]} size={size} color={color} />
+              {showDot && (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: -2,
+                    right: -4,
+                    width: 8,
+                    height: 8,
+                    borderRadius: 4,
+                    backgroundColor: Colors.red,
+                    borderWidth: 1,
+                    borderColor: Colors.surface,
+                  }}
+                />
+              )}
+            </View>
+          );
+        },
+        tabBarAccessibilityLabel: TAB_LABELS[route.name],
       })}
     >
       <Tab.Screen
         name="Analyze"
         component={AnalyzeScreen}
-        options={{ title: 'SpeedGun' }}
+        options={{ title: 'SpeedGun', tabBarLabel: TAB_LABELS.Analyze }}
       />
       <Tab.Screen
         name="Result"
         component={ResultScreen}
-        options={{ title: 'Result' }}
-        listeners={({ navigation }) => ({
+        options={{ title: '分析結果', tabBarLabel: TAB_LABELS.Result }}
+        listeners={() => ({
           tabPress: () => {
             clearNewResultFlag();
           },
@@ -64,12 +93,12 @@ export default function BottomTabs() {
       <Tab.Screen
         name="History"
         component={HistoryStack}
-        options={{ headerShown: false }}
+        options={{ headerShown: false, tabBarLabel: TAB_LABELS.History }}
       />
       <Tab.Screen
         name="Settings"
         component={SettingsScreen}
-        options={{ title: 'Settings' }}
+        options={{ title: '設定', tabBarLabel: TAB_LABELS.Settings }}
       />
     </Tab.Navigator>
   );

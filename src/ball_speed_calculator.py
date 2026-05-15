@@ -17,14 +17,14 @@ AIR_RESISTANCE_K = 0.0024        # 阻力係數（s/m），v² 比例衰減
 AIR_RESISTANCE_DECAY = 0.01      # 保留舊常數（pixel-based mode 仍使用）
 
 MAX_REASONABLE_SPEED_KMH = 200   # 合理球速上限 (km/h)，原 250 偏高
-RELEASE_FALLBACK_SEC = 0.083     # Default release→first-detect interval (~10 frames @ 120fps)
+RELEASE_FALLBACK_SEC = 0.25      # Conservative release→first-detect interval (~30 frames @ 120fps)
 MAX_PRE_DETECT_SEC = 0.50        # Pre-detection cap（release→first ball）
                                   # 120fps 下最多允許 60 幀的 gap（pose 提早偵測→YOLO 才看到球）
 MIN_PIXEL_DIST = 10              # Minimum pixel distance for release calc
 DEFAULT_STRIDE_CORRECTION = 1.7  # MLB avg stride + arm extension (~5.6 ft)
 MIN_FLIGHT_TIME_SEC = 0.25       # 投球飛行至少 0.25s，防止時間過小球速暴衝
 MIN_REASONABLE_SPEED_MS = 20.0   # ~72 km/h，含業餘投手（放寬下限，減少 clamp 影響）
-MAX_REASONABLE_SPEED_MS = 52.0   # ~187 km/h，職棒頂尖最高合理速度
+MAX_REASONABLE_SPEED_MS = 47.0   # ~169 km/h，職棒頂尖最高合理速度
 
 
 class BallSpeedCalculator:
@@ -116,7 +116,10 @@ class BallSpeedCalculator:
                     fallback, fallback / self.fps,
                 )
                 return fallback
-            return raw
+            # A pose release that lands too close to first ball detection makes
+            # flight time too short and inflates speed. Use pose as a lower
+            # bound only; keep a conservative minimum pre-detect compensation.
+            return max(raw, fallback)
         return fallback
 
     # ── Release speed ──────────────────────────────────────────

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Linking, Alert, useWindowDimensions } from 'react-native';
 import * as Sharing from 'expo-sharing';
 import { Colors, Spacing, Radius, FontSize, Layout, Shadows } from '../theme';
@@ -8,7 +8,20 @@ import { useSettings } from '../context/SettingsContext';
 import { kmhToMph, pitchColor, shortMethod } from '../utils/conversions';
 import StrikeZone from '../components/StrikeZone';
 import BreakChart from '../components/BreakChart';
+import { friendlyError } from '../utils/errors';
+import SegmentedTabs from '../components/SegmentedTabs';
 import { useNavigation } from '@react-navigation/native';
+
+const VIDEO_TAB_OVERLAY = '分析疊圖';
+const VIDEO_TAB_ORIGINAL = '原始錄影';
+
+function resolveUriHelper(url: string | undefined, baseUrl: string): string | null {
+  if (!url) return null;
+  if (url.startsWith('file://') || url.startsWith('/')) return url;
+  if (url.startsWith('http')) return url;
+  if (!baseUrl) return null;  // can't resolve a relative backend path without a base
+  return `${baseUrl}${url.replace(/^https?:\/\/[^/]+/, '')}`;
+}
 
 export default function ResultScreen() {
   const { width } = useWindowDimensions();
@@ -16,6 +29,7 @@ export default function ResultScreen() {
   const { settings } = useSettings();
   const navigation = useNavigation<any>();
   const [showLogs, setShowLogs] = useState(false);
+  const [videoTab, setVideoTab] = useState<string>(VIDEO_TAB_OVERLAY);
   const logScrollRef = useRef<ScrollView>(null);
 
   if (!result) {
@@ -51,39 +65,53 @@ export default function ResultScreen() {
 
   const baseUrl = settings.backendUrl;
 
-  const resolveUri = (url: string | undefined) => {
-    if (!url) return null;
-    if (url.startsWith('file://') || url.startsWith('/')) return url;
-    if (url.startsWith('http')) return url;
-    return `${baseUrl}${url.replace(/^https?:\/\/[^/]+/, '')}`;
-  };
-
-  const overlayUrl = resolveUri(result.overlay_uri || result.overlay_url);
-  const originalUrl = resolveUri(result.original_url);
+  // Stable identity so StrikeZone / VideoPlayer don't see new prop refs on
+  // unrelated re-renders (e.g. log toggle, tab switch).
+  const overlayUrl = useMemo(
+    () => resolveUriHelper(result.overlay_uri || result.overlay_url, baseUrl),
+    [result.overlay_uri, result.overlay_url, baseUrl],
+  );
+  const originalUrl = useMemo(
+    () => resolveUriHelper(result.original_url, baseUrl),
+    [result.original_url, baseUrl],
+  );
+  const hasOverlay = !!overlayUrl && !overlayUrl.includes('/dev/');
+  const hasOriginal = !!originalUrl;
+  const showOverlayTab = hasOverlay && videoTab === VIDEO_TAB_OVERLAY;
+  const activeVideoUrl = showOverlayTab ? overlayUrl : (hasOriginal ? originalUrl : overlayUrl);
+  const videoAspectRatio = result.video_width && result.video_height
+    ? result.video_width / result.video_height
+    : 16 / 9;
 
   const plateZone = si.plate_zone ?? null;
-  const zoneOverride = plateZone
-    ? { xMin: plateZone.x_min, xMax: plateZone.x_max, yMin: plateZone.y_min, yMax: plateZone.y_max }
-    : null;
+  const zoneOverride = useMemo(
+    () => plateZone
+      ? { xMin: plateZone.x_min, xMax: plateZone.x_max, yMin: plateZone.y_min, yMax: plateZone.y_max }
+      : null,
+    [plateZone?.x_min, plateZone?.x_max, plateZone?.y_min, plateZone?.y_max],
+  );
 
-  const handleDownload = async () => {
-    if (!overlayUrl) return;
+  const handleDownload = useCallback(async () => {
+    const target = activeVideoUrl;
+    if (!target) return;
+    const dialogTitle = showOverlayTab ? '儲存分析影片' : '儲存原始影片';
     try {
-      if (overlayUrl.startsWith('file://') || overlayUrl.startsWith('/')) {
-        const fileUri = overlayUrl.startsWith('/') ? `file://${overlayUrl}` : overlayUrl;
-        await Sharing.shareAsync(fileUri, { mimeType: 'video/mp4', dialogTitle: '儲存 Overlay 影片' });
+      if (target.startsWith('file://') || target.startsWith('/')) {
+        const fileUri = target.startsWith('/') ? `file://${target}` : target;
+        await Sharing.shareAsync(fileUri, { mimeType: 'video/mp4', dialogTitle });
       } else {
-        const downloadUrl = overlayUrl.replace('/overlays/', '/download/');
-        await Sharing.shareAsync(downloadUrl, { mimeType: 'video/mp4', dialogTitle: '儲存 Overlay 影片' });
+        const downloadUrl = target.replace('/overlays/', '/download/');
+        await Sharing.shareAsync(downloadUrl, { mimeType: 'video/mp4', dialogTitle });
       }
-    } catch (e: any) {
-      if (overlayUrl.startsWith('http')) {
-        Linking.openURL(overlayUrl).catch(() => Alert.alert('下載失敗', e.message));
+    } catch (e) {
+      const msg = friendlyError(e, { action: '儲存影片' }) ?? '儲存失敗';
+      if (target.startsWith('http')) {
+        Linking.openURL(target).catch(() => Alert.alert('下載失敗', msg));
       } else {
-        Alert.alert('分享失敗', e.message);
+        Alert.alert('分享失敗', msg);
       }
     }
-  };
+  }, [activeVideoUrl, showOverlayTab]);
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
@@ -103,7 +131,15 @@ export default function ResultScreen() {
         )}
 
         {/* Big speed number */}
-        <View style={styles.speedWrap}>
+        <View
+          style={styles.speedWrap}
+          accessible
+          accessibilityLabel={
+            primaryMph !== null
+              ? `球速 ${primaryMph} mph，約等於 ${primaryKmh?.toFixed(1)} 公里每小時`
+              : '無法計算球速'
+          }
+        >
           {primaryMph !== null ? (
             <>
               <Text style={[styles.speedNum, { fontSize: speedFontSize, lineHeight: speedFontSize }]}>{primaryMph}</Text>
@@ -174,7 +210,23 @@ export default function ResultScreen() {
           <StrikeZone pitches={sessionPitches} zoneOverride={zoneOverride} />
         </View>
         {sessionPitches.length > 0 && (
-          <TouchableOpacity style={styles.clearBtn} onPress={clearPitches} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={styles.clearBtn}
+            onPress={() => {
+              Alert.alert(
+                '清除本次投球記錄？',
+                `將從本次練習中移除 ${sessionPitches.length} 球的好球帶軌跡，但歷史紀錄仍會保留。`,
+                [
+                  { text: '取消', style: 'cancel' },
+                  { text: '清除', style: 'destructive', onPress: clearPitches },
+                ],
+              );
+            }}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}
+            accessibilityRole="button"
+            accessibilityLabel="清除本次投球的好球帶記錄"
+          >
             <Text style={styles.clearBtnText}>清除投球記錄</Text>
           </TouchableOpacity>
         )}
@@ -219,100 +271,145 @@ export default function ResultScreen() {
         </View>
       )}
 
-      {/* ── Overlay Video ─────────────────────────────────── */}
-      {overlayUrl && !overlayUrl.includes('/dev/') && (
+      {/* ── Video Player ──────────────────────────────────── */}
+      {(hasOverlay || hasOriginal) && activeVideoUrl && (
         <View style={[styles.videoCard, { width: panelWidth }]}>
           <View style={styles.videoCardHeader}>
-            <Text style={styles.cardTitle}>分析影片</Text>
-            <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload} activeOpacity={0.75}>
+            <View style={styles.videoTitleWrap}>
+              <Text style={styles.cardTitle}>分析影片</Text>
+              <Text style={styles.cardSub}>
+                {showOverlayTab ? '含軌跡與標註' : '無標註版本'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.downloadBtn}
+              onPress={handleDownload}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel={showOverlayTab ? '儲存分析疊圖影片到相簿或檔案' : '儲存原始錄影到相簿或檔案'}
+            >
               <Text style={styles.downloadBtnText}>儲存</Text>
             </TouchableOpacity>
           </View>
-          <VideoPlayer uri={overlayUrl} style={styles.videoPlayer} />
-          <Text style={styles.videoHint}>
-            若畫面為黑或無法播放，請確認後端已重啟並再分析一次，或儲存後以本機播放器開啟。
-          </Text>
+
+          {hasOverlay && hasOriginal && (
+            <View style={styles.videoTabsWrap}>
+              <SegmentedTabs
+                tabs={[VIDEO_TAB_OVERLAY, VIDEO_TAB_ORIGINAL]}
+                activeTab={videoTab}
+                onSelect={setVideoTab}
+              />
+            </View>
+          )}
+
+          <VideoPlayer
+            key={activeVideoUrl}
+            uri={activeVideoUrl}
+            aspectRatio={videoAspectRatio}
+            style={styles.videoPlayer}
+          />
+
+          {showOverlayTab && (
+            <Text style={styles.videoHint}>
+              提示：若畫面全黑或無法播放，可點「儲存」以本機播放器開啟。
+            </Text>
+          )}
         </View>
       )}
 
-      {/* ── Original Video ────────────────────────────────── */}
-      {originalUrl && (
-        <View style={[styles.videoCard, { width: panelWidth }]}>
-          <Text style={styles.cardTitle}>原始錄影</Text>
-          <View style={{ height: Spacing.sm }} />
-          <VideoPlayer uri={originalUrl} style={styles.videoPlayer} />
-        </View>
-      )}
-
-      {/* ── 偵測詳情 ──────────────────────────────────────── */}
+      {/* ── 分析詳情（給使用者的精簡版；__DEV__ 顯示完整內部數值） ── */}
       {result.yolo_ball_in_frame_count !== undefined && (
         <View style={[styles.card, { width: panelWidth }]}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>偵測詳情</Text>
+            <Text style={styles.cardTitle}>分析詳情</Text>
+            <Text style={styles.cardSub}>影片資訊與偵測品質</Text>
           </View>
           <View style={styles.divider} />
           <View style={styles.detailGrid}>
+            {/* User-meaningful summary */}
             <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>影片總幀數</Text>
-              <Text style={styles.detailValue}>{result.total_frames ?? '—'}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>YOLO 處理幀</Text>
-              <Text style={styles.detailValue}>{result.yolo_frames_processed ?? '—'}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>有偵測到球的幀</Text>
-              <Text style={[styles.detailValue, { color: result.yolo_raw_detection_frames! > 0 ? '#4cff8f' : '#ff6b6b' }]}>
-                {result.yolo_raw_detection_frames ?? '—'}
+              <Text style={styles.detailLabel}>影片解析度</Text>
+              <Text style={styles.detailValue}>
+                {result.video_width && result.video_height
+                  ? `${result.video_width} × ${result.video_height}`
+                  : '—'}
               </Text>
             </View>
             <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>YOLO 偵測總次數</Text>
-              <Text style={styles.detailValue}>{result.yolo_total_detections ?? '—'}</Text>
+              <Text style={styles.detailLabel}>幀率（FPS）</Text>
+              <Text style={styles.detailValue}>{result.fps ?? '—'}</Text>
             </View>
             <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>球在幀中 (Phase1)</Text>
-              <Text style={[styles.detailValue, { color: result.yolo_ball_in_frame_count! > 0 ? '#4cff8f' : '#ff6b6b' }]}>
-                {result.yolo_ball_in_frame_count ?? '—'}
+              <Text style={styles.detailLabel}>偵測到球的幀數</Text>
+              <Text style={[styles.detailValue, { color: (result.yolo_raw_detection_frames ?? 0) > 0 ? Colors.green : Colors.red }]}>
+                {result.yolo_raw_detection_frames ?? '—'}
+                {result.total_frames ? ` / ${result.total_frames}` : ''}
               </Text>
             </View>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>軌跡點數</Text>
               <Text style={styles.detailValue}>{result.trajectory_count ?? '—'}</Text>
             </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>解析度</Text>
-              <Text style={styles.detailValue}>
-                {result.video_width && result.video_height
-                  ? `${result.video_width}×${result.video_height}`
-                  : '—'}
-              </Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>FPS</Text>
-              <Text style={styles.detailValue}>{result.fps ?? '—'}</Text>
-            </View>
+
+            {/* Internal frame-index data — dev only */}
+            {__DEV__ && (
+              <>
+                <View style={styles.divider} />
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>YOLO 處理幀（dev）</Text>
+                  <Text style={styles.detailValue}>{result.yolo_frames_processed ?? '—'}</Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>YOLO 偵測總次數（dev）</Text>
+                  <Text style={styles.detailValue}>{result.yolo_total_detections ?? '—'}</Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>球在幀中 Phase1（dev）</Text>
+                  <Text style={[styles.detailValue, { color: result.yolo_ball_in_frame_count! > 0 ? Colors.green : Colors.red }]}>
+                    {result.yolo_ball_in_frame_count ?? '—'}
+                  </Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>出手幀（dev）</Text>
+                  <Text style={styles.detailValue}>
+                    {si.release_frame_idx != null
+                      ? `${si.release_frame_idx}${si.release_frame_source === 'fallback' ? ' (估)' : ' (Pose)'}`
+                      : '—'}
+                  </Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>第一顆球幀（dev）</Text>
+                  <Text style={styles.detailValue}>{si.first_ball_frame_idx ?? '—'}</Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>接球幀（dev）</Text>
+                  <Text style={styles.detailValue}>{si.catch_frame_idx ?? '—'}</Text>
+                </View>
+              </>
+            )}
           </View>
         </View>
       )}
 
-      {/* ── Console Log ───────────────────────────────────── */}
-      {analysisLogs.length > 0 && (
+      {/* ── Console Log (dev only — noisy raw pipeline output) ─── */}
+      {__DEV__ && analysisLogs.length > 0 && (
         <View style={[styles.card, { width: panelWidth }]}>
           <TouchableOpacity
             style={styles.logHeader}
             onPress={() => {
               setShowLogs((v) => {
                 if (!v) {
-                  // scroll to end after expand
                   setTimeout(() => logScrollRef.current?.scrollToEnd({ animated: false }), 100);
                 }
                 return !v;
               });
             }}
             activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel={showLogs ? '收起分析 Log' : '展開分析 Log'}
           >
-            <Text style={styles.cardTitle}>分析 Log</Text>
+            <Text style={styles.cardTitle}>分析 Log（dev）</Text>
             <Text style={styles.logToggleText}>
               {showLogs ? '▲ 收起' : '▼ 展開'}
             </Text>
@@ -347,6 +444,8 @@ export default function ResultScreen() {
           style={styles.ctaBtn}
           onPress={() => navigation.navigate('Analyze')}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="回到分析頁面，分析下一顆球"
         >
           <Text style={styles.ctaBtnText}>再分析一顆</Text>
         </TouchableOpacity>
@@ -576,9 +675,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: Spacing.sm,
   },
+  videoTitleWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  videoTabsWrap: {
+    marginHorizontal: -Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
   videoPlayer: {
     width: '100%',
-    height: 260,
     borderRadius: Radius.lg,
     backgroundColor: '#000',
   },

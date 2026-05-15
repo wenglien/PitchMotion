@@ -69,7 +69,7 @@ let POSE_DIST_MAX_M: Double = 25.0
 let AIR_RESISTANCE_K: Double = 0.0024
 let AIR_RESISTANCE_DECAY: Double = 0.01
 let MAX_REASONABLE_SPEED_KMH: Double = 200
-let RELEASE_FALLBACK_SEC: Double = 0.15   // YOLO detects ~0.1–0.2s after actual release
+let RELEASE_FALLBACK_SEC: Double = 0.25   // YOLO often detects 0.2–0.3s after actual release in catcher POV
 // Max gap between pose-based release frame and first ball detection.
 // Raised to 0.70s (was 0.50s) for high-fps slo-mo: at 120fps the arm-extension
 // window stretches in wall-clock time and tight gating rejected valid releases.
@@ -229,6 +229,10 @@ struct SpeedInfo {
     var distanceSource: String?       // "manual" | "pose_estimated" | "default"
     var distanceWarning: String?      // user-facing warning when distance was auto-guessed
     var ttcStatus: String?            // "used" | "fallback_growth" | "fallback_samples" | "fallback_slope" | "fallback_range"
+    var releaseFrameIdx: Int?
+    var releaseFrameSource: String?   // "pose" | "fallback"
+    var firstBallFrameIdx: Int?
+    var catchFrameIdx: Int?
 
     /// Convert to dictionary for JS bridge
     func toDictionary() -> [String: Any] {
@@ -272,6 +276,10 @@ struct SpeedInfo {
         if let v = distanceSource { dict["distance_source"] = v }
         if let v = distanceWarning { dict["distance_warning"] = v }
         if let v = ttcStatus { dict["ttc_status"] = v }
+        if let v = releaseFrameIdx { dict["release_frame_idx"] = v }
+        if let v = releaseFrameSource { dict["release_frame_source"] = v }
+        if let v = firstBallFrameIdx { dict["first_ball_frame_idx"] = v }
+        if let v = catchFrameIdx { dict["catch_frame_idx"] = v }
         return dict
     }
 }

@@ -41,8 +41,16 @@ export default function PitchCard({ pitch, index }: Props) {
     { label: 'Quality', value: hasWarn ? '⚠️' : '✓', unit: '', color: hasWarn ? Colors.yellow : Colors.green },
   ];
 
+  const a11yLabel = [
+    `第 ${index} 球`,
+    pitchType ?? '',
+    vMph !== null ? `球速 ${vMph} mph` : '',
+    spinRpm !== null ? `轉速 ${Math.round(spinRpm)} rpm` : '',
+    hasWarn ? '軌跡品質警告' : '',
+  ].filter(Boolean).join('，');
+
   return (
-    <View style={styles.card}>
+    <View style={styles.card} accessible accessibilityLabel={a11yLabel}>
       {/* Header */}
       <View style={styles.header}>
         <View>
@@ -127,11 +135,15 @@ const styles = StyleSheet.create({
   statGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 6,
+    columnGap: 6,
+    rowGap: 6,
     marginBottom: 10,
   },
   statCell: {
-    width: '23%' as any,
+    // 4-col grid: each cell takes ~23.5% and grows to fill the leftover, so
+    // cells line up regardless of container width and gap math doesn't break.
+    flexBasis: '23%',
+    flexGrow: 1,
     backgroundColor: Colors.surface2,
     borderWidth: 1,
     borderColor: Colors.border,
@@ -139,6 +151,7 @@ const styles = StyleSheet.create({
     padding: 8,
     paddingHorizontal: 6,
     alignItems: 'center',
+    minWidth: 60,
   },
   cellLabel: {
     fontSize: 9,

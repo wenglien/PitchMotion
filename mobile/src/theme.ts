@@ -67,6 +67,59 @@ export const Layout = {
   maxWidth: 760,
 };
 
+/**
+ * Reusable typography tokens. Prefer these over inline `fontSize` / `fontWeight`
+ * combinations so new screens stay consistent. Existing screens have inline
+ * styles that we haven't migrated yet — migrate when you next touch them.
+ */
+export const Typography = {
+  /** Card / section heading. e.g. "好球帶落點" */
+  cardTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: '700' as const,
+    color: '#0f172a',
+  },
+  /** Sub-heading directly under a cardTitle. e.g. "本次練習 5 球" */
+  cardSub: {
+    fontSize: FontSize.sm,
+    fontWeight: '500' as const,
+    color: '#64748b',
+  },
+  /** Tiny uppercase eyebrow / pill label. e.g. "PITCH LAB" */
+  eyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: '700' as const,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase' as const,
+    color: '#64748b',
+  },
+  /** Hero numeric value (e.g. mph). Uses tabular-nums for stable width. */
+  numericHero: {
+    fontWeight: '900' as const,
+    fontVariant: ['tabular-nums'] as const,
+    color: '#0f172a',
+  },
+  /** Standard body copy. */
+  body: {
+    fontSize: FontSize.md,
+    fontWeight: '400' as const,
+    lineHeight: 21,
+    color: '#0f172a',
+  },
+  /** Hint / caption text. */
+  caption: {
+    fontSize: FontSize.sm,
+    fontWeight: '400' as const,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+};
+
+/** Minimum touch-target size (Apple HIG: 44pt; Material: 48dp). */
+export const TouchTarget = {
+  min: 44,
+};
+
 export const Shadows = {
   card: {
     shadowColor: '#0f172a',

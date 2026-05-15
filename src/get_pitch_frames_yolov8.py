@@ -1551,7 +1551,7 @@ AUDIO_HOP_S                = 0.005  # 5ms 步進（亞幀精度）
 AUDIO_FRAME_S              = 0.020  # 20ms 分析窗口（手套聲典型持續時間）
 AUDIO_ONSET_THRESHOLD_STD  = 2.0    # 峰值閾值 = mean + 2*std（自適應）
 AUDIO_MIN_PEAK_DIST_S      = 0.050  # 50ms 最小峰值間距（過濾殘響）
-AUDIO_MAX_DIVERGENCE_S     = 0.40   # 信心閘：音訊結果與視覺估計差異上限（秒）
+AUDIO_MAX_DIVERGENCE_S     = 0.75   # 信心閘：音訊優先，視覺只作寬鬆合理性檢查
 
 
 def _has_audio_stream(video_path: str) -> bool:
@@ -3107,9 +3107,9 @@ def get_pitch_frames_yolov8(
             tracks_by_id[best_track_id], fps
         )
 
-    # ── 音訊接球偵測（補強視覺 flight_end）────────────────────────────────────
-    # 偵測手套聲衝擊音，若通過信心閘則覆蓋 flight_end_frame。
-    # 音訊偵測失敗時（無音軌、無明顯峰值、差異過大）自動退回視覺法。
+    # ── 音訊接球偵測（flight_end 第一優先）────────────────────────────────────
+    # 偵測手套聲衝擊音，若通過寬鬆信心閘則作為速度計算終點。
+    # 音訊偵測失敗時（無音軌、無明顯峰值、差異過大）才退回視覺法。
 
     # 取得 best track 的最後一幀，作為音訊偵測的參考錨點
     # （接球聲必須發生在 YOLO 最後一次偵測到球的附近）
@@ -3565,13 +3565,23 @@ def get_pitch_frames_yolov8(
             speed_calculator.stride_correction = dynamic_stride
             log.info("Using dynamic stride correction: %.2fm", dynamic_stride)
 
+        # Speed timing endpoint: audio/flight-end detection has priority over
+        # the last frame where the ball was visually tracked. This lets the
+        # speed calculator use the glove-impact time even when YOLO stops early
+        # or drifts onto the mitt/hand near the catch.
+        speed_end_frame_idx = (
+            flight_end_frame
+            if flight_end_frame is not None
+            else last_ball_frame_idx
+        )
+
         if len(ball_trajectory) >= 2:
             speed_info = speed_calculator.calculate_speed_detailed(
                 ball_trajectory,
                 release_point=release_point,
                 release_frame_idx=optimal_release_frame_idx,
                 first_ball_frame_idx=first_ball_frame_idx,
-                last_ball_frame_idx=last_ball_frame_idx,
+                last_ball_frame_idx=speed_end_frame_idx,
             )
             
             # ── Convert raw-space coords → display-space for overlay drawing ──

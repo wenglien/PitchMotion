@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableWithoutFeedback } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
 import Svg, {
   Rect,
   Circle,
@@ -9,7 +10,7 @@ import Svg, {
   G,
 } from 'react-native-svg';
 import { Colors } from '../theme';
-import { pitchDotColor } from '../utils/conversions';
+import { pitchDotColor, kmhToMph } from '../utils/conversions';
 import { SessionPitch } from '../types';
 
 // ── Strike-zone bounds in raw frame-normalised coords ────────────────────
@@ -74,7 +75,18 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
     v: (yNorm - zone.yMin) / (zone.yMax - zone.yMin),
   });
 
-  // Build a realistic descending arc per pitch using a cubic Bezier in 3D.
+  // Build a realistic descending arc per pitch.
+  //
+  // When measured break is available (Statcast-style horizontal_break_cm and
+  // induced_vertical_break_cm), we use it to shape the mid-flight control point
+  // so each pitch's curve reflects the actual physics:
+  //   • Big +induced_vert (4-seam fastball, "rise")  → flatter trajectory
+  //   • Negative induced_vert (curveball, big drop)  → arc that climbs then dives
+  //   • +horizontal break                            → late tailing right
+  //   • −horizontal break                            → late cutting left
+  //
+  // Without break data we fall back to the original generic Bezier shape so
+  // older sessions still animate.
   const pitchData = useMemo(() => {
     const valid = pitches.filter(
       (p) => p.plate_x_norm != null && p.plate_y_norm != null,
@@ -83,23 +95,54 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
       const { u, v } = plateToUV(p.plate_x_norm!, p.plate_y_norm!);
       const sideSign = u >= 0.5 ? 1 : -1;
 
-      // ── Gravity-like cubic Bezier (high → ~flat → steep drop → plate) ──
-      // P0: release point (far, high)
-      // P1: still near back, barely descended (keeps the line flat at the start,
-      //     just like a fastball leaving the hand at eye level)
-      // P2: near plate depth, still slightly above landing (late break + final drop)
-      // P3: landing point on the zone plane
+      // Normalize break (cm) to UV-space displacement.
+      // Strike-zone width ≈ 43cm (17"); a 30cm horizontal break ≈ 0.7 zone widths.
+      // Scale to UV (where 1.0 = full zone width/height).
+      const HBREAK_CM_PER_UV = 60;   // 60cm horizontal break → 1.0 UV (full zone width)
+      const VBREAK_CM_PER_UV = 60;   // 60cm vertical break  → 1.0 UV (full zone height)
+      const hBreakCm = p.horizontal_break_cm ?? null;
+      const vBreakCm = p.induced_vertical_break_cm ?? null;
+      const hBreakUV = hBreakCm != null ? clampNum(hBreakCm / HBREAK_CM_PER_UV, -1.2, 1.2) : null;
+      const vBreakUV = vBreakCm != null ? clampNum(vBreakCm / VBREAK_CM_PER_UV, -1.2, 1.2) : null;
+      const hasMeasuredBreak = hBreakUV != null || vBreakUV != null;
+
       const P0: Pt3 = { ...RELEASE_3D };
-      const P1: Pt3 = {
-        u: RELEASE_3D.u * 0.7 + u * 0.3,
-        v: RELEASE_3D.v + 0.06,
-        z: 0.78,
-      };
-      const P2: Pt3 = {
-        u: RELEASE_3D.u * 0.15 + u * 0.85 + 0.08 * sideSign, // late break
-        v: Math.max(0.02, v - 0.14),                          // still above landing
-        z: 0.28,
-      };
+
+      let P1: Pt3, P2: Pt3;
+      if (hasMeasuredBreak) {
+        // Build the mid-flight control point so the curve passes through the
+        // "no-break straight line" plus the measured break vector.
+        // induced_vert > 0 means ball drops LESS than gravity (rise) → P2.v is HIGHER
+        // (smaller v = higher in image), so subtract vBreakUV from straight-line v.
+        const straightU = RELEASE_3D.u * 0.15 + u * 0.85;
+        const straightV = (RELEASE_3D.v + v) * 0.5;
+        const breakU = (hBreakUV ?? 0) * 0.55;
+        const breakV = -(vBreakUV ?? 0) * 0.55; // +vBreak (rise) → smaller v (higher)
+
+        P1 = {
+          u: RELEASE_3D.u * 0.7 + u * 0.3 + breakU * 0.25,
+          v: RELEASE_3D.v + 0.04 + breakV * 0.15,
+          z: 0.78,
+        };
+        P2 = {
+          u: clampNum(straightU + breakU, -0.2, 1.2),
+          v: clampNum(straightV + breakV, -0.2, 1.2),
+          z: 0.28,
+        };
+      } else {
+        // Generic gravity arc (legacy fallback)
+        P1 = {
+          u: RELEASE_3D.u * 0.7 + u * 0.3,
+          v: RELEASE_3D.v + 0.06,
+          z: 0.78,
+        };
+        P2 = {
+          u: RELEASE_3D.u * 0.15 + u * 0.85 + 0.08 * sideSign,
+          v: Math.max(0.02, v - 0.14),
+          z: 0.28,
+        };
+      }
+
       const P3: Pt3 = { u, v, z: 0 };
 
       // Sample cubic Bezier and project to 2D
@@ -118,6 +161,7 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
         endProj: project(u, v, 0),
         samples: samples2D,
         sampleZ,
+        hasMeasuredBreak,
       };
     });
   }, [pitches, zone]);
@@ -131,6 +175,11 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
   const [elapsed, setElapsed] = useState(0);
   const rafRef = useRef<number | null>(null);
   const startTsRef = useRef<number>(Date.now());
+  const lastSetMsRef = useRef<number>(0);
+
+  // Pause animation when this screen isn't on top — drawing 60fps SVG behind a
+  // navigated-away screen wastes CPU/battery for nothing the user can see.
+  const isFocused = useIsFocused();
 
   useEffect(() => {
     setIdx(0);
@@ -138,18 +187,28 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
   }, [pitchData.length]);
 
   useEffect(() => {
-    if (!animate || pitchData.length === 0) return;
+    if (!animate || pitchData.length === 0 || !isFocused) return;
     let cancelled = false;
     startTsRef.current = Date.now();
+    lastSetMsRef.current = 0;
     const cycleMs = ANIM_DURATION_MS + HOLD_AFTER_MS + INTER_PITCH_MS;
+    // Cap re-renders at ~30fps. We still rAF every frame for smooth time
+    // reads, but only setState when enough progress has elapsed to be visible.
+    // For a 1.4s flight, 33ms ≈ 2.4% progress per tick — visually identical to
+    // 16ms, but halves SVG re-renders / GC pressure on weaker devices.
+    const MIN_FRAME_MS = 33;
 
     const tick = () => {
       if (cancelled) return;
       const e = Date.now() - startTsRef.current;
-      setElapsed(e);
+      if (e - lastSetMsRef.current >= MIN_FRAME_MS) {
+        lastSetMsRef.current = e;
+        setElapsed(e);
+      }
       if (pitchData.length > 1 && e >= cycleMs) {
         setIdx((i) => (i + 1) % pitchData.length);
         startTsRef.current = Date.now();
+        lastSetMsRef.current = 0;
         setElapsed(0);
       }
       rafRef.current = requestAnimationFrame(tick);
@@ -160,7 +219,7 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
       cancelled = true;
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
-  }, [animate, pitchData.length, idx]);
+  }, [animate, pitchData.length, idx, isFocused]);
 
   // Derived animation values
   const flightRaw = Math.min(1, elapsed / ANIM_DURATION_MS);
@@ -190,8 +249,24 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
 
   const ballIsNearPlate = progress > 0.7;
 
+  const restart = () => {
+    startTsRef.current = Date.now();
+    setElapsed(0);
+  };
+
+  const cycleNext = () => {
+    if (pitchData.length <= 1) {
+      restart();
+      return;
+    }
+    setIdx((i) => (i + 1) % pitchData.length);
+    startTsRef.current = Date.now();
+    setElapsed(0);
+  };
+
   return (
     <View style={styles.container}>
+      <TouchableWithoutFeedback onPress={cycleNext}>
       <Svg width={W} height={H} style={{ overflow: 'visible' }}>
         {/* Background */}
         <Rect x={0} y={0} width={W} height={H} fill={Colors.surface2} rx={12} />
@@ -296,6 +371,39 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
             <Circle cx={releaseProj.x - 0.9} cy={releaseProj.y - 0.9} r={1} fill="#ffffff" />
           </G>
         )}
+
+        {/* ── Ghost trails of all OTHER pitches (Statcast-style overlay) ── */}
+        {pitchData.length > 1 && pitchData.map((pd) => {
+          if (current?.i === pd.i) return null;
+          // Skip every 3rd point for a lighter, less-noisy ghost line.
+          const pts = pd.samples;
+          const segs: { x1: number; y1: number; x2: number; y2: number; alpha: number }[] = [];
+          for (let k = 0; k < pts.length - 1; k++) {
+            const z = pd.sampleZ[k];
+            segs.push({
+              x1: pts[k].x,
+              y1: pts[k].y,
+              x2: pts[k + 1].x,
+              y2: pts[k + 1].y,
+              alpha: 0.18 + 0.32 * (1 - z),  // brighter near the plate
+            });
+          }
+          const ghostColor = pitchDotColor(pd.i);
+          return (
+            <G key={`ghost-${pd.i}`} opacity={0.55}>
+              {segs.map((s, k) => (
+                <Line
+                  key={`g${pd.i}-${k}`}
+                  x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
+                  stroke={ghostColor}
+                  strokeOpacity={s.alpha}
+                  strokeWidth={1.6}
+                  strokeLinecap="round"
+                />
+              ))}
+            </G>
+          );
+        })}
 
         {/* ── 3D-styled trajectory (tapered tube + shadow + highlight) ── */}
         {current && animate && tube && tube.segments.length > 0 && (
@@ -491,6 +599,36 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
           </G>
         )}
       </Svg>
+      </TouchableWithoutFeedback>
+
+      {/* ── Now-playing info ticker (Statcast-style HUD) ── */}
+      {current && (
+        <View style={styles.ticker}>
+          <View style={[styles.tickerSwatch, { backgroundColor: currentColor }]} />
+          <Text style={styles.tickerNum}>#{current.i + 1}</Text>
+          {current.pitch.pitch_type ? (
+            <Text style={styles.tickerType}>{current.pitch.pitch_type}</Text>
+          ) : null}
+          {current.pitch.speed_kmh != null && (
+            <Text style={styles.tickerSpeed}>
+              {kmhToMph(current.pitch.speed_kmh)}
+              <Text style={styles.tickerUnit}> mph</Text>
+            </Text>
+          )}
+          {current.pitch.horizontal_break_cm != null && (
+            <Text style={styles.tickerBreak}>
+              H {current.pitch.horizontal_break_cm >= 0 ? '+' : ''}
+              {current.pitch.horizontal_break_cm.toFixed(0)}
+            </Text>
+          )}
+          {current.pitch.induced_vertical_break_cm != null && (
+            <Text style={styles.tickerBreak}>
+              V {current.pitch.induced_vertical_break_cm >= 0 ? '+' : ''}
+              {current.pitch.induced_vertical_break_cm.toFixed(0)}
+            </Text>
+          )}
+        </View>
+      )}
 
       {/* Legend */}
       {pitchData.length > 0 && (
@@ -518,6 +656,10 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
 
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
+}
+
+function clampNum(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 /** Cubic Bezier in 3D (u, v, z). */
@@ -640,5 +782,52 @@ const styles = StyleSheet.create({
   legendTextActive: {
     color: Colors.text ?? '#e5e7eb',
     fontWeight: '700',
+  },
+  ticker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: 'rgba(15,23,42,0.06)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15,23,42,0.1)',
+    maxWidth: 230,
+    flexWrap: 'wrap',
+  },
+  tickerSwatch: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  tickerNum: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.text,
+    fontVariant: ['tabular-nums'],
+  },
+  tickerType: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  tickerSpeed: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: Colors.text,
+    fontVariant: ['tabular-nums'],
+  },
+  tickerUnit: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: Colors.textMuted,
+  },
+  tickerBreak: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Colors.textMuted,
+    fontVariant: ['tabular-nums'],
   },
 });

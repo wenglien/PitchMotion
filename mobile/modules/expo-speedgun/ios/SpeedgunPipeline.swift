@@ -7,6 +7,9 @@ import Foundation
 /// Port of src/pipelines/yolov8_pipeline.py + get_pitch_frames_yolov8.py
 final class SpeedgunPipeline {
     private let progressCallback: (PipelineProgress) -> Void
+    private let AUDIO_CATCH_MIN_OFFSET_SEC = 0.10
+    private let AUDIO_CATCH_MAX_OFFSET_SEC = 1.50
+    private let AUDIO_CATCH_VISUAL_MAX_DIVERGENCE_SEC = 0.75
 
     init(progressCallback: @escaping (PipelineProgress) -> Void) {
         self.progressCallback = progressCallback
@@ -111,14 +114,16 @@ final class SpeedgunPipeline {
         var frameInfos: [FrameInfo] = []
         var frameIndex = 0          // counts effective frames (incl. interpolated)
         var ballDetectedCount = 0        // total number of frames where ball was seen
-        // Run pose ~10 times per second in REAL time (not playback time).
+        // Run pose ~30 times per second in REAL time (not playback time).
+        // Release timing is sensitive to pose sampling: at 120fps, the old
+        // 10/s cadence only checked every 12 frames, which could miss the
+        // release window and make the detected release appear late.
         // Must use effectiveFps (display fps) here because frameIndex increments at effectiveFps rate.
-        // But we want ~10 poses per second of REAL time, so divide by effectiveCaptureFps.
-        // For normal 30fps: effectiveCaptureFps=60 → every 6 frames (10/s real) ✓
-        // For slo-mo 240fps (interp off): effectiveCaptureFps=240 → every 24 real frames → 10/s real ✓
-        // Without this fix: slo-mo effectiveFps=30 → poseEveryN=3 → pose every 3rd frame
-        //   at 240fps = 80 poses/second real — 8× too expensive.
-        let poseEveryN = max(1, Int(round(Double(effectiveCaptureFps) / 10.0)))
+        // But we want ~30 poses per second of REAL time, so divide by effectiveCaptureFps.
+        // For normal 30fps: effectiveCaptureFps=60 → every 2 frames.
+        // For 120fps: effectiveCaptureFps=120 → every 4 frames.
+        // For slo-mo 240fps: effectiveCaptureFps=240 → every 8 frames.
+        let poseEveryN = max(1, Int(round(Double(effectiveCaptureFps) / 30.0)))
         // stride=1: every real frame goes through YOLO; interpolated frames always run YOLO too
         let yoloStride = 1
         var lastPose: PoseLandmarks? = nil
@@ -377,16 +382,22 @@ final class SpeedgunPipeline {
         // For normal video effectiveCaptureFps == effectiveFps.
         // For slo-mo (e.g. 240fps captured at 30fps nominal), effectiveCaptureFps = 480
         // while effectiveFps = 60 — using effectiveFps here would make speed 8× too slow.
+        // Stride correction (1.7m default) models the ball leaving the pitcher's hand
+        // ~1.7m closer to the plate than the rubber, *given a real pitching stride*.
+        // It only makes sense for the "manual" source (user measured rubber-to-plate).
+        // For "pose_estimated" the value is already cam-to-pitcher direct geometry
+        // (no rubber → second subtraction would double-count). For "default" 18.44m
+        // the user hasn't even confirmed they're at MLB distance, so we shouldn't
+        // bake in a stride that may not exist.
+        let applyStride = (distanceSource == "manual")
         let speedCalculatorResolved = BallSpeedCalculator(
             fps: effectiveCaptureFps,
             videoWidth: displayWidth,
             videoHeight: displayHeight,
             theoreticalDistance: resolvedDistance,
-            strideCorrectionM: strideCorrectionM
+            strideCorrectionM: strideCorrectionM,
+            applyStrideCorrection: applyStride
         )
-
-        // Detect release point from pose signals (wrist speed peak, elbow extension, etc.)
-        let releaseResult = releaseDetector.detect()
 
         // Build trajectory points
         let firstBallFrame = frameInfos.firstIndex(where: { $0.ballInFrame })
@@ -404,10 +415,14 @@ final class SpeedgunPipeline {
                 )
             }
 
+        // Detect release point from pose signals, constrained by the first
+        // reliable ball frame to avoid scene-dependent windup false peaks.
+        let releaseResult = releaseDetector.detect(firstBallFrame: firstBallFrame)
+
         // Validate pose release:
         // 1. Confidence must be ≥ 0.5 (multi-signal agreement, not single weak signal)
         // 2. Must fall before firstBallFrame (ball can't be detected before release)
-        // 3. Must be within MAX_PRE_DETECT_SEC (0.5s) before firstBallFrame in REAL time
+        // 3. Must be within MAX_PRE_DETECT_SEC before firstBallFrame in REAL time
         //    — prevents far-too-early arm-windup frames from inflating flight time
         // NOTE: all frame indices (result.frameIndex, firstBallFrame) are in effective-capture
         // space, so the correct fps to convert to real seconds is effectiveCaptureFps.
@@ -429,25 +444,29 @@ final class SpeedgunPipeline {
             return result.frameIndex
         }()
 
-        // Detect catch impact from audio. Only search after lastBallFrame to avoid
-        // detecting delivery sounds. Validate that it's after lastBallFrame + a small buffer.
+        // Detect catch impact from audio as the first-priority flight endpoint.
+        // Search after release/first-ball timing; visual last frame is only a sanity reference.
         // NOTE: detectCatchImpact buckets audio samples by video frame index using fps.
         // Must use effectiveCaptureFps so the returned frameIdx is in effective-capture
         // space (matching lastBallFrame, firstBallFrame, etc.).
         // Using effectiveFps (8× smaller for slo-mo) makes the audio catch index 8× too
         // small → always rejected by the cf > last guard below.
-        let searchAfterFrame = lastBallFrame ?? (validatedReleaseFrame ?? 0)
+        let audioSearchAnchorFrame = validatedReleaseFrame ?? firstBallFrame ?? lastBallFrame ?? 0
         let rawCatchFrame = detectCatchImpact(
             asset: AVAsset(url: effectiveURL),
             fps: effectiveCaptureFps,
-            searchAfterFrame: searchAfterFrame
+            searchAfterFrame: audioSearchAnchorFrame,
+            visualReferenceFrame: lastBallFrame
         )
-        // Only accept catch frame if it's after lastBallFrame (ball must finish before catch)
+        // Prefer audio when it passes basic timing checks. The visual endpoint can be
+        // wrong when tracking survives on blur/hand/mitt artifacts, so it must not
+        // be required to occur before the audio catch.
         let validatedCatchFrame: Int? = {
-            guard let cf = rawCatchFrame, let last = lastBallFrame, cf > last else { return nil }
-            // Sanity: catch should not be more than 1.5s after last YOLO detection (real time)
-            let lagSec = Double(cf - last) / Double(effectiveCaptureFps)
-            guard lagSec <= 1.5 else { return nil }
+            guard let cf = rawCatchFrame else { return nil }
+            if let first = firstBallFrame, cf <= first { return nil }
+            let sinceAnchorSec = Double(cf - audioSearchAnchorFrame) / Double(effectiveCaptureFps)
+            guard sinceAnchorSec >= AUDIO_CATCH_MIN_OFFSET_SEC,
+                  sinceAnchorSec <= AUDIO_CATCH_MAX_OFFSET_SEC else { return nil }
             return cf
         }()
 
@@ -456,18 +475,29 @@ final class SpeedgunPipeline {
                   rel, Double(rel)/Double(effectiveCaptureFps))
         }
         if let cf = validatedCatchFrame {
-            NSLog("[SpeedgunPipeline] Validated catch frame: %d (%.3fs real)",
-                  cf, Double(cf)/Double(effectiveCaptureFps))
+            NSLog("[SpeedgunPipeline] Validated audio catch frame: %d (%.3fs real, anchor=%d)",
+                  cf, Double(cf)/Double(effectiveCaptureFps), audioSearchAnchorFrame)
         } else {
-            NSLog("[SpeedgunPipeline] No valid catch frame — using YOLO lastFrame endpoint")
+            NSLog("[SpeedgunPipeline] No valid audio catch frame — using YOLO lastFrame endpoint")
         }
+
+        let fallbackReleaseFrame: Int? = firstBallFrame.map {
+            max(0, $0 - Int(round(RELEASE_FALLBACK_SEC * Double(effectiveCaptureFps))))
+        }
+        let releaseMarkerFrame = validatedReleaseFrame ?? fallbackReleaseFrame
+        let releaseMarkerSource = validatedReleaseFrame != nil ? "pose" : (fallbackReleaseFrame != nil ? "fallback" : nil)
+        let releaseMarkerPoint = estimateReleaseMarkerPoint(
+            frameInfos: frameInfos,
+            releaseFrame: releaseMarkerFrame,
+            firstBallFrame: firstBallFrame
+        )
 
         var speedInfo: SpeedInfo
         if trajectoryPoints.count >= 2 {
             speedInfo = speedCalculatorResolved.calculateSpeedDetailed(
                 trajectoryPoints: trajectoryPoints,
                 frameInfos: frameInfos,
-                releasePoint: releaseResult.map { CGPoint(x: Double($0.frameIndex), y: 0) },
+                releasePoint: releaseMarkerPoint,
                 releaseFrameIdx: validatedReleaseFrame,
                 firstBallFrameIdx: firstBallFrame,
                 lastBallFrameIdx: validatedCatchFrame ?? lastBallFrame
@@ -516,6 +546,11 @@ final class SpeedgunPipeline {
             // Attach distance source / warning for UI surface
             speedInfo.distanceSource = distanceSource
             speedInfo.distanceWarning = distanceWarning
+            speedInfo.releaseFrameIdx = releaseMarkerFrame
+            speedInfo.releaseFrameSource = releaseMarkerSource
+            speedInfo.releasePoint = releaseMarkerPoint
+            speedInfo.firstBallFrameIdx = firstBallFrame
+            speedInfo.catchFrameIdx = validatedCatchFrame ?? lastBallFrame
             if distanceSource == "pose_estimated" {
                 speedInfo.estimatedDistanceM = resolvedDistance
             }
@@ -701,6 +736,66 @@ final class SpeedgunPipeline {
             "y_min": yMin,
             "y_max": yMax,
         ]
+    }
+
+    private func estimateReleaseMarkerPoint(
+        frameInfos: [FrameInfo],
+        releaseFrame: Int?,
+        firstBallFrame: Int?
+    ) -> CGPoint? {
+        guard let releaseFrame else { return nil }
+
+        let poseSamples = frameInfos.compactMap { fi -> (frame: Int, pose: PoseLandmarks)? in
+            guard let pose = fi.poseLandmarks else { return nil }
+            return (fi.frameIndex, pose)
+        }
+
+        func throwingHandIsRight() -> Bool {
+            var leftTravel = 0.0
+            var rightTravel = 0.0
+            var prevPoseFrame = -1
+            var prevLeft: CGPoint?
+            var prevRight: CGPoint?
+            for sample in poseSamples {
+                if sample.pose.frameIndex == prevPoseFrame { continue }
+                prevPoseFrame = sample.pose.frameIndex
+                if let pl = prevLeft, let cl = sample.pose.leftWrist {
+                    leftTravel += hypot(Double(cl.x - pl.x), Double(cl.y - pl.y))
+                }
+                if let pr = prevRight, let cr = sample.pose.rightWrist {
+                    rightTravel += hypot(Double(cr.x - pr.x), Double(cr.y - pr.y))
+                }
+                prevLeft = sample.pose.leftWrist
+                prevRight = sample.pose.rightWrist
+            }
+            return rightTravel >= leftTravel
+        }
+
+        if let nearest = poseSamples.min(by: {
+            abs($0.frame - releaseFrame) < abs($1.frame - releaseFrame)
+        }) {
+            let rightHanded = throwingHandIsRight()
+            let preferred = rightHanded ? nearest.pose.rightWrist : nearest.pose.leftWrist
+            if let preferred { return preferred }
+            let wrists = [nearest.pose.leftWrist, nearest.pose.rightWrist].compactMap { $0 }
+            if let higher = wrists.min(by: { $0.y < $1.y }) { return higher }
+        }
+
+        guard let firstBallFrame,
+              let first = frameInfos.first(where: { $0.frameIndex >= firstBallFrame && $0.ballInFrame }) else {
+            return nil
+        }
+
+        if let second = frameInfos.first(where: { $0.frameIndex > first.frameIndex && $0.ballInFrame }) {
+            let dt = max(1, second.frameIndex - first.frameIndex)
+            let back = CGFloat(max(1, first.frameIndex - releaseFrame)) / CGFloat(dt)
+            return CGPoint(
+                x: first.ballCenter.x - (second.ballCenter.x - first.ballCenter.x) * back,
+                y: first.ballCenter.y - (second.ballCenter.y - first.ballCenter.y) * back
+            )
+        }
+
+        return first.ballCenter
     }
 
     private func estimateAutoStrikeZone(
@@ -918,12 +1013,21 @@ final class SpeedgunPipeline {
     private func detectCatchImpact(
         asset: AVAsset,
         fps: Int,
-        searchAfterFrame: Int
+        searchAfterFrame: Int,
+        visualReferenceFrame: Int? = nil
     ) -> Int? {
         guard let audioTrack = asset.tracks(withMediaType: .audio).first else {
             NSLog("[SpeedgunPipeline] No audio track — skipping catch detection")
             return nil
         }
+        guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+            return nil
+        }
+
+        let videoStartSeconds = CMTimeGetSeconds(videoTrack.timeRange.start)
+        let audioStartSeconds = CMTimeGetSeconds(audioTrack.timeRange.start)
+        NSLog("[SpeedgunPipeline] Audio/video PTS starts: audio=%.4fs video=%.4fs delta=%.4fs",
+              audioStartSeconds, videoStartSeconds, audioStartSeconds - videoStartSeconds)
 
         // Read raw PCM from the audio track
         guard let reader = try? AVAssetReader(asset: asset) else { return nil }
@@ -939,7 +1043,24 @@ final class SpeedgunPipeline {
         reader.add(audioOutput)
         guard reader.startReading() else { return nil }
 
-        // Collect (presentationTime, rmsValue) pairs per video-frame bucket
+        let channelCount: Int = {
+            guard let rawDesc = audioTrack.formatDescriptions.first else { return 1 }
+            let desc = rawDesc as! CMAudioFormatDescription
+            guard let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) else { return 1 }
+            return max(1, Int(asbd.pointee.mChannelsPerFrame))
+        }()
+        let fallbackSampleRate: Double = {
+            guard let rawDesc = audioTrack.formatDescriptions.first else { return 48_000.0 }
+            let desc = rawDesc as! CMAudioFormatDescription
+            guard let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc),
+                  asbd.pointee.mSampleRate > 0 else { return 48_000.0 }
+            return asbd.pointee.mSampleRate
+        }()
+
+        // Collect audio energy into video-frame buckets.  Use each audio
+        // sample's time inside the buffer instead of the buffer start PTS; iOS
+        // audio buffers can span multiple video frames, and assigning the whole
+        // buffer to its first timestamp makes sharp impacts appear too early.
         let frameDuration = 1.0 / Double(max(1, fps))
         var frameRMS: [Int: (sumSq: Double, count: Int)] = [:]
 
@@ -959,15 +1080,30 @@ final class SpeedgunPipeline {
                 let sampleCount = dataLength / 2  // Int16 = 2 bytes
                 let samples = UnsafeBufferPointer(start: ptr.withMemoryRebound(to: Int16.self, capacity: sampleCount) { $0 },
                                                   count: sampleCount)
+                let audioFrameCount = max(1, sampleCount / channelCount)
+                let duration = CMSampleBufferGetDuration(sampleBuffer)
+                let durationSeconds = duration.isValid && !duration.isIndefinite && duration.seconds > 0
+                    ? duration.seconds
+                    : Double(audioFrameCount) / fallbackSampleRate
+                let sampleStep = durationSeconds / Double(audioFrameCount)
 
-                // Compute sum-of-squares for this buffer chunk
-                var sumSq = 0.0
-                for s in samples {
-                    let f = Double(s) / 32768.0
-                    sumSq += f * f
+                for audioFrame in 0..<audioFrameCount {
+                    let relativeSeconds = (ptsSeconds - videoStartSeconds) + Double(audioFrame) * sampleStep
+                    guard relativeSeconds >= 0 else { continue }
+                    let videoFrameIdx = Int(floor(relativeSeconds / frameDuration))
+
+                    var frameSumSq = 0.0
+                    let base = audioFrame * channelCount
+                    for ch in 0..<channelCount where base + ch < sampleCount {
+                        let f = Double(samples[base + ch]) / 32768.0
+                        frameSumSq += f * f
+                    }
+                    let existing = frameRMS[videoFrameIdx] ?? (0, 0)
+                    frameRMS[videoFrameIdx] = (
+                        existing.sumSq + frameSumSq / Double(channelCount),
+                        existing.count + 1
+                    )
                 }
-                let existing = frameRMS[videoFrameIdx] ?? (0, 0)
-                frameRMS[videoFrameIdx] = (existing.sumSq + sumSq, existing.count + sampleCount)
             }
         }
         reader.cancelReading()
@@ -983,10 +1119,11 @@ final class SpeedgunPipeline {
 
         guard rmsValues.count >= 5 else { return nil }
 
-        // Only search from searchAfterFrame onwards (skip pre-pitch sounds)
-        // Add a small buffer of 5 frames to also skip sounds right at the last detection
-        let searchStart = searchAfterFrame + 5
-        let candidates = rmsValues.filter { $0.frameIdx >= searchStart }
+        // Search from shortly after release/first-ball anchor. This makes audio
+        // the primary endpoint while still skipping delivery/foot-plant sounds.
+        let searchStart = searchAfterFrame + Int(round(AUDIO_CATCH_MIN_OFFSET_SEC * Double(fps)))
+        let searchEnd = searchAfterFrame + Int(round(AUDIO_CATCH_MAX_OFFSET_SEC * Double(fps)))
+        let candidates = rmsValues.filter { $0.frameIdx >= searchStart && $0.frameIdx <= searchEnd }
         guard candidates.count >= 3 else { return nil }
 
         // Build rolling baseline using a ±10 frame window median
@@ -1025,12 +1162,23 @@ final class SpeedgunPipeline {
                 guard decayRatio <= 0.70 else { continue }  // must decay to ≤70% within 3 frames
             }
 
+            if let visual = visualReferenceFrame {
+                let earlyToleranceFrames = Int(round(0.08 * Double(fps)))
+                guard candidate.frameIdx >= visual - earlyToleranceFrames else { continue }
+                let diffSec = abs(Double(candidate.frameIdx - visual)) / Double(fps)
+                guard diffSec <= AUDIO_CATCH_VISUAL_MAX_DIVERGENCE_SEC else { continue }
+            }
+
             if ratio > bestRatio {
                 bestRatio = ratio
                 bestFrame = candidate.frameIdx
             }
         }
 
+        if let frame = bestFrame {
+            NSLog("[SpeedgunPipeline] Audio catch candidate accepted: frame=%d ratio=%.2f visualRef=%@",
+                  frame, bestRatio, visualReferenceFrame.map { String($0) } ?? "nil")
+        }
         return bestFrame
     }
 

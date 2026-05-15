@@ -54,32 +54,51 @@ export default function AnalysisProgress({ uploadPct, stageId, stageMessages, ra
             i < currentIdx ? 'done' :
             i === currentIdx ? 'active' :
             'pending';
+          const isLast = i >= STAGES.length - 2;
 
           return (
-            <View key={stage.id}>
-              {/* Text row */}
-              <View style={styles.stageRow}>
-                <Text
+            <View key={stage.id} style={styles.stageItem}>
+              {/* Marker column: dot + connector line */}
+              <View style={styles.markerCol}>
+                <View
                   style={[
-                    styles.stageLabel,
-                    state === 'done' && { color: '#16a34a' },
-                    state === 'active' && { color: Colors.text },
-                    state === 'pending' && { color: Colors.textMuted },
+                    styles.dot,
+                    state === 'done' && styles.dotDone,
+                    state === 'active' && styles.dotActive,
                   ]}
                 >
-                  {stage.label}
-                </Text>
-                {state === 'active' && lastMsg ? (
-                  <Text style={styles.stageDetail}>{lastMsg}</Text>
-                ) : null}
-                {state === 'done' && (
-                  <Text style={[styles.stageDetail, { color: '#16a34a' }]}>完成</Text>
+                  {state === 'done' && <Text style={styles.dotCheck}>✓</Text>}
+                  {state === 'active' && <View style={styles.dotPulse} />}
+                </View>
+                {!isLast && (
+                  <View style={[styles.line, state === 'done' && styles.lineDone]} />
                 )}
               </View>
-              {/* Connector line between steps */}
-              {i < STAGES.length - 2 && (
-                <View style={[styles.line, state === 'done' && styles.lineDone]} />
-              )}
+
+              {/* Content column */}
+              <View style={styles.contentCol}>
+                <View style={styles.stageRow}>
+                  <Text
+                    style={[
+                      styles.stageLabel,
+                      state === 'done' && { color: '#16a34a' },
+                      state === 'active' && { color: Colors.text },
+                      state === 'pending' && { color: Colors.textMuted },
+                    ]}
+                  >
+                    {stage.label}
+                  </Text>
+                  {state === 'done' && (
+                    <Text style={[styles.stageStatus, { color: '#16a34a' }]}>完成</Text>
+                  )}
+                  {state === 'active' && (
+                    <Text style={[styles.stageStatus, { color: Colors.accent }]}>進行中</Text>
+                  )}
+                </View>
+                {state === 'active' && lastMsg ? (
+                  <Text style={styles.stageDetail} numberOfLines={2}>{lastMsg}</Text>
+                ) : null}
+              </View>
             </View>
           );
         })}
@@ -152,16 +171,61 @@ const styles = StyleSheet.create({
   stageList: {
     gap: 0,
   },
-  stageRow: {
-    paddingVertical: 6,
+  stageItem: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
   },
-  stageText: {
+  markerCol: {
+    width: 22,
+    alignItems: 'center',
+  },
+  contentCol: {
     flex: 1,
+    paddingBottom: 6,
+  },
+  dot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: Colors.surface2,
+    borderWidth: 2,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  dotDone: {
+    backgroundColor: '#16a34a',
+    borderColor: '#16a34a',
+  },
+  dotActive: {
+    backgroundColor: Colors.surface,
+    borderColor: Colors.accent,
+  },
+  dotPulse: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.accent,
+  },
+  dotCheck: {
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: '900',
+    lineHeight: 10,
+  },
+  stageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 0,
+    minHeight: 18,
   },
   line: {
-    height: 10,
+    flex: 1,
     width: 2,
-    marginLeft: 6,
+    marginTop: 2,
+    marginBottom: 2,
     backgroundColor: Colors.border,
   },
   lineDone: {
@@ -170,13 +234,20 @@ const styles = StyleSheet.create({
   stageLabel: {
     fontSize: 14,
     fontWeight: '600',
-    lineHeight: 17,
+    lineHeight: 18,
+    flexShrink: 1,
+  },
+  stageStatus: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    marginLeft: 8,
   },
   stageDetail: {
     fontSize: 12,
     color: Colors.textMuted,
-    marginTop: 3,
-    lineHeight: 17,
+    marginTop: 2,
+    lineHeight: 16,
   },
   rawSection: {
     marginTop: 12,

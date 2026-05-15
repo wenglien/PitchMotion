@@ -65,6 +65,8 @@ export function ResultProvider({ children }: { children: React.ReactNode }) {
           plate_y_norm: yn,
           pitch_type: si.pitch_type || null,
           speed_kmh: si.release_speed_kmh ?? si.initial_speed_kmh ?? null,
+          horizontal_break_cm: si.horizontal_break_cm ?? null,
+          induced_vertical_break_cm: si.induced_vertical_break_cm ?? null,
           trajectory_points_norm: r.trajectory_points_norm,
         },
       ];

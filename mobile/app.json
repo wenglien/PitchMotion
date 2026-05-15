@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -14,20 +15,35 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.speedgun.mobile",
+      "buildNumber": "1",
+      "requireFullScreen": false,
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "SpeedGun needs access to your photo library to select pitch videos for analysis.",
-        "NSCameraUsageDescription": "SpeedGun needs camera access to record pitch videos."
+        "NSPhotoLibraryAddUsageDescription": "SpeedGun saves analysed pitch videos with overlays back to your photo library.",
+        "NSCameraUsageDescription": "SpeedGun uses the camera to record pitch videos for speed and pitch-type analysis.",
+        "NSMicrophoneUsageDescription": "SpeedGun records audio with each pitch video to detect catch impact for accurate flight time.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "package": "com.speedgun.mobile",
+      "versionCode": 1,
+      "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false,
-      "package": "com.speedgun.mobile"
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.INTERNET"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -37,7 +53,9 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "SpeedGun needs access to your photo library to select pitch videos."
+          "photosPermission": "SpeedGun needs access to your photo library to select pitch videos.",
+          "cameraPermission": "SpeedGun uses the camera to record pitch videos.",
+          "microphonePermission": "SpeedGun records audio with each pitch video to detect catch impact."
         }
       ],
       "expo-video"

@@ -38,8 +38,40 @@ final class OverlayGenerator {
         let readerSettings: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
         ]
-        let readerOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: readerSettings)
-        readerOutput.alwaysCopiesSampleData = false
+
+        // Apply preferredTransform (rotation) at decode time so frames arrive
+        // at srcWidth × srcHeight matching the transformed/display orientation.
+        // Without this, iPhone-recorded portrait videos come out at landscape
+        // naturalSize and get scaled into a portrait output box — visually
+        // appearing as a forced 90° rotation in the analyzed video.
+        let readerOutput: AVAssetReaderOutput
+        let needsRotation = !videoTrack.preferredTransform.isIdentity
+        if needsRotation {
+            let nominalFPS = videoTrack.nominalFrameRate
+            let fpsInt = max(1, Int(round(nominalFPS)))
+            let composition = AVMutableVideoComposition()
+            composition.renderSize = CGSize(width: srcWidth, height: srcHeight)
+            composition.frameDuration = CMTime(value: 1, timescale: Int32(fpsInt))
+
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(start: .zero, duration: asset.duration)
+            let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
+            layerInstruction.setTransform(videoTrack.preferredTransform, at: .zero)
+            instruction.layerInstructions = [layerInstruction]
+            composition.instructions = [instruction]
+
+            let compOutput = AVAssetReaderVideoCompositionOutput(
+                videoTracks: [videoTrack],
+                videoSettings: readerSettings
+            )
+            compOutput.videoComposition = composition
+            compOutput.alwaysCopiesSampleData = false
+            readerOutput = compOutput
+        } else {
+            let trackOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: readerSettings)
+            trackOutput.alwaysCopiesSampleData = false
+            readerOutput = trackOutput
+        }
         videoReader.add(readerOutput)
 
         try? FileManager.default.removeItem(at: outputURL)
@@ -136,6 +168,7 @@ final class OverlayGenerator {
                     srcWidth: srcWidth,
                     srcHeight: srcHeight,
                     totalFrames: totalFrames,
+                    interpFactor: max(1, interpFactor),
                     colorSpace: colorSpace
                 )
 
@@ -280,6 +313,7 @@ final class OverlayGenerator {
         srcWidth: Int,
         srcHeight: Int,
         totalFrames: Int,
+        interpFactor: Int,
         colorSpace: CGColorSpace
     ) {
         CVPixelBufferLockBaseAddress(source, .readOnly)
@@ -343,15 +377,179 @@ final class OverlayGenerator {
         // Draw ball trajectory up to current frame (pre-smoothed, monotone)
         drawBallTrail(ctx: ctx, smoothedTrajectory: smoothedTrajectory, currentFrame: frameIndex, outWidth: outWidth, outHeight: outHeight)
 
-        // Draw speed info text
-        if let si = speedInfo, frameIndex > totalFrames / 2 {
-            let alpha = min(1.0, Double(frameIndex - totalFrames/2) / 30.0)
-            drawFullFrameStrikeZone(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: 0.45 + 0.35 * alpha)
-            drawSpeedText(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: alpha)
-            drawStrikeZone(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: alpha)
+        if let si = speedInfo {
+            drawFlightEndpointMarkers(
+                ctx: ctx,
+                speedInfo: si,
+                currentFrame: frameIndex,
+                interpFactor: max(1, interpFactor),
+                outWidth: outWidth,
+                outHeight: outHeight
+            )
+        }
+
+        // Draw speed info text + strike zone.
+        // IMPORTANT unit mismatch: `totalFrames` is in EFFECTIVE/interpolated
+        // frames (frameInfos.count), while `frameIndex` counts DECODED real
+        // frames. With interpolation on (interpFactor=2), max frameIndex is
+        // ~totalFrames/2 — so any gate like `frameIndex > totalFrames/2` would
+        // never trigger and the overlay disappears entirely. Convert to real
+        // frames before computing the start/fade window.
+        // Also anchor the start so short clips still get a fully-opaque reveal:
+        //   • start no later than the real-frame midpoint, but at least
+        //     ~30 frames before the end
+        //   • fade-in shrinks for short clips so alpha reaches 1.0 by the end
+        if let si = speedInfo, totalFrames > 0 {
+            let factor = max(1, interpFactor)
+            let realTotal = max(1, totalFrames / factor)
+            let startFrame = max(0, min(realTotal / 2, realTotal - 30))
+            if frameIndex > startFrame {
+                let fadeFrames = max(1, min(30, realTotal - startFrame))
+                let alpha = min(1.0, Double(frameIndex - startFrame) / Double(fadeFrames))
+                drawFullFrameStrikeZone(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: 0.45 + 0.35 * alpha)
+                drawSpeedText(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: alpha)
+                drawStrikeZone(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: alpha)
+            }
         }
 
         ctx.restoreGState()
+    }
+
+    private func drawFlightEndpointMarkers(
+        ctx: CGContext,
+        speedInfo: SpeedInfo,
+        currentFrame: Int,
+        interpFactor: Int,
+        outWidth: Int,
+        outHeight: Int
+    ) {
+        let sc = max(0.5, Double(outWidth) / 1080.0)
+        let factor = max(1, interpFactor)
+        let releaseRealFrame = speedInfo.releaseFrameIdx.map { $0 / factor }
+        let catchRealFrame = speedInfo.catchFrameIdx.map { $0 / factor }
+        let showRelease = releaseRealFrame.map { currentFrame >= $0 - 3 } ?? false
+        let showCatch = catchRealFrame.map { currentFrame >= $0 - 3 } ?? false
+        guard showRelease || showCatch else { return }
+
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+
+        // In-frame markers (cross/circle at release & catch points) and the
+        // dashed release→catch line have been removed by request. Only the
+        // bottom-left text labels remain.
+
+        if showRelease, let releaseFrame = speedInfo.releaseFrameIdx {
+            let delta = currentFrame - (releaseRealFrame ?? currentFrame)
+            let pulse = endpointAlpha(delta: delta)
+            let source = speedInfo.releaseFrameSource == "fallback" ? "EST" : "POSE"
+            drawEndpointMarker(
+                ctx: ctx,
+                point: nil,
+                label: "RELEASE \(source) F\(releaseFrame)",
+                color: UIColor(red: 1.0, green: 0.66, blue: 0.08, alpha: 1.0),
+                alpha: pulse,
+                labelOrigin: CGPoint(x: CGFloat(18.0 * sc), y: CGFloat(outHeight) - CGFloat(44.0 * sc)),
+                outWidth: outWidth,
+                outHeight: outHeight,
+                scale: sc
+            )
+        }
+
+        if showCatch, let catchFrame = speedInfo.catchFrameIdx {
+            let delta = currentFrame - (catchRealFrame ?? currentFrame)
+            let pulse = endpointAlpha(delta: delta)
+            drawEndpointMarker(
+                ctx: ctx,
+                point: nil,
+                label: "CATCH F\(catchFrame)",
+                color: UIColor(red: 0.15, green: 0.95, blue: 0.45, alpha: 1.0),
+                alpha: pulse,
+                labelOrigin: CGPoint(x: CGFloat(18.0 * sc), y: CGFloat(outHeight) - CGFloat(82.0 * sc)),
+                outWidth: outWidth,
+                outHeight: outHeight,
+                scale: sc
+            )
+        }
+    }
+
+    private func endpointAlpha(delta: Int) -> CGFloat {
+        guard delta >= -3 else { return 0.0 }
+        if delta <= 18 {
+            let fadeOut = delta <= 6 ? 1.0 : max(0.0, 1.0 - Double(delta - 6) / 12.0)
+            return CGFloat(0.45 + 0.55 * fadeOut)
+        }
+        return 0.72
+    }
+
+    private func drawEndpointMarker(
+        ctx: CGContext,
+        point: CGPoint?,
+        label: String,
+        color: UIColor,
+        alpha: CGFloat,
+        labelOrigin: CGPoint,
+        outWidth: Int,
+        outHeight: Int,
+        scale: Double
+    ) {
+        let markerColor = color.withAlphaComponent(alpha)
+        let cgMarker = markerColor.cgColor
+        let shadow = UIColor.black.withAlphaComponent(alpha * 0.75).cgColor
+
+        if let point {
+            let r = CGFloat(max(13.0, 20.0 * scale))
+
+            ctx.setStrokeColor(shadow)
+            ctx.setLineWidth(CGFloat(max(5.0, 7.0 * scale)))
+            ctx.move(to: CGPoint(x: point.x - r, y: point.y))
+            ctx.addLine(to: CGPoint(x: point.x + r, y: point.y))
+            ctx.move(to: CGPoint(x: point.x, y: point.y - r))
+            ctx.addLine(to: CGPoint(x: point.x, y: point.y + r))
+            ctx.strokePath()
+
+            ctx.setStrokeColor(cgMarker)
+            ctx.setLineWidth(CGFloat(max(2.5, 4.0 * scale)))
+            ctx.move(to: CGPoint(x: point.x - r, y: point.y))
+            ctx.addLine(to: CGPoint(x: point.x + r, y: point.y))
+            ctx.move(to: CGPoint(x: point.x, y: point.y - r))
+            ctx.addLine(to: CGPoint(x: point.x, y: point.y + r))
+            ctx.strokePath()
+
+            ctx.setFillColor(color.withAlphaComponent(alpha * 0.24).cgColor)
+            let x = point.x
+            let y = point.y
+            ctx.fillEllipse(in: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2))
+            ctx.setStrokeColor(cgMarker)
+            ctx.setLineWidth(CGFloat(max(2.0, 3.0 * scale)))
+            ctx.strokeEllipse(in: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2))
+        }
+
+        let fontSize = CGFloat(max(14.0, 22.0 * scale))
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.boldSystemFont(ofSize: fontSize),
+            .foregroundColor: markerColor,
+            .strokeColor: UIColor.black.withAlphaComponent(alpha * 0.85),
+            .strokeWidth: -3.0,
+        ]
+        let attrStr = NSAttributedString(string: label, attributes: attrs)
+        let labelSize = attrStr.size()
+        let pad = CGFloat(10.0 * scale)
+        let x = min(max(labelOrigin.x, pad), CGFloat(outWidth) - labelSize.width - pad)
+        let y = min(max(labelOrigin.y, pad), CGFloat(outHeight) - labelSize.height - pad)
+
+        UIGraphicsPushContext(ctx)
+        UIColor(white: 0, alpha: alpha * 0.45).setFill()
+        UIBezierPath(
+            roundedRect: CGRect(
+                x: x - pad,
+                y: y - pad * 0.5,
+                width: labelSize.width + pad * 2,
+                height: labelSize.height + pad
+            ),
+            cornerRadius: CGFloat(6.0 * scale)
+        ).fill()
+        attrStr.draw(at: CGPoint(x: x, y: y))
+        UIGraphicsPopContext()
     }
 
     private func buildSmoothedTrajectory(
