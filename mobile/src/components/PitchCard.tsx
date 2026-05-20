@@ -22,6 +22,9 @@ export default function PitchCard({ pitch, index }: Props) {
   const distM = si.total_distance_m ?? si.effective_distance_m ?? null;
   const flightS = si.flight_time_s ?? null;
   const spinRpm = si.spin_rpm ?? null;
+  const breakH = si.horizontal_break_cm ?? null;
+  const breakV = si.induced_vertical_break_cm ?? null;
+  const breakTotal = si.total_break_cm ?? null;
   const confPct = si.pitch_confidence != null
     ? Math.round(si.pitch_confidence * 100)
     : null;
@@ -31,14 +34,17 @@ export default function PitchCard({ pitch, index }: Props) {
   const comment = generateCoachingComment(si);
 
   const cells = [
-    { label: 'V', value: vMph ?? '—', unit: 'mph' },
-    { label: 'Max', value: maxMph ?? '—', unit: 'mph' },
-    { label: 'Dist', value: distM != null ? distM.toFixed(1) : '—', unit: 'm' },
-    { label: 'Flight', value: flightS != null ? flightS.toFixed(3) : '—', unit: 's' },
-    { label: 'Spin', value: spinRpm != null ? Math.round(spinRpm).toLocaleString() : '—', unit: 'rpm' },
-    { label: 'Conf', value: confPct != null ? `${confPct}%` : '—', unit: '' },
-    { label: 'Method', value: method, unit: '', small: true },
-    { label: 'Quality', value: hasWarn ? '⚠️' : '✓', unit: '', color: hasWarn ? Colors.yellow : Colors.green },
+    { label: '球速', value: vMph ?? '-', unit: 'mph' },
+    { label: '最高', value: maxMph ?? '-', unit: 'mph' },
+    { label: '距離', value: distM != null ? distM.toFixed(1) : '-', unit: 'm' },
+    { label: '飛行', value: flightS != null ? flightS.toFixed(3) : '-', unit: 's' },
+    { label: '橫移', value: breakH != null ? breakH.toFixed(1) : '-', unit: 'cm' },
+    { label: 'IVB', value: breakV != null ? breakV.toFixed(1) : '-', unit: 'cm' },
+    { label: '總位移', value: breakTotal != null ? breakTotal.toFixed(1) : '-', unit: 'cm' },
+    { label: '轉速', value: spinRpm != null ? Math.round(spinRpm).toLocaleString() : '-', unit: 'rpm' },
+    { label: '信心', value: confPct != null ? `${confPct}%` : '-', unit: '' },
+    { label: '方法', value: method, unit: '', small: true },
+    { label: '品質', value: hasWarn ? '警告' : 'OK', unit: '', color: hasWarn ? Colors.yellow : Colors.green },
   ];
 
   const a11yLabel = [
@@ -57,7 +63,7 @@ export default function PitchCard({ pitch, index }: Props) {
           <Text style={styles.timestamp}>
             {formatDate(pitch?.created_at)} {formatTime(pitch?.created_at)}
           </Text>
-          <Text style={styles.pitchNum}>{index}. Pitch</Text>
+          <Text style={styles.pitchNum}>第 {index} 球</Text>
         </View>
         {pitchType && (
           <View style={[styles.typeBadge, { backgroundColor: pitchColor(pitchType) }]}>
@@ -74,9 +80,12 @@ export default function PitchCard({ pitch, index }: Props) {
             <Text
               style={[
                 styles.cellValue,
-                c.small && { fontSize: 12 },
+                c.small && { fontSize: 11 },
                 c.color ? { color: c.color } : undefined,
               ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
             >
               {c.value}
             </Text>
@@ -140,7 +149,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   statCell: {
-    // 4-col grid: each cell takes ~23.5% and grows to fill the leftover, so
+    // 4-col grid: each cell takes ~23% and grows to fill the leftover, so
     // cells line up regardless of container width and gap math doesn't break.
     flexBasis: '23%',
     flexGrow: 1,
@@ -152,11 +161,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     alignItems: 'center',
     minWidth: 60,
+    minHeight: 62,
   },
   cellLabel: {
-    fontSize: 9,
+    fontSize: 10,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
     color: Colors.textMuted,
     marginBottom: 4,
   },

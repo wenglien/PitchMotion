@@ -175,12 +175,46 @@ export default function SessionDetailScreen() {
   const { session } = route.params;
   const [activeTab, setActiveTab] = useState(TABS[0]);
   const { dateLabel, records } = session;
+  const speeds = records
+    .map(getSpeedKmh)
+    .filter((v): v is number => v !== null)
+    .map((kmh) => kmh * KMH_TO_MPH);
+  const avgMph = speeds.length
+    ? (speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1)
+    : null;
+  const maxMph = speeds.length ? Math.max(...speeds).toFixed(1) : null;
+  const breakValues = records
+    .map((r) => r.speed_info?.total_break_cm)
+    .filter((v): v is number => v != null);
+  const avgBreak = breakValues.length
+    ? (breakValues.reduce((a, b) => a + b, 0) / breakValues.length).toFixed(1)
+    : null;
+  const strikeCount = records.filter((r) => r.speed_info?.is_strike === true).length;
+  const strikeRate = records.length ? Math.round((strikeCount / records.length) * 100) : null;
 
   return (
     <View style={styles.container}>
       <View style={styles.sessionHeader}>
         <Text style={styles.sessionDate}>{dateLabel}</Text>
         <Text style={styles.sessionCount}>{records.length} 球</Text>
+      </View>
+      <View style={styles.summaryStrip}>
+        <View style={styles.summaryItem}>
+          <Text style={styles.summaryValue}>{avgMph ?? '-'}</Text>
+          <Text style={styles.summaryLabel}>均速 mph</Text>
+        </View>
+        <View style={styles.summaryItem}>
+          <Text style={[styles.summaryValue, { color: Colors.accent }]}>{maxMph ?? '-'}</Text>
+          <Text style={styles.summaryLabel}>最高 mph</Text>
+        </View>
+        <View style={styles.summaryItem}>
+          <Text style={styles.summaryValue}>{avgBreak ?? '-'}</Text>
+          <Text style={styles.summaryLabel}>平均位移 cm</Text>
+        </View>
+        <View style={styles.summaryItem}>
+          <Text style={styles.summaryValue}>{strikeRate !== null ? `${strikeRate}%` : '-'}</Text>
+          <Text style={styles.summaryLabel}>好球率</Text>
+        </View>
       </View>
       <SegmentedTabs tabs={TABS} activeTab={activeTab} onSelect={setActiveTab} />
       <View style={{ flex: 1 }}>
@@ -204,6 +238,37 @@ const styles = StyleSheet.create({
   },
   sessionDate: { fontSize: 26, fontWeight: '900', color: Colors.text },
   sessionCount: { fontSize: FontSize.md, color: Colors.textMuted, fontWeight: '700' },
+  summaryStrip: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.xs,
+  },
+  summaryItem: {
+    flex: 1,
+    minHeight: 58,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  summaryValue: {
+    fontSize: FontSize.lg,
+    fontWeight: '900',
+    color: Colors.text,
+    lineHeight: 19,
+    fontVariant: ['tabular-nums'],
+  },
+  summaryLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    marginTop: 4,
+    textAlign: 'center',
+  },
   emptyWrap: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 24 },
   emptyText: { fontSize: FontSize.md, color: Colors.textMuted },
   card: {

@@ -53,6 +53,7 @@ export default function ResultScreen() {
   const breakVInduced = si.induced_vertical_break_cm ?? null;
   const breakTotal = si.total_break_cm ?? null;
   const breakConf = si.break_confidence ?? null;
+  const spinRpm = si.spin_rpm ?? null;
   const hasBreakChart = breakH !== null && breakVInduced !== null;
 
   const physClamped = si.physics_clamped ?? false;
@@ -82,6 +83,17 @@ export default function ResultScreen() {
   const videoAspectRatio = result.video_width && result.video_height
     ? result.video_width / result.video_height
     : 16 / 9;
+  const detectionPct = result.total_frames && result.yolo_raw_detection_frames != null
+    ? Math.round((result.yolo_raw_detection_frames / result.total_frames) * 100)
+    : null;
+  const heroStats = [
+    { label: '最高 mph', value: maxKmh !== null ? kmhToMph(maxKmh) : '-' },
+    { label: '距離 m', value: distM !== null ? distM.toFixed(1) : '-' },
+    { label: '飛行 s', value: flightS !== null ? flightS.toFixed(3) : '-' },
+    { label: '橫移 cm', value: breakH !== null ? breakH.toFixed(1) : '-' },
+    { label: 'IVB cm', value: breakVInduced !== null ? breakVInduced.toFixed(1) : '-' },
+    { label: '轉速 rpm', value: spinRpm !== null ? Math.round(spinRpm).toLocaleString() : '-' },
+  ];
 
   const plateZone = si.plate_zone ?? null;
   const zoneOverride = useMemo(
@@ -156,26 +168,16 @@ export default function ResultScreen() {
         {/* Divider */}
         <View style={styles.heroDivider} />
 
-        {/* Stats row */}
+        {/* Stats grid */}
         <View style={styles.statsGrid}>
-          <View style={styles.statItem}>
-            <Text style={styles.statVal}>
-              {maxKmh !== null ? kmhToMph(maxKmh) : '—'}
-            </Text>
-            <Text style={styles.statLbl}>最高 mph</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statVal}>
-              {distM !== null ? distM.toFixed(1) : '—'}
-            </Text>
-            <Text style={styles.statLbl}>距離 m</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statVal}>
-              {flightS !== null ? flightS.toFixed(3) : '—'}
-            </Text>
-            <Text style={styles.statLbl}>飛行 s</Text>
-          </View>
+          {heroStats.map((stat) => (
+            <View key={stat.label} style={styles.statItem}>
+              <Text style={styles.statVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+                {stat.value}
+              </Text>
+              <Text style={styles.statLbl} numberOfLines={1}>{stat.label}</Text>
+            </View>
+          ))}
         </View>
 
         {/* Method + quality chips */}
@@ -347,8 +349,20 @@ export default function ResultScreen() {
               </Text>
             </View>
             <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>偵測覆蓋率</Text>
+              <Text style={styles.detailValue}>{detectionPct !== null ? `${detectionPct}%` : '—'}</Text>
+            </View>
+            <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>軌跡點數</Text>
               <Text style={styles.detailValue}>{result.trajectory_count ?? '—'}</Text>
+            </View>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>出手到接球幀</Text>
+              <Text style={styles.detailValue}>
+                {si.release_frame_idx != null && si.catch_frame_idx != null
+                  ? `${si.release_frame_idx} -> ${si.catch_frame_idx}`
+                  : '—'}
+              </Text>
             </View>
 
             {/* Internal frame-index data — dev only */}
@@ -519,19 +533,24 @@ const styles = StyleSheet.create({
 
   statsGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: Spacing.sm,
   },
   statItem: {
-    flex: 1,
+    flexBasis: '31%',
+    flexGrow: 1,
     alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.07)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
     borderRadius: Radius.lg,
-    paddingVertical: Spacing.md,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: 4,
+    minWidth: 88,
   },
-  statVal: { fontSize: FontSize.xl, fontWeight: '800', color: Colors.textInverse, fontVariant: ['tabular-nums'] },
+  statVal: { fontSize: FontSize.lg, fontWeight: '800', color: Colors.textInverse, fontVariant: ['tabular-nums'] },
   statLbl: {
     fontSize: FontSize.xs,
     color: '#94a3b8',
