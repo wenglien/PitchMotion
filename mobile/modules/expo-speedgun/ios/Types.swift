@@ -58,6 +58,7 @@ let HC_STATIC_MIN_CONF: Double = 0.35
 // then add a fixed pitcher-to-plate offset derived from the aspect ratio of the scene.
 let SHOULDER_WIDTH_M: Double = 0.44       // average biacromial breadth
 let IPHONE_FOCAL_LENGTH_PX_1080: Double = 1580.0  // ~28mm equiv on 1080p iPhone wide cam
+let BASEBALL_DIAMETER_M: Double = 0.074   // regulation baseball: 73–75mm
 // Scaling factor to convert camera-to-pitcher distance to total pitch distance.
 // Empirically: camera is ~1.5–3m behind the catcher; pitcher mound is ~18m from plate.
 // We model: pitchDist ≈ camToPitcher × PITCH_DIST_SCALE_FACTOR
@@ -234,6 +235,15 @@ struct SpeedInfo {
     var firstBallFrameIdx: Int?
     var catchFrameIdx: Int?
 
+    // Pre-detect gap (release → first YOLO detection) used in flight time
+    var preDetectSec: Double?
+    var preDetectSource: String?      // "pose" | "ball_size" | "fixed"
+
+    // Catch point provenance
+    var catchPointSource: String?     // "last_detection" | "extrapolated_audio" | "extrapolated_band" (+"+glove" when blended)
+    var catchPointConfidence: Double?
+    var glovePoint: CGPoint?          // catcher wrist near catch frame, when detected
+
     /// Convert to dictionary for JS bridge
     func toDictionary() -> [String: Any] {
         var dict: [String: Any] = [:]
@@ -280,6 +290,13 @@ struct SpeedInfo {
         if let v = releaseFrameSource { dict["release_frame_source"] = v }
         if let v = firstBallFrameIdx { dict["first_ball_frame_idx"] = v }
         if let v = catchFrameIdx { dict["catch_frame_idx"] = v }
+        if let v = preDetectSec { dict["pre_detect_sec"] = v }
+        if let v = preDetectSource { dict["pre_detect_source"] = v }
+        if let v = catchPointSource { dict["catch_point_source"] = v }
+        if let v = catchPointConfidence { dict["catch_point_confidence"] = v }
+        if let gp = glovePoint {
+            dict["glove_point"] = ["x": Int(gp.x), "y": Int(gp.y)]
+        }
         return dict
     }
 }

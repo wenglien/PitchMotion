@@ -406,7 +406,7 @@ final class OverlayGenerator {
             if frameIndex > startFrame {
                 let fadeFrames = max(1, min(30, realTotal - startFrame))
                 let alpha = min(1.0, Double(frameIndex - startFrame) / Double(fadeFrames))
-                drawFullFrameStrikeZone(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: 0.45 + 0.35 * alpha)
+                drawFullFrameStrikeZone(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: 0.45 + 0.35 * alpha, currentFrame: frameIndex)
                 drawSpeedText(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: alpha)
                 drawStrikeZone(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: alpha)
             }
@@ -969,53 +969,74 @@ final class OverlayGenerator {
         let sn = spline.count
         guard sn >= 2 else { return }
 
-        // Draw glow trail along spline
+        // Comet-style trail: colour graded from a warm amber tail to the ball
+        // colour at the head, width tapered tail→head, with a layered glow.
+        let headColR = Double(trail.last?.r ?? 255) / 255.0
+        let headColG = Double(trail.last?.g ?? 30)  / 255.0
+        let headColB = Double(trail.last?.b ?? 30)  / 255.0
+        let tailColR = 1.00, tailColG = 0.82, tailColB = 0.30
+
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
         for i in 1..<sn {
             let t = Double(i) / Double(sn)
-            let fade = pow(t, 0.5)         // faster fade-in so head is brighter
-            let alpha = CGFloat(fade)
+            let alpha = CGFloat(pow(t, 0.65))
 
-            // Color: use the last trail point's colour (all red for now)
-            let r = CGFloat(trail.last?.r ?? 255) / 255.0
-            let g = CGFloat(trail.last?.g ?? 30)  / 255.0
-            let b = CGFloat(trail.last?.b ?? 30)  / 255.0
+            let r = CGFloat(tailColR + (headColR - tailColR) * t)
+            let g = CGFloat(tailColG + (headColG - tailColG) * t)
+            let b = CGFloat(tailColB + (headColB - tailColB) * t)
 
-            let coreW = CGFloat(max(2, Int((2.5 + t * 3.5) * sc)))
+            let coreW = CGFloat(max(1.5, (1.5 + t * 4.5) * sc))
+            let p0 = CGPoint(x: spline[i-1].x, y: spline[i-1].y)
+            let p1 = CGPoint(x: spline[i].x, y: spline[i].y)
 
-            // Outer glow first (drawn under core)
-            let glowW = coreW + CGFloat(7 * sc)
-            ctx.setStrokeColor(CGColor(red: r * 0.6, green: g * 0.6, blue: b * 0.6, alpha: alpha * 0.25))
-            ctx.setLineWidth(glowW)
-            ctx.setLineCap(.round)
-            ctx.move(to: CGPoint(x: spline[i-1].x, y: spline[i-1].y))
-            ctx.addLine(to: CGPoint(x: spline[i].x, y: spline[i].y))
-            ctx.strokePath()
+            // Wide soft outer glow
+            ctx.setStrokeColor(CGColor(red: r, green: g * 0.7, blue: b * 0.5, alpha: alpha * 0.10))
+            ctx.setLineWidth(coreW + CGFloat(11 * sc))
+            ctx.move(to: p0); ctx.addLine(to: p1); ctx.strokePath()
+
+            // Tight inner glow
+            ctx.setStrokeColor(CGColor(red: r, green: g * 0.85, blue: b * 0.7, alpha: alpha * 0.28))
+            ctx.setLineWidth(coreW + CGFloat(4.5 * sc))
+            ctx.move(to: p0); ctx.addLine(to: p1); ctx.strokePath()
 
             // Core line
             ctx.setStrokeColor(CGColor(red: r, green: g, blue: b, alpha: alpha))
             ctx.setLineWidth(coreW)
-            ctx.setLineCap(.round)
-            ctx.move(to: CGPoint(x: spline[i-1].x, y: spline[i-1].y))
-            ctx.addLine(to: CGPoint(x: spline[i].x, y: spline[i].y))
-            ctx.strokePath()
+            ctx.move(to: p0); ctx.addLine(to: p1); ctx.strokePath()
+
+            // White-hot filament near the head for an energetic finish
+            if t > 0.72 {
+                let hot = CGFloat((t - 0.72) / 0.28)
+                ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 0.92, alpha: alpha * 0.55 * hot))
+                ctx.setLineWidth(max(1.0, coreW * 0.35))
+                ctx.move(to: p0); ctx.addLine(to: p1); ctx.strokePath()
+            }
         }
 
         // Ball head at last spline point
         if let head = spline.last {
-            let headR = CGFloat(max(7, Int(10 * sc)))
-            let r = CGFloat(trail.last?.r ?? 255) / 255.0
-            let g = CGFloat(trail.last?.g ?? 30)  / 255.0
-            let b = CGFloat(trail.last?.b ?? 30)  / 255.0
+            let headRad = CGFloat(max(7, Int(10 * sc)))
+            let r = CGFloat(headColR)
+            let g = CGFloat(headColG)
+            let b = CGFloat(headColB)
 
-            // Halo
-            let haloR = headR + CGFloat(max(8, Int(12 * sc)))
-            ctx.setFillColor(CGColor(red: r, green: g, blue: b, alpha: 0.25))
-            ctx.fillEllipse(in: CGRect(x: head.x - Double(haloR), y: head.y - Double(haloR),
-                                       width: Double(haloR*2), height: Double(haloR*2)))
+            // Layered halo (approximates a radial glow)
+            for (mult, haloAlpha) in [(2.4, 0.08), (1.7, 0.16), (1.25, 0.28)] {
+                let hr = headRad * CGFloat(mult)
+                ctx.setFillColor(CGColor(red: r, green: g, blue: b, alpha: CGFloat(haloAlpha)))
+                ctx.fillEllipse(in: CGRect(x: head.x - Double(hr), y: head.y - Double(hr),
+                                           width: Double(hr*2), height: Double(hr*2)))
+            }
             // Core circle
             ctx.setFillColor(CGColor(red: r, green: g, blue: b, alpha: 1.0))
-            ctx.fillEllipse(in: CGRect(x: head.x - Double(headR), y: head.y - Double(headR),
-                                       width: Double(headR*2), height: Double(headR*2)))
+            ctx.fillEllipse(in: CGRect(x: head.x - Double(headRad), y: head.y - Double(headRad),
+                                       width: Double(headRad*2), height: Double(headRad*2)))
+            // Thin white ring for definition against busy backgrounds
+            ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.85))
+            ctx.setLineWidth(CGFloat(max(1.5, 1.8 * sc)))
+            ctx.strokeEllipse(in: CGRect(x: head.x - Double(headRad), y: head.y - Double(headRad),
+                                         width: Double(headRad*2), height: Double(headRad*2)))
             // White hotspot
             let hotR = CGFloat(max(2, Int(3 * sc)))
             ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.9))
@@ -1141,19 +1162,26 @@ final class OverlayGenerator {
 
     // MARK: - Strike Zone
 
-    /// Draw the calibrated strike zone as a flat 2D plane in the video frame.
+    /// Draw the calibrated strike zone as a broadcast-style K-zone panel:
+    /// glass gradient fill, hairline 3×3 grid, corner brackets, glow border,
+    /// and a pulsing impact marker at the pitch crossing location.
     private func drawFullFrameStrikeZone(
         ctx: CGContext,
         speedInfo: SpeedInfo,
         outWidth: Int,
         outHeight: Int,
-        alpha: Double
+        alpha: Double,
+        currentFrame: Int
     ) {
         let zone = speedInfo.plateZone ?? DEFAULT_STRIKE_ZONE
-        let xMin = CGFloat((zone["x_min"] ?? STRIKE_ZONE_X_MIN) * Double(outWidth))
-        let xMax = CGFloat((zone["x_max"] ?? STRIKE_ZONE_X_MAX) * Double(outWidth))
-        let yMin = CGFloat((zone["y_min"] ?? STRIKE_ZONE_Y_MIN) * Double(outHeight))
-        let yMax = CGFloat((zone["y_max"] ?? STRIKE_ZONE_Y_MAX) * Double(outHeight))
+        let zoneXMin = zone["x_min"] ?? STRIKE_ZONE_X_MIN
+        let zoneXMax = zone["x_max"] ?? STRIKE_ZONE_X_MAX
+        let zoneYMin = zone["y_min"] ?? STRIKE_ZONE_Y_MIN
+        let zoneYMax = zone["y_max"] ?? STRIKE_ZONE_Y_MAX
+        let xMin = CGFloat(zoneXMin * Double(outWidth))
+        let xMax = CGFloat(zoneXMax * Double(outWidth))
+        let yMin = CGFloat(zoneYMin * Double(outHeight))
+        let yMax = CGFloat(zoneYMax * Double(outHeight))
         let w = xMax - xMin
         let h = yMax - yMin
         guard w > 4, h > 4 else { return }
@@ -1163,33 +1191,131 @@ final class OverlayGenerator {
 
         let sc = max(0.5, Double(outWidth) / 1080.0)
         let rect = CGRect(x: xMin, y: yMin, width: w, height: h)
-        ctx.setFillColor(CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.10 * alpha))
-        ctx.fill(rect)
 
+        // Pitch crossing location (frame coords) + strike/ball verdict,
+        // using the same zone-relative mapping as the mini zone panel.
+        var impact: (pt: CGPoint, isStrike: Bool)? = nil
+        if let xNorm = speedInfo.plateXNorm, let yNorm = speedInfo.plateYNorm,
+           zoneXMax > zoneXMin, zoneYMax > zoneYMin {
+            let xZ = (xNorm - zoneXMin) / (zoneXMax - zoneXMin)
+            let yZ = (yNorm - zoneYMin) / (zoneYMax - zoneYMin)
+            impact = (
+                CGPoint(x: CGFloat(xNorm) * CGFloat(outWidth), y: CGFloat(yNorm) * CGFloat(outHeight)),
+                xZ >= 0 && xZ <= 1 && yZ >= 0 && yZ <= 1
+            )
+        }
+
+        // 1) Glass fill: subtle vertical gradient instead of a flat wash
+        if let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: [
+                CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.16 * alpha),
+                CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.04 * alpha),
+            ] as CFArray,
+            locations: [0.0, 1.0]
+        ) {
+            ctx.saveGState()
+            ctx.clip(to: rect)
+            ctx.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: rect.midX, y: rect.minY),
+                end: CGPoint(x: rect.midX, y: rect.maxY),
+                options: []
+            )
+            ctx.restoreGState()
+        }
+
+        // 2) Hit-cell highlight: tint the 3×3 cell the pitch crossed (strike only)
+        if let impact = impact, impact.isStrike {
+            let col = min(2, max(0, Int((impact.pt.x - rect.minX) / (rect.width / 3))))
+            let row = min(2, max(0, Int((impact.pt.y - rect.minY) / (rect.height / 3))))
+            let cell = CGRect(
+                x: rect.minX + rect.width / 3 * CGFloat(col),
+                y: rect.minY + rect.height / 3 * CGFloat(row),
+                width: rect.width / 3,
+                height: rect.height / 3
+            )
+            ctx.setFillColor(CGColor(red: 0.20, green: 0.90, blue: 0.45, alpha: 0.18 * alpha))
+            ctx.fill(cell.insetBy(dx: CGFloat(1.5 * sc), dy: CGFloat(1.5 * sc)))
+        }
+
+        // 3) 3×3 grid — thin solid hairlines (calmer than dashed)
         ctx.setLineCap(.round)
-        ctx.setStrokeColor(CGColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.45 * alpha))
-        ctx.setLineWidth(CGFloat(max(4.0, 5.0 * sc)))
-        ctx.stroke(rect)
-
-        ctx.setStrokeColor(CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.95 * alpha))
-        ctx.setLineWidth(CGFloat(max(2.0, 3.0 * sc)))
-        ctx.stroke(rect)
-
-        ctx.setStrokeColor(CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.55 * alpha))
-        ctx.setLineWidth(CGFloat(max(1.0, 1.5 * sc)))
-        ctx.setLineDash(phase: 0, lengths: [CGFloat(8 * sc), CGFloat(6 * sc)])
+        ctx.setStrokeColor(CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.20 * alpha))
+        ctx.setLineWidth(CGFloat(max(0.8, 1.0 * sc)))
         for t in [CGFloat(1.0 / 3.0), CGFloat(2.0 / 3.0)] {
             let x = rect.minX + rect.width * t
             ctx.move(to: CGPoint(x: x, y: rect.minY))
             ctx.addLine(to: CGPoint(x: x, y: rect.maxY))
-            ctx.strokePath()
-
             let y = rect.minY + rect.height * t
             ctx.move(to: CGPoint(x: rect.minX, y: y))
             ctx.addLine(to: CGPoint(x: rect.maxX, y: y))
-            ctx.strokePath()
         }
-        ctx.setLineDash(phase: 0, lengths: [])
+        ctx.strokePath()
+
+        // 4) Border: soft outer glow → dark contrast line → main yellow stroke
+        ctx.setStrokeColor(CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.18 * alpha))
+        ctx.setLineWidth(CGFloat(max(7.0, 9.0 * sc)))
+        ctx.stroke(rect)
+
+        ctx.setStrokeColor(CGColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.40 * alpha))
+        ctx.setLineWidth(CGFloat(max(3.5, 4.5 * sc)))
+        ctx.stroke(rect)
+
+        ctx.setStrokeColor(CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.95 * alpha))
+        ctx.setLineWidth(CGFloat(max(1.8, 2.4 * sc)))
+        ctx.stroke(rect)
+
+        // 5) Corner brackets — broadcast K-zone accent
+        let bracketLen = min(rect.width, rect.height) * 0.16
+        ctx.setStrokeColor(CGColor(red: 1.0, green: 0.92, blue: 0.55, alpha: alpha))
+        ctx.setLineWidth(CGFloat(max(3.5, 5.0 * sc)))
+        let cornerDirs: [(CGPoint, CGFloat, CGFloat)] = [
+            (CGPoint(x: rect.minX, y: rect.minY), 1, 1),
+            (CGPoint(x: rect.maxX, y: rect.minY), -1, 1),
+            (CGPoint(x: rect.minX, y: rect.maxY), 1, -1),
+            (CGPoint(x: rect.maxX, y: rect.maxY), -1, -1),
+        ]
+        for (corner, sx, sy) in cornerDirs {
+            ctx.move(to: CGPoint(x: corner.x + bracketLen * sx, y: corner.y))
+            ctx.addLine(to: corner)
+            ctx.addLine(to: CGPoint(x: corner.x, y: corner.y + bracketLen * sy))
+        }
+        ctx.strokePath()
+
+        // 6) Impact marker with a breathing pulse ring
+        if let impact = impact {
+            let pt = impact.pt
+            guard pt.x.isFinite, pt.y.isFinite,
+                  pt.x > rect.minX - rect.width, pt.x < rect.maxX + rect.width,
+                  pt.y > rect.minY - rect.height, pt.y < rect.maxY + rect.height else { return }
+            let mr: CGFloat = impact.isStrike ? 0.20 : 1.00
+            let mg: CGFloat = impact.isStrike ? 0.90 : 0.30
+            let mb: CGFloat = impact.isStrike ? 0.45 : 0.28
+            let pulse = 0.5 + 0.5 * sin(Double(currentFrame) * 0.30)
+            let dotR = CGFloat(max(5.0, 7.0 * sc))
+            let ringR = dotR + CGFloat((6.0 + 4.0 * pulse) * sc)
+
+            // Soft halo
+            ctx.setFillColor(CGColor(red: mr, green: mg, blue: mb, alpha: 0.18 * alpha))
+            ctx.fillEllipse(in: CGRect(x: pt.x - ringR * 1.5, y: pt.y - ringR * 1.5,
+                                       width: ringR * 3, height: ringR * 3))
+            // Pulse ring
+            ctx.setStrokeColor(CGColor(red: mr, green: mg, blue: mb, alpha: (0.55 + 0.35 * pulse) * alpha))
+            ctx.setLineWidth(CGFloat(max(2.0, 2.5 * sc)))
+            ctx.strokeEllipse(in: CGRect(x: pt.x - ringR, y: pt.y - ringR,
+                                         width: ringR * 2, height: ringR * 2))
+            // Core dot over a dark edge for contrast
+            let edgeR = dotR + CGFloat(1.5 * sc)
+            ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.5 * alpha))
+            ctx.fillEllipse(in: CGRect(x: pt.x - edgeR, y: pt.y - edgeR, width: edgeR * 2, height: edgeR * 2))
+            ctx.setFillColor(CGColor(red: mr, green: mg, blue: mb, alpha: alpha))
+            ctx.fillEllipse(in: CGRect(x: pt.x - dotR, y: pt.y - dotR, width: dotR * 2, height: dotR * 2))
+            // White centre
+            let hotR = CGFloat(max(2.0, 2.6 * sc))
+            ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.92 * alpha))
+            ctx.fillEllipse(in: CGRect(x: pt.x - hotR, y: pt.y - hotR, width: hotR * 2, height: hotR * 2))
+        }
     }
 
     /// Draw a miniature strike zone in the bottom-right corner showing pitch location.
@@ -1309,6 +1435,11 @@ final class OverlayGenerator {
         // Core dot
         UIColor(red: dotColorR, green: dotColorG, blue: dotColorB, alpha: CGFloat(alpha)).setFill()
         UIBezierPath(ovalIn: CGRect(x: dotX - dotR, y: dotY - dotR, width: dotR*2, height: dotR*2)).fill()
+        // White ring for definition
+        UIColor(white: 1.0, alpha: CGFloat(alpha * 0.7)).setStroke()
+        let dotRing = UIBezierPath(ovalIn: CGRect(x: dotX - dotR, y: dotY - dotR, width: dotR*2, height: dotR*2))
+        dotRing.lineWidth = CGFloat(max(1.0, 1.2 * sc))
+        dotRing.stroke()
         // White centre
         let hotR = CGFloat(max(2, Int(3 * sc)))
         UIColor(white: 1.0, alpha: CGFloat(alpha * 0.9)).setFill()

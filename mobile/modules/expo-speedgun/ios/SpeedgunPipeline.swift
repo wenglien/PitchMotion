@@ -2,6 +2,7 @@ import AVFoundation
 import Accelerate
 import CoreVideo
 import Foundation
+import Vision
 
 /// Main pipeline orchestrator. Wires all stages together.
 /// Port of src/pipelines/yolov8_pipeline.py + get_pitch_frames_yolov8.py
@@ -70,6 +71,17 @@ final class SpeedgunPipeline {
         let displayHeight = decoder.displayHeight
         let fps = decoder.fps
         let totalFrames = decoder.totalFrames
+
+        // Camera focal length in pixels: prefer the per-video QuickTime metadata
+        // (true recorded FOV incl. lens choice / zoom / stabilization crop) over
+        // the tuned per-model constant. Read from probeDecoder — the original
+        // file — because the HDR→SDR re-export may strip camera metadata.
+        let metadataFocalPx = await probeDecoder.cameraFocalLengthPx()
+        let cameraFocalLengthPx = metadataFocalPx
+            ?? IPHONE_FOCAL_LENGTH_PX_1080 * Double(displayHeight) / 1080.0
+        if metadataFocalPx == nil {
+            NSLog("[SpeedgunPipeline] No focal-length metadata — fallback constant %.0fpx", cameraFocalLengthPx)
+        }
 
         // Optical-flow interpolation:
         // ENABLED  for normal/high-fps video (captureFps < 120): doubles frame density,
@@ -277,7 +289,7 @@ final class SpeedgunPipeline {
 
         // Stage 3: Phase 1.5 Gap Fill (polynomial interpolation)
         reportProgress("tracking", 0.56, "Filling trajectory gaps...")
-        fillLostTracking(frameInfos: &frameInfos, maxGapFrames: 30, fps: effectiveFps)
+        fillLostTracking(frameInfos: &frameInfos, maxGapFrames: 30, fps: effectiveCaptureFps)
 
         // Stage 4: Phase 2 SORT Tracking
         // Scale maxAge by effectiveCaptureFps to give ~0.5s of REAL-TIME gap tolerance.
@@ -341,6 +353,17 @@ final class SpeedgunPipeline {
                     if tp.area > 0 { frameInfos[tp.frameIndex].ballArea = tp.area }
                 }
             }
+
+            // 3. Reconstruct gaps inside the selected SORT track. SORT only emits
+            //    frames that received an update, so low sensitivity or motion blur
+            //    can leave holes even after the best trajectory is known.
+            fillSelectedTrackGaps(
+                frameInfos: &frameInfos,
+                track: track,
+                fps: effectiveCaptureFps,
+                displayWidth: displayWidth,
+                displayHeight: displayHeight
+            )
         }
         // If bestTrack is nil, fall back to Phase-1 detections as-is (gap-fill already applied).
 
@@ -365,6 +388,7 @@ final class SpeedgunPipeline {
             frameInfos: frameInfos,
             displayWidth: displayWidth,
             displayHeight: displayHeight,
+            focalLengthPx: cameraFocalLengthPx,
             pitcherHeightM: pitcherHeightM
         ) {
             resolvedDistance = est
@@ -492,6 +516,19 @@ final class SpeedgunPipeline {
             firstBallFrame: firstBallFrame
         )
 
+        // Ball-size ranging for the pre-detect gap: physically-derived estimate of
+        // the release → first-detection time, replacing the fixed 0.25s guess.
+        let ballSizePreFrames = estimateBallSizePreDetectFrames(
+            rawDetections: rawDetections,
+            frameInfos: frameInfos,
+            firstBallFrame: firstBallFrame,
+            endpointFrame: validatedCatchFrame ?? lastBallFrame,
+            focalLengthPx: cameraFocalLengthPx,
+            flightDistanceM: speedCalculatorResolved.effectiveDistance ?? resolvedDistance,
+            fps: effectiveCaptureFps,
+            displayWidth: displayWidth
+        )
+
         var speedInfo: SpeedInfo
         if trajectoryPoints.count >= 2 {
             speedInfo = speedCalculatorResolved.calculateSpeedDetailed(
@@ -500,7 +537,8 @@ final class SpeedgunPipeline {
                 releasePoint: releaseMarkerPoint,
                 releaseFrameIdx: validatedReleaseFrame,
                 firstBallFrameIdx: firstBallFrame,
-                lastBallFrameIdx: validatedCatchFrame ?? lastBallFrame
+                lastBallFrameIdx: validatedCatchFrame ?? lastBallFrame,
+                ballSizePreFrames: ballSizePreFrames
             )
 
             if !manualStrikeZone {
@@ -528,10 +566,151 @@ final class SpeedgunPipeline {
                 displayWidth: displayWidth,
                 displayHeight: displayHeight,
                 lastBallFrame: lastBallFrame,
+                catchFrame: validatedCatchFrame,
+                fps: effectiveCaptureFps,
                 plateZone: resolvedStrikeZone
             )
-            if let pos = platePos {
+            if let plate = platePos {
+                var pos = plate.point
+                var source = plate.source
+                var confidence = plate.source == "last_detection" ? 0.7 : 0.6
+
+                // Single Vision pass at the catch instant: catcher glove for the
+                // catch-point cross-check + catcher body for the zone anchor.
+                var catcherObs: CatcherObservation? = nil
+                if let catchRefFrame = validatedCatchFrame ?? lastBallFrame {
+                    catcherObs = detectCatcherObservation(
+                        videoURL: effectiveURL,
+                        catchFrame: catchRefFrame,
+                        effectivePlaybackFps: effectiveFps,
+                        displayWidth: displayWidth,
+                        displayHeight: displayHeight,
+                        near: pos
+                    )
+                }
+
+                // Cross-check against the catcher's glove at the catch instant.
+                // Agreement promotes confidence and refines the point; a large
+                // divergence means the extrapolation likely drifted — keep it
+                // (it has the time anchor) but flag low confidence.
+                if let glove = catcherObs?.glovePoint {
+                    speedInfo.glovePoint = glove
+                    let diag = Double(displayWidth * displayWidth + displayHeight * displayHeight).squareRoot()
+                    let divergence = hypot(Double(glove.x - pos.x), Double(glove.y - pos.y))
+                    if divergence <= 0.12 * diag {
+                        pos = CGPoint(x: (pos.x + glove.x) / 2, y: (pos.y + glove.y) / 2)
+                        source += "+glove"
+                        confidence = 0.9
+                    } else {
+                        confidence = min(confidence, 0.4)
+                        NSLog("[SpeedgunPipeline] Glove diverges from extrapolated catch point: %.0fpx (%.1f%% of diag)",
+                              divergence, 100.0 * divergence / diag)
+                    }
+                }
+
+                // Anchor the strike zone to the detected catcher so the drawn
+                // zone sits in front of him instead of at the pitcher-pose /
+                // default position. Shoulder width gives the px-per-meter scale:
+                //   zone width  = plate width (17 in = 0.4318 m)
+                //   zone height = regulation band 1.04 m − 0.46 m = 0.58 m
+                //   zone top    ≈ crouched catcher's shoulder height (~1.0 m)
+                var zoneAnchoredToCatcher = false
+                if !manualStrikeZone,
+                   let bodyCX = catcherObs?.bodyCenterX,
+                   let shoulderY = catcherObs?.shoulderY,
+                   let shoulderW = catcherObs?.shoulderWidthPx {
+                    let ppm = Double(shoulderW) / SHOULDER_WIDTH_M
+                    let zoneWNorm = clamp(0.4318 * ppm / Double(displayWidth), min: 0.10, max: 0.50)
+                    let zoneHNorm = clamp(0.58 * ppm / Double(displayHeight), min: 0.08, max: 0.45)
+                    let cxNorm = clamp(
+                        Double(bodyCX) / Double(displayWidth),
+                        min: zoneWNorm / 2.0 + 0.02, max: 1.0 - zoneWNorm / 2.0 - 0.02
+                    )
+                    let cyNorm = clamp(
+                        Double(shoulderY) / Double(displayHeight) + zoneHNorm / 2.0,
+                        min: zoneHNorm / 2.0 + 0.02, max: 1.0 - zoneHNorm / 2.0 - 0.02
+                    )
+                    resolvedStrikeZone = [
+                        "x_min": cxNorm - zoneWNorm / 2.0,
+                        "x_max": cxNorm + zoneWNorm / 2.0,
+                        "y_min": cyNorm - zoneHNorm / 2.0,
+                        "y_max": cyNorm + zoneHNorm / 2.0,
+                    ]
+                    NSLog(
+                        "[SpeedgunPipeline] Catcher-anchored strike zone: x=%.3f-%.3f y=%.3f-%.3f (shoulderW=%.0fpx)",
+                        resolvedStrikeZone["x_min"] ?? 0, resolvedStrikeZone["x_max"] ?? 0,
+                        resolvedStrikeZone["y_min"] ?? 0, resolvedStrikeZone["y_max"] ?? 0,
+                        Double(shoulderW)
+                    )
+                    zoneAnchoredToCatcher = true
+                }
+
+                // Fallback when no catcher body is visible — the common rig has
+                // the phone mounted right behind the catcher, so only the top of
+                // his head is in frame and Vision cannot find shoulders. Recover
+                // the px-per-meter scale AT the plate plane from the ball's
+                // known diameter (74 mm) in the last detections before the
+                // catch, and pull the zone toward where the ball actually
+                // arrives. Without this the zone is drawn mid-frame (default /
+                // pitcher-pose position) while the catch happens near the bottom
+                // of the frame — visually disconnected from the analyzed plate
+                // location.
+                if !manualStrikeZone, !zoneAnchoredToCatcher {
+                    var catchAreas: [Double] = []
+                    if let last = lastBallFrame, !frameInfos.isEmpty {
+                        let end = min(last, frameInfos.count - 1)
+                        let start = max(0, end - 12)
+                        if start <= end {
+                            for i in start...end {
+                                let fi = frameInfos[i]
+                                if fi.ballInFrame && !fi.ballLostTracking && fi.ballArea > 0 {
+                                    catchAreas.append(fi.ballArea)
+                                }
+                            }
+                        }
+                    }
+                    if catchAreas.count >= 3 {
+                        let ballDiaPx = median(catchAreas).squareRoot()
+                        let ppm = ballDiaPx / BASEBALL_DIAMETER_M
+                        let zoneWNorm = clamp(0.4318 * ppm / Double(displayWidth), min: 0.12, max: 0.55)
+                        let zoneHNorm = clamp(0.58 * ppm / Double(displayHeight), min: 0.10, max: 0.50)
+                        let catchXNorm = Double(pos.x) / Double(displayWidth)
+                        let catchYNorm = Double(pos.y) / Double(displayHeight)
+                        let prevCX = ((resolvedStrikeZone["x_min"] ?? STRIKE_ZONE_X_MIN)
+                                    + (resolvedStrikeZone["x_max"] ?? STRIKE_ZONE_X_MAX)) / 2.0
+                        let prevCY = ((resolvedStrikeZone["y_min"] ?? STRIKE_ZONE_Y_MIN)
+                                    + (resolvedStrikeZone["y_max"] ?? STRIKE_ZONE_Y_MAX)) / 2.0
+                        // x: the plate sits on the camera→pitcher line, which the
+                        // pose-based estimate already encodes — keep most of it.
+                        // y: the default band is calibrated for mid-frame geometry
+                        // and is meaningless at the near plane — let the catch
+                        // area dominate so the zone lands where the ball arrives.
+                        let cxNorm = clamp(
+                            0.65 * prevCX + 0.35 * catchXNorm,
+                            min: zoneWNorm / 2.0 + 0.02, max: 1.0 - zoneWNorm / 2.0 - 0.02
+                        )
+                        let cyNorm = clamp(
+                            0.45 * prevCY + 0.55 * catchYNorm,
+                            min: zoneHNorm / 2.0 + 0.02, max: 1.0 - zoneHNorm / 2.0 - 0.02
+                        )
+                        resolvedStrikeZone = [
+                            "x_min": cxNorm - zoneWNorm / 2.0,
+                            "x_max": cxNorm + zoneWNorm / 2.0,
+                            "y_min": cyNorm - zoneHNorm / 2.0,
+                            "y_max": cyNorm + zoneHNorm / 2.0,
+                        ]
+                        NSLog(
+                            "[SpeedgunPipeline] Plate-plane strike zone from ball size: dia=%.0fpx ppm=%.0f x=%.3f-%.3f y=%.3f-%.3f",
+                            ballDiaPx, ppm,
+                            resolvedStrikeZone["x_min"] ?? 0, resolvedStrikeZone["x_max"] ?? 0,
+                            resolvedStrikeZone["y_min"] ?? 0, resolvedStrikeZone["y_max"] ?? 0
+                        )
+                    }
+                }
+
                 speedInfo.catchPoint = pos
+                speedInfo.catchPointSource = source
+                speedInfo.catchPointConfidence = confidence
                 let xNorm = Double(pos.x) / Double(displayWidth)
                 let yNorm = Double(pos.y) / Double(displayHeight)
                 speedInfo.plateXNorm = xNorm
@@ -898,25 +1077,31 @@ final class SpeedgunPipeline {
 
     /// Estimate the ball position at the plate using trajectory extrapolation.
     /// Strategy:
-    /// 1. Collect the last ≤5 actual YOLO-detected frames (ballLostTracking == false).
-    /// 2. If ≥2 actual detections exist, extrapolate linearly to find where the ball
-    ///    would cross the catcher/plate band.
-    /// 3. If the extrapolated y is outside that band, use the frame closest
-    ///    to that band instead.
-    /// 4. Falls back to lastBallFrame if no extrapolation is possible.
+    /// 1. Collect the last ≤7 actual YOLO-detected frames (ballLostTracking == false).
+    /// 2. Fit the approach: quadratic in y — gravity plus perspective make the
+    ///    apparent drop accelerate, so constant-velocity extrapolation
+    ///    systematically undershoots (worst for breaking balls) — and robust
+    ///    median velocity in x.
+    /// 3. Horizon: when an audio catch frame exists, extrapolate exactly to that
+    ///    instant (time anchor); otherwise extrapolate until y crosses the top of
+    ///    the plate band.
+    /// 4. Clamp to frame bounds ONLY — never into the strike-zone band, so high
+    ///    and low pitches keep their true location for ball/strike calls.
     private func estimatePlatePosition(
         frameInfos: [FrameInfo],
         displayWidth: Int,
         displayHeight: Int,
         lastBallFrame: Int?,
+        catchFrame: Int?,
+        fps: Int,
         plateZone: [String: Double]
-    ) -> CGPoint? {
+    ) -> (point: CGPoint, source: String)? {
         guard let last = lastBallFrame else { return nil }
 
         // --- Collect last N actual detections (not gap-filled synthetic points) ---
-        // Raised from 8 → 15: at 120fps this is ~125ms of history; at 240fps ~62ms.
-        // Also collect up to 7 (was 5) actual detections so median velocity is more stable
-        // against the high per-frame bbox jitter in the final approach phase.
+        // 15-frame lookback: at 120fps this is ~125ms of history; at 240fps ~62ms.
+        // Up to 7 actual detections so the fit is stable against the high
+        // per-frame bbox jitter in the final approach phase.
         let maxLookback = 15
         var actualDetections: [(frameIdx: Int, x: Double, y: Double)] = []
         let searchStart = max(0, last - maxLookback)
@@ -928,16 +1113,19 @@ final class SpeedgunPipeline {
             if actualDetections.count >= 7 { break }
         }
 
-        // Need at least 2 actual detections for linear extrapolation
         guard actualDetections.count >= 2 else {
-            // Fallback: use lastBallFrame directly
-            return frameInfos[last].ballCenter
+            return (frameInfos[last].ballCenter, "last_detection")
         }
 
-        // --- Compute MEDIAN per-frame velocity across consecutive pairs ---
-        // Using only the last two points makes catch-point extrapolation highly sensitive
-        // to 4K bbox jitter (±1px = ±50mph-equivalent motion at 120fps catcher-POV).
-        // Median over up to 6 consecutive-pair deltas is much more stable.
+        let pLast = actualDetections[actualDetections.count - 1]
+        let curX = pLast.x
+        let curY = pLast.y
+
+        // --- Median per-frame velocity across consecutive pairs ---
+        // Using only the last two points makes extrapolation highly sensitive to
+        // 4K bbox jitter (±1px = ±50mph-equivalent motion at 120fps catcher-POV).
+        // Median over up to 6 consecutive-pair deltas is much more stable. Used
+        // for x always, and as the y fallback when the quadratic fit is rejected.
         var vxs: [Double] = []
         var vys: [Double] = []
         for i in 1..<actualDetections.count {
@@ -948,47 +1136,197 @@ final class SpeedgunPipeline {
             vys.append((b.y - a.y) / df)
         }
         let vx = median(vxs)
-        let vy = median(vys)
+        let vyLinear = median(vys)
 
-        let p2 = actualDetections[actualDetections.count - 1]
-
-        // The "plate band": ball should be near the calibrated strike-zone
-        // height when it crosses the plate in catcher/umpire POV.
-        let zoneYMin = plateZone["y_min"] ?? STRIKE_ZONE_Y_MIN
-        let zoneYMax = plateZone["y_max"] ?? STRIKE_ZONE_Y_MAX
-        let plateBandLo = zoneYMin * Double(displayHeight)
-        let plateBandHi = zoneYMax * Double(displayHeight)
-
-        // Current last-detection position
-        let curX = p2.x
-        let curY = p2.y
-
-        // If ball is already in plate band, use it directly
-        if curY >= plateBandLo && curY <= plateBandHi {
-            return CGPoint(x: curX, y: curY)
-        }
-
-        // Extrapolate forward: find how many frames until ball reaches plateBandLo
-        // (ball approaches lower in frame = increasing y in catcher-POV)
-        if vy > 0.5 && curY < plateBandLo {
-            // Ball still approaching — extrapolate to plateBandLo
-            let framesToPlate = (plateBandLo - curY) / vy
-            // Cap extrapolation to 0.5 seconds max. Use 120fps as worst-case bound so
-            // high-fps slo-mo (where each frame = tiny real-time slice) doesn't over-limit.
-            let fps = 120.0
-            let maxFrames = fps * 0.5
-            if framesToPlate > 0 && framesToPlate <= maxFrames {
-                let extX = curX + vx * framesToPlate
-                let extY = curY + vy * framesToPlate
-                // Clamp to frame bounds
-                let clampedX = clamp(extX, min: 0.0, max: Double(displayWidth))
-                let clampedY = clamp(extY, min: plateBandLo, max: plateBandHi)
-                return CGPoint(x: clampedX, y: clampedY)
+        // --- Quadratic y(t), t = frames after the last detection ---
+        // Physical gate: the approach must move downward (b > 0) with non-negative
+        // curvature (a ≥ 0, gravity/perspective accelerate the drop). Fits that
+        // fail the gate are jitter-dominated — fall back to the linear median.
+        var yAccel = 0.0
+        var vyAtLast = vyLinear
+        if actualDetections.count >= 4 {
+            let ts = actualDetections.map { Double($0.frameIdx - pLast.frameIdx) }
+            let ys = actualDetections.map { $0.y }
+            let coeffs = polyfit(ts, ys, degree: 2)   // y = a·t² + b·t + c
+            if coeffs.count == 3, coeffs[1] > 0, coeffs[0] >= 0 {
+                yAccel = coeffs[0]
+                vyAtLast = coeffs[1]
             }
         }
 
-        // Fallback: use last actual detection
-        return CGPoint(x: curX, y: curY)
+        func extrapolated(_ tFrames: Double) -> CGPoint {
+            let x = curX + vx * tFrames
+            let y = curY + vyAtLast * tFrames + yAccel * tFrames * tFrames
+            return CGPoint(
+                x: clamp(x, min: 0.0, max: Double(displayWidth)),
+                y: clamp(y, min: 0.0, max: Double(displayHeight))
+            )
+        }
+
+        // Cap extrapolation to 0.5s of real time
+        let maxFrames = Double(max(1, fps)) * 0.5
+
+        // --- Audio catch frame is the strongest endpoint signal: extrapolate
+        //     exactly (catchFrame − lastDetection) frames instead of guessing
+        //     where the plate band is ---
+        if let cf = catchFrame, cf >= pLast.frameIdx {
+            let t = min(Double(cf - pLast.frameIdx), maxFrames)
+            if t <= 0 { return (CGPoint(x: curX, y: curY), "last_detection") }
+            return (extrapolated(t), "extrapolated_audio")
+        }
+
+        // --- No time anchor: extrapolate until y crosses the plate band top ---
+        let zoneYMin = plateZone["y_min"] ?? STRIKE_ZONE_Y_MIN
+        let plateBandLo = zoneYMin * Double(displayHeight)
+
+        // Ball already at/below the band top — use the detection directly
+        if curY >= plateBandLo {
+            return (CGPoint(x: curX, y: curY), "last_detection")
+        }
+
+        guard vyAtLast > 0.5 else {
+            return (CGPoint(x: curX, y: curY), "last_detection")
+        }
+
+        // Solve curY + vy·t + a·t² = plateBandLo for the positive root
+        let drop = plateBandLo - curY
+        let tCross: Double
+        if yAccel > 1e-9 {
+            tCross = (-vyAtLast + sqrt(vyAtLast * vyAtLast + 4 * yAccel * drop)) / (2 * yAccel)
+        } else {
+            tCross = drop / vyAtLast
+        }
+        guard tCross > 0, tCross <= maxFrames else {
+            return (CGPoint(x: curX, y: curY), "last_detection")
+        }
+        return (extrapolated(tCross), "extrapolated_band")
+    }
+
+    // MARK: - Catcher Detection (catch-point cross-check + strike-zone anchor)
+
+    /// What the single-shot Vision pass at the catch frame found about the catcher.
+    private struct CatcherObservation {
+        /// Wrist nearest the extrapolated plate position (glove reference).
+        var glovePoint: CGPoint?
+        /// Shoulder-midpoint x of the largest foreground body (display px).
+        var bodyCenterX: CGFloat?
+        /// Shoulder-midpoint y of that body (display px).
+        var shoulderY: CGFloat?
+        /// Shoulder pixel width of that body — scale reference for the zone.
+        var shoulderWidthPx: CGFloat?
+    }
+
+    /// Detect the catcher (glove wrist + shoulder anchor) around the catch frame.
+    ///
+    /// The main PoseEstimator is locked to the pitcher ROI, so this runs an
+    /// independent single-shot Vision body-pose pass on the catch frame with a
+    /// lower-frame ROI. Among all detected wrists, the one nearest the
+    /// extrapolated plate position is taken as the glove reference — this
+    /// rejects the batter's hands, which sit off to the side of the plate.
+    /// The largest detected shoulder pair (foreground body = catcher) is also
+    /// returned so the strike zone can be anchored to the catcher's position.
+    ///
+    /// Returns nil when neither a plausible wrist nor a catcher body is found
+    /// (occluded catcher, no Neural Engine on Simulator, decode failure…).
+    private func detectCatcherObservation(
+        videoURL: URL,
+        catchFrame: Int,
+        effectivePlaybackFps: Int,
+        displayWidth: Int,
+        displayHeight: Int,
+        near expected: CGPoint
+    ) -> CatcherObservation? {
+        guard catchFrame >= 0, effectivePlaybackFps > 0 else { return nil }
+
+        let asset = AVAsset(url: videoURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        let halfFrame = CMTime(value: 1, timescale: CMTimeScale(max(2, effectivePlaybackFps * 2)))
+        generator.requestedTimeToleranceBefore = halfFrame
+        generator.requestedTimeToleranceAfter = halfFrame
+
+        // Catcher ROI: lower 60% of the frame (Vision coords are y-up).
+        let roiX: CGFloat = 0.05
+        let roiY: CGFloat = 0.0
+        let roiW: CGFloat = 0.90
+        let roiH: CGFloat = 0.60
+
+        let diag = Double(displayWidth * displayWidth + displayHeight * displayHeight).squareRoot()
+        // A wrist farther than this from the expected catch point is someone
+        // else's (batter/umpire) — reject it.
+        let maxWristDistance = 0.30 * diag
+        // A shoulder pair narrower than this is a background person (pitcher,
+        // bystander) — only the foreground catcher qualifies as zone anchor.
+        let minCatcherShoulderPx = 0.08 * Double(min(displayWidth, displayHeight))
+
+        var result = CatcherObservation()
+        var bestShoulderW: CGFloat = 0
+
+        // Try the catch frame first, then small offsets in case of motion blur
+        // or a momentarily occluded wrist.
+        for offset in [0, -2, 2, -4, 4] {
+            let frame = catchFrame + offset
+            guard frame >= 0 else { continue }
+            let time = CMTime(
+                seconds: Double(frame) / Double(effectivePlaybackFps),
+                preferredTimescale: 600
+            )
+            guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { continue }
+
+            let request = VNDetectHumanBodyPoseRequest()
+            request.regionOfInterest = CGRect(x: roiX, y: roiY, width: roiW, height: roiH)
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            guard (try? handler.perform([request])) != nil,
+                  let observations = request.results, !observations.isEmpty else { continue }
+
+            var bestWrist: CGPoint? = nil
+            var bestDist = maxWristDistance
+            for body in observations {
+                // Vision landmark location is normalised to the ROI rectangle
+                // (y-up); map back to full-frame display pixels (y-down).
+                func displayPoint(_ joint: VNHumanBodyPoseObservation.JointName, minConfidence: Float) -> CGPoint? {
+                    guard let pt = try? body.recognizedPoint(joint), pt.confidence > minConfidence else { return nil }
+                    let fullNormX = roiX + pt.location.x * roiW
+                    let fullNormY = roiY + pt.location.y * roiH
+                    return CGPoint(
+                        x: CGFloat(displayWidth) * fullNormX,
+                        y: CGFloat(displayHeight) * (1.0 - fullNormY)
+                    )
+                }
+
+                for joint in [VNHumanBodyPoseObservation.JointName.leftWrist, .rightWrist] {
+                    guard let wrist = displayPoint(joint, minConfidence: 0.1) else { continue }
+                    let dist = hypot(Double(wrist.x - expected.x), Double(wrist.y - expected.y))
+                    if dist < bestDist {
+                        bestDist = dist
+                        bestWrist = wrist
+                    }
+                }
+
+                if let ls = displayPoint(.leftShoulder, minConfidence: 0.2),
+                   let rs = displayPoint(.rightShoulder, minConfidence: 0.2) {
+                    let shoulderW = abs(ls.x - rs.x)
+                    if Double(shoulderW) >= minCatcherShoulderPx, shoulderW > bestShoulderW {
+                        bestShoulderW = shoulderW
+                        result.bodyCenterX = (ls.x + rs.x) / 2
+                        result.shoulderY = (ls.y + rs.y) / 2
+                        result.shoulderWidthPx = shoulderW
+                    }
+                }
+            }
+            if let wrist = bestWrist {
+                result.glovePoint = wrist
+                NSLog("[SpeedgunPipeline] Catcher glove detected at frame %d (offset %d): (%.0f, %.0f), dist to extrapolation %.0fpx",
+                      frame, offset, wrist.x, wrist.y, bestDist)
+                return result
+            }
+        }
+        if result.shoulderWidthPx != nil {
+            NSLog("[SpeedgunPipeline] Catcher body found near catch frame %d (no glove wrist)", catchFrame)
+            return result
+        }
+        NSLog("[SpeedgunPipeline] No catcher found near catch frame %d", catchFrame)
+        return nil
     }
 
     // MARK: - Catch Impact Detection (Audio)
@@ -1182,6 +1520,87 @@ final class SpeedgunPipeline {
         return bestFrame
     }
 
+    // MARK: - Ball-size Ranging (pre-detect gap)
+
+    /// Estimate the pre-detect gap (release → first YOLO detection) in frames
+    /// using the ball's pixel size at first detection.
+    ///
+    /// Pinhole model on the known baseball diameter (74mm):
+    ///   camToBall = focalPx × 0.074 / ballPxDiameter
+    /// The flight-distance model treats the camera as ≈ at the plate (mirroring
+    /// estimatePitchingDistance's cam-to-pitcher geometry), so the ball has
+    /// already flown (flightDistance − camToBall) metres before first detection
+    /// while the detected window covers ~camToBall metres in (last − first)
+    /// frames. Scaling that pace backwards gives the pre-detect time — a
+    /// physically-derived replacement for the fixed RELEASE_FALLBACK_SEC guess.
+    ///
+    /// Returns nil when the ranging is unreliable (too few clean detections,
+    /// sub-3px ball, or an implied distance outside the plausible flight range).
+    private func estimateBallSizePreDetectFrames(
+        rawDetections: [RawDetection],
+        frameInfos: [FrameInfo],
+        firstBallFrame: Int?,
+        endpointFrame: Int?,
+        focalLengthPx: Double,
+        flightDistanceM: Double,
+        fps: Int,
+        displayWidth: Int
+    ) -> Double? {
+        guard let first = firstBallFrame, let last = endpointFrame, last > first,
+              flightDistanceM > 1.0, focalLengthPx > 1.0 else { return nil }
+
+        // Median min-side bbox diameter over the first few REAL detections.
+        // min(width, height) resists motion-blur elongation of the bbox; the
+        // nearest-to-accepted-center match rejects unrelated false positives
+        // that share the frame with the real ball.
+        let matchTolerance = max(50.0, Double(displayWidth) * 0.03)
+        var diameters: [Double] = []
+        var fid = first
+        while fid < min(rawDetections.count, frameInfos.count, first + 20), diameters.count < 5 {
+            defer { fid += 1 }
+            let fi = frameInfos[fid]
+            guard fi.ballInFrame, !fi.ballLostTracking else { continue }
+            let cx = Double(fi.ballCenter.x)
+            let cy = Double(fi.ballCenter.y)
+            guard let det = rawDetections[fid].detections.min(by: {
+                hypot($0.cx - cx, $0.cy - cy) < hypot($1.cx - cx, $1.cy - cy)
+            }), hypot(det.cx - cx, det.cy - cy) <= matchTolerance else { continue }
+            diameters.append(min(det.width, det.height))
+        }
+        guard diameters.count >= 3 else {
+            NSLog("[SpeedgunPipeline] Ball-size ranging: too few clean detections (%d<3)", diameters.count)
+            return nil
+        }
+
+        let pxDiameter = median(diameters)
+        guard pxDiameter >= 3.0 else {
+            NSLog("[SpeedgunPipeline] Ball-size ranging: ball too small (%.1fpx)", pxDiameter)
+            return nil
+        }
+
+        let camToBall = focalLengthPx * BASEBALL_DIAMETER_M / pxDiameter
+        // Plausibility: the first detection must lie inside the flight path —
+        // not behind the camera and not farther than the pitcher.
+        guard camToBall > flightDistanceM * 0.2, camToBall < flightDistanceM * 1.05 else {
+            NSLog("[SpeedgunPipeline] Ball-size ranging: camToBall=%.1fm implausible for flight %.1fm",
+                  camToBall, flightDistanceM)
+            return nil
+        }
+
+        let flownPreM = max(0.0, flightDistanceM - camToBall)
+        let detectSec = Double(last - first) / Double(max(1, fps))
+        let preSec = detectSec * flownPreM / camToBall
+        guard preSec <= MAX_PRE_DETECT_SEC else {
+            NSLog("[SpeedgunPipeline] Ball-size ranging: preSec=%.2fs exceeds cap %.2fs",
+                  preSec, MAX_PRE_DETECT_SEC)
+            return nil
+        }
+
+        NSLog("[SpeedgunPipeline] Ball-size ranging: ballPx=%.1f camToBall=%.1fm flownPre=%.1fm → pre=%.3fs",
+              pxDiameter, camToBall, flownPreM, preSec)
+        return preSec * Double(max(1, fps))
+    }
+
     // MARK: - Pose-based Distance Estimation
 
     /// Estimate the camera-to-pitcher distance from the shoulder width visible in pose landmarks.
@@ -1191,7 +1610,8 @@ final class SpeedgunPipeline {
     /// Algorithm:
     /// 1. Collect shoulder pixel widths from all frames where both shoulders are detected.
     /// 2. Use the median (robust to outliers from frames where the pitcher is side-on).
-    /// 3. Convert to camera-to-pitcher distance using iPhone focal length at 1080p.
+    /// 3. Convert to camera-to-pitcher distance using the camera focal length
+    ///    (metadata-derived when available, tuned constant otherwise).
     /// 4. Clamp result to [POSE_DIST_MIN_M, POSE_DIST_MAX_M].
     ///
     /// Returns nil if not enough pose data is available.
@@ -1199,12 +1619,9 @@ final class SpeedgunPipeline {
         frameInfos: [FrameInfo],
         displayWidth: Int,
         displayHeight: Int,
+        focalLengthPx: Double,
         pitcherHeightM: Double? = nil
     ) -> Double? {
-        // Scale factor: landmarks are in display coords already
-        // If video height ≠ 1080, scale focal length proportionally
-        let scaleY = Double(displayHeight) / 1080.0
-        let focalLengthPx = IPHONE_FOCAL_LENGTH_PX_1080 * scaleY
 
         // --- Primary: full-body height (nose/shoulder → ankle) when user supplied pitcher height ---
         // Shoulder width is noisy because the pitcher rotates during delivery (side-on frames
@@ -1409,6 +1826,99 @@ final class SpeedgunPipeline {
                 frameInfos[gapFid].ballColor = (255, 30, 30)
                 frameInfos[gapFid].ballLostTracking = true
             }
+        }
+    }
+
+    /// Fill holes after the best SORT track has been chosen.
+    ///
+    /// Phase-1 gap fill works on all candidate detections before we know which
+    /// track is the pitch. This pass is stricter: it only interpolates between
+    /// anchors from the selected track, so the overlay and downstream trajectory
+    /// remain continuous without letting unrelated false positives bridge the
+    /// path.
+    private func fillSelectedTrackGaps(
+        frameInfos: inout [FrameInfo],
+        track: [TrackPoint],
+        fps: Int,
+        displayWidth: Int,
+        displayHeight: Int
+    ) {
+        guard frameInfos.count >= 2 else { return }
+
+        let anchors = Dictionary(grouping: track, by: { $0.frameIndex })
+            .compactMap { frameIdx, points -> TrackPoint? in
+                guard frameIdx >= 0 && frameIdx < frameInfos.count else { return nil }
+                return points.max(by: { $0.area < $1.area })
+            }
+            .sorted { $0.frameIndex < $1.frameIndex }
+
+        guard anchors.count >= 2 else { return }
+
+        let maxGap = max(5, Int(round(Double(max(1, fps)) * 0.45)))
+
+        func clampPoint(_ p: CGPoint) -> CGPoint {
+            CGPoint(
+                x: CGFloat(clamp(Double(p.x), min: 0.0, max: Double(displayWidth))),
+                y: CGFloat(clamp(Double(p.y), min: 0.0, max: Double(displayHeight)))
+            )
+        }
+
+        func point(_ tp: TrackPoint) -> CGPoint {
+            CGPoint(x: tp.cx, y: tp.cy)
+        }
+
+        func catmullRom(_ p0: CGPoint, _ p1: CGPoint, _ p2: CGPoint, _ p3: CGPoint, _ t: Double) -> CGPoint {
+            let t2 = t * t
+            let t3 = t2 * t
+            let x = 0.5 * (
+                2.0 * Double(p1.x)
+                + (Double(p2.x) - Double(p0.x)) * t
+                + (2.0 * Double(p0.x) - 5.0 * Double(p1.x) + 4.0 * Double(p2.x) - Double(p3.x)) * t2
+                + (-Double(p0.x) + 3.0 * Double(p1.x) - 3.0 * Double(p2.x) + Double(p3.x)) * t3
+            )
+            let y = 0.5 * (
+                2.0 * Double(p1.y)
+                + (Double(p2.y) - Double(p0.y)) * t
+                + (2.0 * Double(p0.y) - 5.0 * Double(p1.y) + 4.0 * Double(p2.y) - Double(p3.y)) * t2
+                + (-Double(p0.y) + 3.0 * Double(p1.y) - 3.0 * Double(p2.y) + Double(p3.y)) * t3
+            )
+            return clampPoint(CGPoint(x: x, y: y))
+        }
+
+        var filledCount = 0
+        for i in 0..<(anchors.count - 1) {
+            let prev = anchors[i]
+            let next = anchors[i + 1]
+            let gap = next.frameIndex - prev.frameIndex - 1
+            if gap <= 0 || gap > maxGap { continue }
+
+            let p0 = point(i > 0 ? anchors[i - 1] : prev)
+            let p1 = point(prev)
+            let p2 = point(next)
+            let p3 = point((i + 2) < anchors.count ? anchors[i + 2] : next)
+            let frameSpan = max(1, next.frameIndex - prev.frameIndex)
+            let area = prev.area > 0 && next.area > 0 ? (prev.area + next.area) / 2.0 : max(prev.area, next.area)
+
+            for frameIdx in (prev.frameIndex + 1)..<next.frameIndex {
+                guard frameIdx >= 0 && frameIdx < frameInfos.count else { continue }
+                if frameInfos[frameIdx].ballInFrame && !frameInfos[frameIdx].ballLostTracking {
+                    continue
+                }
+
+                let t = Double(frameIdx - prev.frameIndex) / Double(frameSpan)
+                let p = catmullRom(p0, p1, p2, p3, t)
+                frameInfos[frameIdx].ballInFrame = true
+                frameInfos[frameIdx].ballCenter = p
+                frameInfos[frameIdx].ballColor = (255, 30, 30)
+                frameInfos[frameIdx].ballLostTracking = true
+                if area > 0 { frameInfos[frameIdx].ballArea = area }
+                filledCount += 1
+            }
+        }
+
+        if filledCount > 0 {
+            NSLog("[SpeedgunPipeline] Selected-track gap fill: added %d synthetic frames across %d anchors",
+                  filledCount, anchors.count)
         }
     }
 }

@@ -67,6 +67,45 @@ final class VideoDecoder {
         totalFrames = max(1, Int(round(duration * Double(fps))))
     }
 
+    // MARK: - Camera Focal Length
+
+    /// Camera focal length in pixels at this video's display resolution, read from
+    /// the 35mm-equivalent focal length iPhones embed in QuickTime metadata
+    /// (`com.apple.quicktime.camera.focal_length.35mm_equivalent`).
+    ///
+    /// The 35mm-equivalent value already reflects the *recorded* field of view
+    /// (lens choice, digital zoom, and stabilization crop), so it is strictly
+    /// better than a per-model hardcoded constant when present.
+    ///
+    /// Conversion: f35 is defined by diagonal FOV against the full-frame
+    /// diagonal (43.27mm), so  f_px = f35 × diagonalPx / 43.27.
+    ///
+    /// Returns nil when the metadata is absent (non-Apple source, AirDropped
+    /// re-encodes, screen recordings…) — caller falls back to the tuned constant.
+    func cameraFocalLengthPx() async -> Double? {
+        guard let items = try? await asset.load(.metadata) else { return nil }
+        for item in items {
+            guard let id = item.identifier?.rawValue.lowercased(),
+                  id.contains("focal_length"), id.contains("35mm") else { continue }
+            guard let value = try? await item.load(.value) else { continue }
+            let f35mm: Double?
+            if let n = value as? NSNumber {
+                f35mm = n.doubleValue
+            } else if let s = value as? String {
+                f35mm = Double(s)
+            } else {
+                f35mm = nil
+            }
+            // Sane 35mm-equivalent range: 10mm (ultrawide) … 350mm (max tele zoom)
+            guard let f35 = f35mm, f35 >= 10.0, f35 <= 350.0 else { continue }
+            let diagPx = Double(displayWidth * displayWidth + displayHeight * displayHeight).squareRoot()
+            let focalPx = f35 * diagPx / 43.27
+            NSLog("[VideoDecoder] Camera focal length from metadata: %.1fmm (35mm equiv) → %.0fpx", f35, focalPx)
+            return focalPx
+        }
+        return nil
+    }
+
     // MARK: - HDR Detection & Conversion
 
     /// Check if the video uses HDR (HLG / Dolby Vision / PQ).

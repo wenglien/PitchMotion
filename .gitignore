@@ -51,6 +51,7 @@ model/yolov4-tiny-baseball-416/variables/
 *.weights
 *.onnx
 *.mlmodel
+!mobile/modules/expo-speedgun/Resources/**/*.mlmodel
 
 # Training outputs (yolov8/runs/ 已納入版控以保留訓練權重)
 # yolov8/runs/
@@ -94,6 +95,8 @@ Thumbs.db
 
 # CoreML
 *.mlmodelc
+!mobile/modules/expo-speedgun/Resources/**/*.mlmodelc
+!mobile/modules/expo-speedgun/Resources/**/*.mlmodelc/**
 
 # Test outputs
 test_output/
