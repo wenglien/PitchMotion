@@ -8,6 +8,8 @@ import Svg, {
   Text as SvgText,
   Polygon,
   G,
+  Defs,
+  ClipPath,
 } from 'react-native-svg';
 import { Colors } from '../theme';
 import { pitchDotColor, kmhToMph } from '../utils/conversions';
@@ -29,20 +31,13 @@ const PAD_B = 36;
 const ZW = W - PAD_L - PAD_R;
 const ZH = H - PAD_T - PAD_B;
 
-// Virtual depth offset (oblique projection) – not drawn, only shapes the curve.
-const DEPTH_DX = 28;
-const DEPTH_DY = -28;
+const SAFE_U = 0.055;
+const SAFE_V = 0.055;
 
-// Pitcher release point — projects EXACTLY onto the top-centre of the strike
-// zone (u=0.5, v=0 on the front plane).  Since the curve lives in 3D with
-// z=1 being "deep", we solve project(u, v, 1) = (PAD_L + ZW/2, PAD_T):
-//     u*ZW + DEPTH_DX*1 = ZW/2     → u = 0.5 − DEPTH_DX/ZW
-//     v*ZH + DEPTH_DY*1 = 0        → v = −DEPTH_DY/ZH
-const RELEASE_3D = {
-  u: 0.5 - DEPTH_DX / ZW,
-  v: -DEPTH_DY / ZH,
-  z: 1.0,
-} as const;
+// Pitcher release point on the flat strike-zone plane. z is kept only for
+// trajectory thickness/lighting so the line can feel 3D without moving the UI
+// back into a perspective tunnel.
+const RELEASE_3D = { u: 0.5, v: SAFE_V, z: 1.0 } as const;
 
 // Animation timing
 const ANIM_DURATION_MS = 1400;  // flight
@@ -50,7 +45,7 @@ const HOLD_AFTER_MS = 750;      // hold after landing (for impact animation)
 const INTER_PITCH_MS = 250;     // gap before next pitch
 const IMPACT_RING_MS = 650;     // impact ring lifetime
 
-const TRAJ_SAMPLES = 48;
+const TRAJ_SAMPLES = 72;
 
 interface Props {
   pitches?: SessionPitch[];
@@ -60,14 +55,27 @@ interface Props {
 
 interface Pt2 { x: number; y: number }
 interface Pt3 { u: number; v: number; z: number }
+interface PitchShapeProfile {
+  family: string;
+  hBreakUV: number;
+  rideUV: number;
+  dropUV: number;
+  lateBreak: number;
+  tunnel: number;
+  depthPow: number;
+  ballScale: number;
+}
 
 export default function StrikeZone({ pitches = [], zoneOverride = null, animate = true }: Props) {
   const zone = zoneOverride ?? DEFAULT_ZONE;
+  const clipIdRef = useRef(`strikeZoneClip${Math.random().toString(36).slice(2)}`);
+  const clipId = clipIdRef.current;
 
-  // 3D → 2D projection (oblique)
-  const project = (u: number, v: number, z: number): Pt2 => ({
-    x: PAD_L + u * ZW + DEPTH_DX * z,
-    y: PAD_T + v * ZH + DEPTH_DY * z,
+  // Flat 2D strike-zone projection. The z value is still sampled separately
+  // and used by buildTube for taper, opacity, highlight, and shadow.
+  const project = (u: number, v: number, _z: number): Pt2 => ({
+    x: PAD_L + u * ZW,
+    y: PAD_T + v * ZH,
   });
 
   const plateToUV = (xNorm: number, yNorm: number) => ({
@@ -75,25 +83,28 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
     v: (yNorm - zone.yMin) / (zone.yMax - zone.yMin),
   });
 
-  // Build a realistic descending arc per pitch.
+  // Build a pitch-family-specific flight shape on a flat strike-zone plane.
   //
-  // When measured break is available (Statcast-style horizontal_break_cm and
-  // induced_vertical_break_cm), we use it to shape the mid-flight control point
-  // so each pitch's curve reflects the actual physics:
-  //   • Big +induced_vert (4-seam fastball, "rise")  → flatter trajectory
-  //   • Negative induced_vert (curveball, big drop)  → arc that climbs then dives
-  //   • +horizontal break                            → late tailing right
-  //   • −horizontal break                            → late cutting left
+  // Measured break still wins when present, but pitch_type now provides a
+  // sensible movement profile when break is weak/missing:
+  //   • Fastball: straighter tunnel with ride.
+  //   • Slider/Cutter: late horizontal sweep/cut.
+  //   • Curveball: early tunnel, then a pronounced late dive.
+  //   • Change/Sinker/Splitter: muted speed look with heavier late drop.
   //
-  // Without break data we fall back to the original generic Bezier shape so
-  // older sessions still animate.
+  // The curve is sampled from a no-break release→plate line plus beta-shaped
+  // movement pulses. That keeps the endpoints correct while letting the middle
+  // of the pitch reveal each ball type instead of every pitch sharing the same
+  // generic parabola. z only controls the 3D styling of the rendered line.
   const pitchData = useMemo(() => {
     const valid = pitches.filter(
       (p) => p.plate_x_norm != null && p.plate_y_norm != null,
     );
     return valid.map((p, i) => {
-      const { u, v } = plateToUV(p.plate_x_norm!, p.plate_y_norm!);
-      const sideSign = u >= 0.5 ? 1 : -1;
+      const rawUV = plateToUV(p.plate_x_norm!, p.plate_y_norm!);
+      const u = clampNum(rawUV.u, SAFE_U, 1 - SAFE_U);
+      const v = clampNum(rawUV.v, SAFE_V, 1 - SAFE_V);
+      const profile = pitchProfile(p.pitch_type, p.speed_kmh);
 
       // Normalize break (cm) to UV-space displacement.
       // Strike-zone width ≈ 43cm (17"); a 30cm horizontal break ≈ 0.7 zone widths.
@@ -104,53 +115,25 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
       const vBreakCm = p.induced_vertical_break_cm ?? null;
       const hBreakUV = hBreakCm != null ? clampNum(hBreakCm / HBREAK_CM_PER_UV, -1.2, 1.2) : null;
       const vBreakUV = vBreakCm != null ? clampNum(vBreakCm / VBREAK_CM_PER_UV, -1.2, 1.2) : null;
-      const hasMeasuredBreak = hBreakUV != null || vBreakUV != null;
+      const measuredH = hBreakUV != null ? clampNum(hBreakUV * 0.26, -0.24, 0.24) : null;
+      const measuredV = vBreakUV != null ? clampNum(-vBreakUV * 0.24, -0.22, 0.22) : null;
+      const hMovement = measuredH ?? profile.hBreakUV;
+      const rideMovement = measuredV != null && measuredV < 0 ? measuredV : profile.rideUV;
+      const dropMovement = measuredV != null && measuredV > 0 ? measuredV : profile.dropUV;
 
-      const P0: Pt3 = { ...RELEASE_3D };
-
-      let P1: Pt3, P2: Pt3;
-      if (hasMeasuredBreak) {
-        // Build the mid-flight control point so the curve passes through the
-        // "no-break straight line" plus the measured break vector.
-        // induced_vert > 0 means ball drops LESS than gravity (rise) → P2.v is HIGHER
-        // (smaller v = higher in image), so subtract vBreakUV from straight-line v.
-        const straightU = RELEASE_3D.u * 0.15 + u * 0.85;
-        const straightV = (RELEASE_3D.v + v) * 0.5;
-        const breakU = (hBreakUV ?? 0) * 0.55;
-        const breakV = -(vBreakUV ?? 0) * 0.55; // +vBreak (rise) → smaller v (higher)
-
-        P1 = {
-          u: RELEASE_3D.u * 0.7 + u * 0.3 + breakU * 0.25,
-          v: RELEASE_3D.v + 0.04 + breakV * 0.15,
-          z: 0.78,
-        };
-        P2 = {
-          u: clampNum(straightU + breakU, -0.2, 1.2),
-          v: clampNum(straightV + breakV, -0.2, 1.2),
-          z: 0.28,
-        };
-      } else {
-        // Generic gravity arc (legacy fallback)
-        P1 = {
-          u: RELEASE_3D.u * 0.7 + u * 0.3,
-          v: RELEASE_3D.v + 0.06,
-          z: 0.78,
-        };
-        P2 = {
-          u: RELEASE_3D.u * 0.15 + u * 0.85 + 0.08 * sideSign,
-          v: Math.max(0.02, v - 0.14),
-          z: 0.28,
-        };
-      }
-
-      const P3: Pt3 = { u, v, z: 0 };
-
-      // Sample cubic Bezier and project to 2D
       const samples2D: Pt2[] = [];
       const sampleZ: number[] = [];
       for (let k = 0; k < TRAJ_SAMPLES; k++) {
         const t = k / (TRAJ_SAMPLES - 1);
-        const p3 = cubicBezier3(P0, P1, P2, P3, t);
+        const p3 = pitchShapePoint(
+          RELEASE_3D,
+          { u, v, z: 0 },
+          t,
+          profile,
+          hMovement,
+          rideMovement,
+          dropMovement,
+        );
         samples2D.push(project(p3.u, p3.v, p3.z));
         sampleZ.push(p3.z);
       }
@@ -158,17 +141,18 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
       return {
         i,
         pitch: p,
+        rawUV,
         endProj: project(u, v, 0),
         samples: samples2D,
         sampleZ,
-        hasMeasuredBreak,
+        profile,
       };
     });
   }, [pitches, zone]);
 
   const clampDot = (pt: Pt2): Pt2 => ({
-    x: Math.max(PAD_L - 4, Math.min(PAD_L + ZW + 4, pt.x)),
-    y: Math.max(PAD_T - 4, Math.min(PAD_T + ZH + 4, pt.y)),
+    x: Math.max(PAD_L + 6, Math.min(PAD_L + ZW - 6, pt.x)),
+    y: Math.max(PAD_T + 6, Math.min(PAD_T + ZH - 6, pt.y)),
   });
 
   const [idx, setIdx] = useState(0);
@@ -267,7 +251,13 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
   return (
     <View style={styles.container}>
       <TouchableWithoutFeedback onPress={cycleNext}>
-      <Svg width={W} height={H} style={{ overflow: 'visible' }}>
+      <Svg width={W} height={H} style={{ overflow: 'hidden' }}>
+        <Defs>
+          <ClipPath id={clipId}>
+            <Rect x={PAD_L} y={PAD_T} width={ZW} height={ZH} rx={3} />
+          </ClipPath>
+        </Defs>
+
         {/* Background */}
         <Rect x={0} y={0} width={W} height={H} fill={Colors.surface2} rx={12} />
 
@@ -356,7 +346,7 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
           strokeWidth={1.5}
         />
 
-        {/* ── Release-point marker (subtle, above the zone) ── */}
+        {/* ── Release-point marker ── */}
         {pitchData.length > 0 && (
           <G opacity={0.8}>
             <Circle cx={releaseProj.x} cy={releaseProj.y} r={7} fill="rgba(255,255,255,0.08)" />
@@ -372,113 +362,131 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
           </G>
         )}
 
-        {/* ── Ghost trails of all OTHER pitches (Statcast-style overlay) ── */}
-        {pitchData.length > 1 && pitchData.map((pd) => {
-          if (current?.i === pd.i) return null;
-          // Skip every 3rd point for a lighter, less-noisy ghost line.
-          const pts = pd.samples;
-          const segs: { x1: number; y1: number; x2: number; y2: number; alpha: number }[] = [];
-          for (let k = 0; k < pts.length - 1; k++) {
-            const z = pd.sampleZ[k];
-            segs.push({
-              x1: pts[k].x,
-              y1: pts[k].y,
-              x2: pts[k + 1].x,
-              y2: pts[k + 1].y,
-              alpha: 0.18 + 0.32 * (1 - z),  // brighter near the plate
-            });
-          }
-          const ghostColor = pitchDotColor(pd.i);
-          return (
-            <G key={`ghost-${pd.i}`} opacity={0.55}>
-              {segs.map((s, k) => (
+        <G clipPath={`url(#${clipId})`}>
+          {/* ── Ghost trails of all OTHER pitches ── */}
+          {pitchData.length > 1 && pitchData.map((pd) => {
+            if (current?.i === pd.i) return null;
+            const pts = pd.samples;
+            const segs: { x1: number; y1: number; x2: number; y2: number; alpha: number }[] = [];
+            for (let k = 0; k < pts.length - 1; k++) {
+              const z = pd.sampleZ[k];
+              segs.push({
+                x1: pts[k].x,
+                y1: pts[k].y,
+                x2: pts[k + 1].x,
+                y2: pts[k + 1].y,
+                alpha: 0.08 + 0.22 * (1 - z),
+              });
+            }
+            const ghostColor = pitchDotColor(pd.i);
+            return (
+              <G key={`ghost-${pd.i}`} opacity={0.5}>
+                {segs.map((s, k) => (
+                  <Line
+                    key={`g${pd.i}-${k}`}
+                    x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
+                    stroke={ghostColor}
+                    strokeOpacity={s.alpha}
+                    strokeWidth={1.35}
+                    strokeLinecap="round"
+                  />
+                ))}
+              </G>
+            );
+          })}
+
+          {/* ── 3D-styled trajectory (tapered tube + shadow + highlight) ── */}
+          {current && animate && tube && tube.segments.length > 0 && (
+            <G>
+              {tube.segments.map((seg, i) => (
                 <Line
-                  key={`g${pd.i}-${k}`}
-                  x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
-                  stroke={ghostColor}
-                  strokeOpacity={s.alpha}
-                  strokeWidth={1.6}
+                  key={`sh-${i}`}
+                  x1={seg.x1}
+                  y1={seg.y1 + seg.shadowOffset}
+                  x2={seg.x2}
+                  y2={seg.y2 + seg.shadowOffset}
+                  stroke="rgba(0,0,0,0.24)"
+                  strokeWidth={seg.width * 0.8}
+                  strokeOpacity={seg.shadowAlpha}
+                  strokeLinecap="round"
+                />
+              ))}
+
+              {tube.segments.map((seg, i) => (
+                <Line
+                  key={`gl-${i}`}
+                  x1={seg.x1}
+                  y1={seg.y1}
+                  x2={seg.x2}
+                  y2={seg.y2}
+                  stroke={currentColor}
+                  strokeOpacity={0.14}
+                  strokeWidth={seg.width * 2.2}
+                  strokeLinecap="round"
+                />
+              ))}
+
+              {tube.segments.map((seg, i) => (
+                <Line
+                  key={`core-${i}`}
+                  x1={seg.x1}
+                  y1={seg.y1}
+                  x2={seg.x2}
+                  y2={seg.y2}
+                  stroke={currentColor}
+                  strokeOpacity={seg.coreAlpha}
+                  strokeWidth={seg.width}
+                  strokeLinecap="round"
+                />
+              ))}
+
+              {tube.segments.map((seg, i) => (
+                <Line
+                  key={`hi-${i}`}
+                  x1={seg.x1 - seg.nx}
+                  y1={seg.y1 - seg.ny}
+                  x2={seg.x2 - seg.nx}
+                  y2={seg.y2 - seg.ny}
+                  stroke="rgba(255,255,255,0.62)"
+                  strokeOpacity={seg.highlightAlpha}
+                  strokeWidth={seg.width * 0.32}
                   strokeLinecap="round"
                 />
               ))}
             </G>
-          );
-        })}
+          )}
 
-        {/* ── 3D-styled trajectory (tapered tube + shadow + highlight) ── */}
-        {current && animate && tube && tube.segments.length > 0 && (
-          <G>
-            {/* Drop shadow (fades with depth) */}
-            {tube.segments.map((seg, i) => (
-              <Line
-                key={`sh-${i}`}
-                x1={seg.x1}
-                y1={seg.y1 + seg.shadowOffset}
-                x2={seg.x2}
-                y2={seg.y2 + seg.shadowOffset}
-                stroke="rgba(0,0,0,0.28)"
-                strokeWidth={seg.width * 0.85}
-                strokeOpacity={seg.shadowAlpha}
-                strokeLinecap="round"
-              />
-            ))}
+          {/* Moving ball head (only during flight) */}
+          {tube?.ball && progress > 0 && progress < 1 && (
+            <G>
+              <Circle cx={tube.ball.x} cy={tube.ball.y} r={13 * current.profile.ballScale} fill={currentColor} opacity={0.18} />
+              <Circle cx={tube.ball.x} cy={tube.ball.y} r={6.6 * current.profile.ballScale} fill="#ffffff" stroke={currentColor} strokeWidth={2.1} />
+              <Circle cx={tube.ball.x - 1.4} cy={tube.ball.y - 1.4} r={1.8} fill="rgba(255,255,255,0.95)" />
+            </G>
+          )}
 
-            {/* Outer glow */}
-            {tube.segments.map((seg, i) => (
-              <Line
-                key={`gl-${i}`}
-                x1={seg.x1}
-                y1={seg.y1}
-                x2={seg.x2}
-                y2={seg.y2}
-                stroke={currentColor}
-                strokeOpacity={0.2}
-                strokeWidth={seg.width * 2.5}
-                strokeLinecap="round"
-              />
-            ))}
-
-            {/* Core tapered line */}
-            {tube.segments.map((seg, i) => (
-              <Line
-                key={`core-${i}`}
-                x1={seg.x1}
-                y1={seg.y1}
-                x2={seg.x2}
-                y2={seg.y2}
-                stroke={currentColor}
-                strokeOpacity={seg.coreAlpha}
-                strokeWidth={seg.width}
-                strokeLinecap="round"
-              />
-            ))}
-
-            {/* Specular highlight */}
-            {tube.segments.map((seg, i) => (
-              <Line
-                key={`hi-${i}`}
-                x1={seg.x1 - seg.nx}
-                y1={seg.y1 - seg.ny}
-                x2={seg.x2 - seg.nx}
-                y2={seg.y2 - seg.ny}
-                stroke="rgba(255,255,255,0.6)"
-                strokeOpacity={seg.highlightAlpha}
-                strokeWidth={seg.width * 0.35}
-                strokeLinecap="round"
-              />
-            ))}
-          </G>
-        )}
-
-        {/* Moving ball head (only during flight) */}
-        {tube?.ball && progress > 0 && progress < 1 && (
-          <G>
-            {/* motion blur trail */}
-            <Circle cx={tube.ball.x} cy={tube.ball.y} r={14} fill={currentColor} opacity={0.22} />
-            <Circle cx={tube.ball.x} cy={tube.ball.y} r={7} fill="#ffffff" stroke={currentColor} strokeWidth={2.2} />
-            <Circle cx={tube.ball.x - 1.4} cy={tube.ball.y - 1.4} r={1.9} fill="rgba(255,255,255,0.95)" />
-          </G>
-        )}
+          {/* ── Secondary ball "splash" when near plate ── */}
+          {current && ballIsNearPlate && progress < 1 && tube?.ball && (
+            <G opacity={(progress - 0.7) / 0.3}>
+              {[-1, 1].map((dir) => {
+                const len = 8 + 5 * ((progress - 0.7) / 0.3);
+                return (
+                  <Line
+                    key={`sp-${dir}`}
+                    x1={tube.ball!.x - dir * 3}
+                    y1={tube.ball!.y - dir * 2}
+                    x2={tube.ball!.x - dir * (3 + len)}
+                    y2={tube.ball!.y - dir * (2 + len * 0.36)}
+                    stroke={currentColor}
+                    strokeOpacity={0.28}
+                    strokeWidth={1.8}
+                    strokeLinecap="round"
+                  />
+                );
+              })}
+            </G>
+          )}
+        </G>
 
         {/* ── Impact rings at landing (after flight ends) ── */}
         {current && progress >= 1 && impactMs >= 0 && impactMs < IMPACT_RING_MS + 200 && (
@@ -507,12 +515,12 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
         )}
 
         {/* ── Pitch landing markers ──────────────────────── */}
-        {pitchData.map(({ endProj, i }) => {
+        {pitchData.map(({ endProj, i, rawUV }) => {
           const { x, y } = clampDot(endProj);
           const color = pitchDotColor(i);
           const inZone =
-            endProj.x >= PAD_L && endProj.x <= PAD_L + ZW &&
-            endProj.y >= PAD_T && endProj.y <= PAD_T + ZH;
+            rawUV.u >= 0 && rawUV.u <= 1 &&
+            rawUV.v >= 0 && rawUV.v <= 1;
           const isCurrent = current?.i === i;
           const active = isCurrent && progress >= 1;
 
@@ -577,27 +585,6 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
           </SvgText>
         )}
 
-        {/* ── Secondary ball "splash" when near plate (speed lines) ── */}
-        {current && ballIsNearPlate && progress < 1 && tube?.ball && (
-          <G opacity={(progress - 0.7) / 0.3}>
-            {[-1, 1].map((dir) => {
-              const len = 10 + 6 * ((progress - 0.7) / 0.3);
-              return (
-                <Line
-                  key={`sp-${dir}`}
-                  x1={tube.ball!.x - dir * 4}
-                  y1={tube.ball!.y - dir * 3}
-                  x2={tube.ball!.x - dir * (4 + len)}
-                  y2={tube.ball!.y - dir * (3 + len * 0.4)}
-                  stroke={currentColor}
-                  strokeOpacity={0.35}
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                />
-              );
-            })}
-          </G>
-        )}
       </Svg>
       </TouchableWithoutFeedback>
 
@@ -662,17 +649,165 @@ function clampNum(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
-/** Cubic Bezier in 3D (u, v, z). */
-function cubicBezier3(p0: Pt3, p1: Pt3, p2: Pt3, p3: Pt3, t: number): Pt3 {
-  const u = 1 - t;
-  const u2 = u * u;
-  const u3 = u2 * u;
-  const t2 = t * t;
-  const t3 = t2 * t;
+function smoothStep(edge0: number, edge1: number, x: number): number {
+  const t = clampNum((x - edge0) / Math.max(1e-6, edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function pitchProfile(type?: string | null, speedKmh?: number | null): PitchShapeProfile {
+  const t = (type || '').toLowerCase();
+  const speed = speedKmh ?? 0;
+  const isPower = speed >= 145;
+
+  if (t.includes('curve')) {
+    return {
+      family: 'curve',
+      hBreakUV: -0.06,
+      rideUV: -0.08,
+      dropUV: 0.2,
+      lateBreak: 0.88,
+      tunnel: 0.48,
+      depthPow: 1.24,
+      ballScale: 0.95,
+    };
+  }
+  if (t.includes('slider') || t.includes('sweeper')) {
+    return {
+      family: 'slider',
+      hBreakUV: -0.16,
+      rideUV: -0.02,
+      dropUV: 0.08,
+      lateBreak: 0.78,
+      tunnel: 0.58,
+      depthPow: 1.14,
+      ballScale: 0.98,
+    };
+  }
+  if (t.includes('cutter') || t.includes('cut')) {
+    return {
+      family: 'cutter',
+      hBreakUV: -0.1,
+      rideUV: -0.04,
+      dropUV: 0.05,
+      lateBreak: 0.68,
+      tunnel: 0.68,
+      depthPow: 1.08,
+      ballScale: 1.02,
+    };
+  }
+  if (t.includes('sinker') || t.includes('two-seam') || t.includes('2-seam')) {
+    return {
+      family: 'sinker',
+      hBreakUV: 0.12,
+      rideUV: 0.00,
+      dropUV: 0.15,
+      lateBreak: 0.72,
+      tunnel: 0.62,
+      depthPow: 1.12,
+      ballScale: 1.0,
+    };
+  }
+  if (t.includes('split')) {
+    return {
+      family: 'splitter',
+      hBreakUV: 0.05,
+      rideUV: 0.02,
+      dropUV: 0.19,
+      lateBreak: 0.82,
+      tunnel: 0.66,
+      depthPow: 1.18,
+      ballScale: 0.96,
+    };
+  }
+  if (t.includes('change')) {
+    return {
+      family: 'changeup',
+      hBreakUV: 0.09,
+      rideUV: 0.01,
+      dropUV: 0.13,
+      lateBreak: 0.70,
+      tunnel: 0.66,
+      depthPow: 1.20,
+      ballScale: 0.96,
+    };
+  }
+  if (t.includes('fast') || t.includes('four') || t.includes('4-seam')) {
+    return {
+      family: 'fastball',
+      hBreakUV: isPower ? 0.025 : 0.04,
+      rideUV: isPower ? -0.09 : -0.07,
+      dropUV: 0.025,
+      lateBreak: 0.45,
+      tunnel: 0.78,
+      depthPow: 1.00,
+      ballScale: 1.06,
+    };
+  }
+
   return {
-    u: u3 * p0.u + 3 * u2 * t * p1.u + 3 * u * t2 * p2.u + t3 * p3.u,
-    v: u3 * p0.v + 3 * u2 * t * p1.v + 3 * u * t2 * p2.v + t3 * p3.v,
-    z: u3 * p0.z + 3 * u2 * t * p1.z + 3 * u * t2 * p2.z + t3 * p3.z,
+    family: 'unknown',
+    hBreakUV: 0.045,
+    rideUV: -0.035,
+    dropUV: 0.09,
+    lateBreak: 0.60,
+    tunnel: 0.64,
+    depthPow: 1.12,
+    ballScale: 1.0,
+  };
+}
+
+function pitchShapePoint(
+  start: Pt3,
+  end: Pt3,
+  t: number,
+  profile: PitchShapeProfile,
+  hMovement: number,
+  rideMovement: number,
+  dropMovement: number,
+): Pt3 {
+  const sideBias = end.u >= start.u ? 1 : -1;
+  const arcLift = profile.family === 'curve'
+    ? 0.18
+    : profile.family === 'fastball'
+      ? 0.1
+      : 0.135;
+  const lateWeight = 0.34 + profile.lateBreak * 0.2;
+  const rideLift = clampNum(-rideMovement, -0.04, 0.16);
+  const dropSag = clampNum(dropMovement, 0, 0.2);
+  const horizontalBend = clampNum(hMovement, -0.22, 0.22);
+
+  const c1: Pt3 = {
+    u: clampNum(start.u * 0.72 + end.u * 0.28 - horizontalBend * 0.16, SAFE_U, 1 - SAFE_U),
+    v: clampNum(start.v + 0.015 - rideLift * 0.18, SAFE_V, 1 - SAFE_V),
+    z: 0.78,
+  };
+  const c2: Pt3 = {
+    u: clampNum(end.u - horizontalBend * lateWeight - sideBias * 0.025, SAFE_U, 1 - SAFE_U),
+    v: clampNum(end.v - arcLift - rideLift * 0.22 + dropSag * 0.12, SAFE_V, 1 - SAFE_V),
+    z: 0.26,
+  };
+
+  const p = cubicBezier3(start, c1, c2, end, t);
+  const settle = smoothStep(0.72, 1, t);
+  const lateDrop = Math.sin(Math.PI * t) * dropSag * 0.12 * settle;
+
+  return {
+    u: clampNum(p.u, SAFE_U, 1 - SAFE_U),
+    v: clampNum(p.v + lateDrop, SAFE_V, 1 - SAFE_V),
+    z: Math.pow(1 - t, profile.depthPow),
+  };
+}
+
+function cubicBezier3(p0: Pt3, p1: Pt3, p2: Pt3, p3: Pt3, t: number): Pt3 {
+  const mt = 1 - t;
+  const a = mt * mt * mt;
+  const b = 3 * mt * mt * t;
+  const c = 3 * mt * t * t;
+  const d = t * t * t;
+  return {
+    u: a * p0.u + b * p1.u + c * p2.u + d * p3.u,
+    v: a * p0.v + b * p1.v + c * p2.v + d * p3.v,
+    z: a * p0.z + b * p1.z + c * p2.z + d * p3.z,
   };
 }
 

@@ -50,9 +50,17 @@ export default function ResultScreen() {
   const distM = si.total_distance_m ?? si.effective_distance_m ?? null;
   const flightS = si.flight_time_s ?? null;
   const breakH = si.horizontal_break_cm ?? null;
+  const breakVObserved = si.vertical_break_cm ?? null;
   const breakVInduced = si.induced_vertical_break_cm ?? null;
   const breakTotal = si.total_break_cm ?? null;
   const breakConf = si.break_confidence ?? null;
+  const breakGravity = si.break_gravity_drop_cm ?? null;
+  const breakFitR2 = si.break_fit_r2 ?? null;
+  const breakEndpointSource = si.break_endpoint_source ?? null;
+  const breakSamples = si.break_samples ?? null;
+  const breakActualRatio = si.break_actual_sample_ratio ?? null;
+  const breakScaleX = si.break_cm_per_px_x ?? null;
+  const breakScaleY = si.break_cm_per_px_y ?? null;
   const spinRpm = si.spin_rpm ?? null;
   const hasBreakChart = breakH !== null && breakVInduced !== null;
   const batterHeight = si.batter_height_m ?? null;
@@ -96,6 +104,24 @@ export default function ResultScreen() {
     { label: '橫移 cm', value: breakH !== null ? breakH.toFixed(1) : '-' },
     { label: 'IVB cm', value: breakVInduced !== null ? breakVInduced.toFixed(1) : '-' },
     { label: '轉速 rpm', value: spinRpm !== null ? Math.round(spinRpm).toLocaleString() : '-' },
+  ];
+  const movementRows = [
+    { label: '水平位移', value: breakH, unit: 'cm', tone: 'default' },
+    { label: '原始垂直', value: breakVObserved, unit: 'cm', tone: 'default' },
+    { label: '重力下墜', value: breakGravity, unit: 'cm', tone: 'muted' },
+    { label: '誘導垂直 IVB', value: breakVInduced, unit: 'cm', tone: (breakVInduced ?? 0) >= 0 ? 'green' : 'red' },
+  ];
+  const movementQualityRows = [
+    { label: '方向擬合 R²', value: breakFitR2 !== null ? breakFitR2.toFixed(2) : '—' },
+    { label: '軌跡樣本', value: breakSamples !== null ? `${breakSamples}` : '—' },
+    { label: '實測樣本比例', value: breakActualRatio !== null ? `${Math.round(breakActualRatio * 100)}%` : '—' },
+    { label: '落點來源', value: breakEndpointSource ?? '—' },
+    {
+      label: '比例尺',
+      value: breakScaleX !== null && breakScaleY !== null
+        ? `${breakScaleX.toFixed(2)} / ${breakScaleY.toFixed(2)} cm/px`
+        : '—',
+    },
   ];
 
   const plateZone = si.plate_zone ?? null;
@@ -277,6 +303,32 @@ export default function ResultScreen() {
                   總位移 <Text style={styles.breakTotalVal}>{breakTotal.toFixed(1)}</Text> cm
                 </Text>
               )}
+              <View style={styles.movementGrid}>
+                {movementRows.map((row) => (
+                  <View key={row.label} style={styles.movementTile}>
+                    <Text
+                      style={[
+                        styles.movementValue,
+                        row.tone === 'green' && styles.movementPositive,
+                        row.tone === 'red' && styles.movementNegative,
+                        row.tone === 'muted' && styles.movementMuted,
+                      ]}
+                    >
+                      {row.value !== null ? `${row.value >= 0 ? '+' : ''}${row.value.toFixed(1)}` : '—'}
+                    </Text>
+                    <Text style={styles.movementUnit}>{row.unit}</Text>
+                    <Text style={styles.movementLabel}>{row.label}</Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.movementQualityPanel}>
+                {movementQualityRows.map((row) => (
+                  <View key={row.label} style={styles.movementQualityRow}>
+                    <Text style={styles.movementQualityLabel}>{row.label}</Text>
+                    <Text style={styles.movementQualityValue} numberOfLines={1}>{row.value}</Text>
+                  </View>
+                ))}
+              </View>
             </View>
           )}
 
@@ -715,6 +767,78 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     color: Colors.text,
+    fontVariant: ['tabular-nums'],
+  },
+  movementGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+  },
+  movementTile: {
+    flexBasis: '47%',
+    flexGrow: 1,
+    minHeight: 82,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.surface2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+  },
+  movementValue: {
+    fontSize: 24,
+    lineHeight: 26,
+    fontWeight: '900',
+    color: Colors.text,
+    fontVariant: ['tabular-nums'],
+  },
+  movementPositive: {
+    color: Colors.green,
+  },
+  movementNegative: {
+    color: Colors.red,
+  },
+  movementMuted: {
+    color: Colors.textMuted,
+  },
+  movementUnit: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  movementLabel: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    fontWeight: '700',
+    marginTop: 6,
+  },
+  movementQualityPanel: {
+    marginTop: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: '#f8fafc',
+    padding: Spacing.md,
+    gap: 7,
+  },
+  movementQualityRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  movementQualityLabel: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    fontWeight: '700',
+  },
+  movementQualityValue: {
+    flex: 1,
+    textAlign: 'right',
+    fontSize: 12,
+    color: Colors.text,
+    fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
   /* Video */

@@ -233,6 +233,13 @@ struct SpeedInfo {
     var totalBreakCm: Double?
     var breakAngleDeg: Double?
     var breakConfidence: Double?
+    var breakGravityDropCm: Double?
+    var breakFitR2: Double?
+    var breakEndpointSource: String?
+    var breakSamples: Int?
+    var breakActualSampleRatio: Double?
+    var breakCmPerPxX: Double?
+    var breakCmPerPxY: Double?
 
     // Distance estimation
     var estimatedDistanceM: Double?   // non-nil when auto-estimated from pose
@@ -300,6 +307,13 @@ struct SpeedInfo {
         if let v = totalBreakCm { dict["total_break_cm"] = v }
         if let v = breakAngleDeg { dict["break_angle_deg"] = v }
         if let v = breakConfidence { dict["break_confidence"] = v }
+        if let v = breakGravityDropCm { dict["break_gravity_drop_cm"] = v }
+        if let v = breakFitR2 { dict["break_fit_r2"] = v }
+        if let v = breakEndpointSource { dict["break_endpoint_source"] = v }
+        if let v = breakSamples { dict["break_samples"] = v }
+        if let v = breakActualSampleRatio { dict["break_actual_sample_ratio"] = v }
+        if let v = breakCmPerPxX { dict["break_cm_per_px_x"] = v }
+        if let v = breakCmPerPxY { dict["break_cm_per_px_y"] = v }
         if let v = estimatedDistanceM { dict["estimated_distance_m"] = v }
         if let v = distanceSource { dict["distance_source"] = v }
         if let v = distanceWarning { dict["distance_warning"] = v }

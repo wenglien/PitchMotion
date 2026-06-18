@@ -791,6 +791,13 @@ final class SpeedgunPipeline {
                 speedInfo.totalBreakCm = kinematics.totalBreakCm
                 speedInfo.breakAngleDeg = kinematics.breakAngleDeg
                 speedInfo.breakConfidence = kinematics.breakConfidence
+                speedInfo.breakGravityDropCm = kinematics.gravityDropCm
+                speedInfo.breakFitR2 = kinematics.breakFitR2
+                speedInfo.breakEndpointSource = kinematics.breakEndpointSource
+                speedInfo.breakSamples = kinematics.breakSamples
+                speedInfo.breakActualSampleRatio = kinematics.breakActualSampleRatio
+                speedInfo.breakCmPerPxX = kinematics.breakCmPerPxX
+                speedInfo.breakCmPerPxY = kinematics.breakCmPerPxY
             }
         } else {
             speedInfo = SpeedInfo()

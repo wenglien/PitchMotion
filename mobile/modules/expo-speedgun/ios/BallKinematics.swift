@@ -48,6 +48,13 @@ struct BallKinematics {
 
     // MLB-style "induced" vertical break (+ = up / rise, − = drop below gravity).
     var inducedVerticalBreakCm: Double = 0
+    var gravityDropCm: Double = 0
+    var breakFitR2: Double = 0
+    var breakEndpointSource: String = "unknown"
+    var breakSamples: Int = 0
+    var breakActualSampleRatio: Double = 0
+    var breakCmPerPxX: Double = 0
+    var breakCmPerPxY: Double = 0
 
     var breakConfidence: Double = 0         // 0..1
 }
@@ -126,23 +133,28 @@ final class BallKinematicsAnalyzer {
         guard zoneWidthPx > 20, zoneHeightPx > 20 else { return out }
         let cmPerPxX = Self.STRIKE_ZONE_WIDTH_CM  / zoneWidthPx
         let cmPerPxY = (strikeZoneHeightCm ?? Self.STRIKE_ZONE_HEIGHT_CM) / zoneHeightPx
+        out.breakCmPerPxX = cmPerPxX
+        out.breakCmPerPxY = cmPerPxY
 
         // 3. Fit a line to the first reliable slice of the trajectory. Use
         // actual frame indices and downweight gap-filled points so the release
         // direction is not bent by interpolation or uneven sampling.
-        let refCount = max(4, min(14, Int(ceil(Double(n) * 0.30))))
+        let refCount = max(5, min(16, Int(ceil(Double(n) * 0.34))))
         let refIdx = Array(0..<refCount)
         let refXs = refIdx.map { xs[$0] }
         let refYs = refIdx.map { ys[$0] }
         let refTs = refIdx.map { ts[$0] }
         let refWeights = refIdx.map { weights[$0] }
 
-        let (slopeX, interceptX, r2X) = weightedLinearFit(refTs, refXs, refWeights)
-        let (slopeY, interceptY, r2Y) = weightedLinearFit(refTs, refYs, refWeights)
+        let (slopeX, interceptX, r2X) = robustWeightedLineFit(refTs, refXs, refWeights)
+        let (slopeY, interceptY, r2Y) = robustWeightedLineFit(refTs, refYs, refWeights)
 
         // If the release direction is noisy (very low R² on BOTH axes) we
         // cannot trust the extrapolation.
         let dirR2 = max(r2X, r2Y)
+        out.breakFitR2 = dirR2
+        out.breakSamples = n
+        out.breakActualSampleRatio = clampD(weights.reduce(0, +) / Double(max(1, weights.count)), 0.0, 1.0)
         guard dirR2 > 0.40 else { return out }
 
         // 4. Estimate the plate/catch sample robustly. Prefer the pipeline's
@@ -165,6 +177,7 @@ final class BallKinematicsAnalyzer {
         let predictedY = slopeY * finalT + interceptY
         let catchX = endpoint.x
         let catchY = endpoint.y
+        out.breakEndpointSource = endpoint.source
 
         // 5. Deviation in pixels → cm (using independent X/Y scales so a
         // non-square aspect ratio in the zone doesn't bias one axis).
@@ -183,6 +196,7 @@ final class BallKinematicsAnalyzer {
         // All in cm.
         let gravityDropCm = 0.5 * Self.GRAVITY * flightTime * flightTime * 100.0
         let inducedUpCm = gravityDropCm - breakVCm
+        out.gravityDropCm = gravityDropCm
 
         // 7. Clamp to empirically sensible range (±BREAK_CLAMP_CM).  Track
         // whether clamping was necessary so confidence can reflect it.
@@ -209,7 +223,7 @@ final class BallKinematicsAnalyzer {
         let fitScore = clampD((dirR2 - 0.4) / 0.55, 0.0, 1.0) // r2 ∈ [0.4,0.95] → 0..1
         let ptScore  = clampD(Double(n - 8) / 12.0, 0.1, 1.0)
         let ftScore  = clampD(1.0 - abs(flightTime - 0.5) / 0.6, 0.2, 1.0)
-        let actualRatio = clampD(weights.reduce(0, +) / Double(max(1, weights.count)), 0.0, 1.0)
+        let actualRatio = out.breakActualSampleRatio
         let endpointScore = endpoint.usedPlateEstimate ? 0.95 : 0.75
         let clipMult: Double = wasClamped ? 0.55 : 1.0
         out.breakConfidence = clampD(
@@ -306,7 +320,7 @@ final class BallKinematicsAnalyzer {
         firstT: Double,
         lastT: Double,
         flightTime: Double
-    ) -> (t: Double, x: Double, y: Double, usedPlateEstimate: Bool) {
+    ) -> (t: Double, x: Double, y: Double, usedPlateEstimate: Bool, source: String) {
         let n = ts.count
         let tailCount = max(4, min(12, Int(ceil(Double(n) * 0.35))))
         let start = max(0, n - tailCount)
@@ -332,12 +346,12 @@ final class BallKinematicsAnalyzer {
                     targetT = solvedT
                 }
             }
-            return (targetT, catchX, catchY, true)
+            return (targetT, catchX, catchY, true, speedInfo.catchPointSource ?? "plate_estimate")
         }
 
         let x = tailSlopeX * lastT + tailInterceptX
         let y = tailSlopeY * lastT + tailInterceptY
-        return (lastT, x, y, false)
+        return (lastT, x, y, false, "tail_fit")
     }
 
     /// Simple OLS linear fit.  Returns (slope, intercept, R²).
@@ -389,6 +403,74 @@ final class BallKinematicsAnalyzer {
             return clampD(1.0 - (syy - slope * sxy) / syy, 0.0, 1.0)
         }()
         return (slope, intercept, r2)
+    }
+
+    /// Robust weighted line fit for the release-direction baseline.
+    ///
+    /// Uses a Theil-Sen median slope to resist one or two jittery YOLO boxes,
+    /// then computes a weighted-median intercept and weighted R². If the sample
+    /// set is too small or degenerate, falls back to weighted OLS.
+    private func robustWeightedLineFit(_ xs: [Double], _ ys: [Double], _ weights: [Double]) -> (Double, Double, Double) {
+        guard xs.count == ys.count, ys.count == weights.count, xs.count >= 3 else {
+            return weightedLinearFit(xs, ys, weights)
+        }
+
+        var slopes: [Double] = []
+        slopes.reserveCapacity(xs.count * (xs.count - 1) / 2)
+        for i in 0..<(xs.count - 1) {
+            for j in (i + 1)..<xs.count {
+                let dx = xs[j] - xs[i]
+                guard abs(dx) > 1e-9 else { continue }
+                let pairWeight = min(max(weights[i], 0.0), max(weights[j], 0.0))
+                guard pairWeight > 0.2 else { continue }
+                slopes.append((ys[j] - ys[i]) / dx)
+            }
+        }
+        guard !slopes.isEmpty else {
+            return weightedLinearFit(xs, ys, weights)
+        }
+
+        let slope = median(slopes)
+        let intercepts = (0..<xs.count).map { ys[$0] - slope * xs[$0] }
+        let intercept = weightedMedian(intercepts, weights: weights)
+        let r2 = weightedR2(xs: xs, ys: ys, weights: weights, slope: slope, intercept: intercept)
+        return (slope, intercept, r2)
+    }
+
+    private func weightedR2(
+        xs: [Double],
+        ys: [Double],
+        weights: [Double],
+        slope: Double,
+        intercept: Double
+    ) -> Double {
+        let sw = max(weights.reduce(0, +), 1e-9)
+        let meanY = zip(ys, weights).reduce(0.0) { $0 + $1.0 * $1.1 } / sw
+        var ssTot = 0.0
+        var ssErr = 0.0
+        for i in 0..<ys.count {
+            let w = max(0.0, weights[i])
+            let dy = ys[i] - meanY
+            let residual = ys[i] - (slope * xs[i] + intercept)
+            ssTot += w * dy * dy
+            ssErr += w * residual * residual
+        }
+        guard ssTot > 1e-9 else { return 1.0 }
+        return clampD(1.0 - ssErr / ssTot, 0.0, 1.0)
+    }
+
+    private func weightedMedian(_ values: [Double], weights: [Double]) -> Double {
+        guard values.count == weights.count, !values.isEmpty else { return median(values) }
+        let pairs = zip(values, weights)
+            .map { (value: $0.0, weight: max(0.0, $0.1)) }
+            .sorted { $0.value < $1.value }
+        let total = max(pairs.reduce(0.0) { $0 + $1.weight }, 1e-9)
+        var running = 0.0
+        for pair in pairs {
+            running += pair.weight
+            if running >= total * 0.5 { return pair.value }
+        }
+        return pairs.last?.value ?? 0
     }
 
     private func median(_ values: [Double]) -> Double {

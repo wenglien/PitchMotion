@@ -13,6 +13,13 @@ export interface SpeedInfo {
   total_break_cm?: number;
   break_angle_deg?: number;
   break_confidence?: number;
+  break_gravity_drop_cm?: number;
+  break_fit_r2?: number;
+  break_endpoint_source?: string;
+  break_samples?: number;
+  break_actual_sample_ratio?: number;
+  break_cm_per_px_x?: number;
+  break_cm_per_px_y?: number;
   pitch_type?: string;
   pitch_confidence?: number;
   spin_rpm?: number;
