@@ -526,6 +526,11 @@ STRIKE_ZONE_X_MIN = 0.33
 STRIKE_ZONE_X_MAX = 0.67
 STRIKE_ZONE_Y_MIN = 0.59
 STRIKE_ZONE_Y_MAX = 0.83
+ABS_STRIKE_ZONE_WIDTH_M = 0.4318  # 17 inches
+ABS_STRIKE_ZONE_BOTTOM_RATIO = 0.27
+ABS_STRIKE_ZONE_TOP_RATIO = 0.535
+LEGACY_STRIKE_ZONE_HEIGHT_M = 0.58
+ABS_STRIKE_ZONE_RULE = "MLB_ABS_2026"
 
 
 def _clamp_float(v: float, lo: float, hi: float) -> float:
@@ -539,6 +544,26 @@ def _median_or_none(values: list[float]) -> Optional[float]:
     return float(np.median(vals))
 
 
+def _abs_strike_zone_height_m(batter_height_m: Optional[float]) -> Optional[float]:
+    if batter_height_m is None or not np.isfinite(batter_height_m):
+        return None
+    if not 1.0 <= float(batter_height_m) <= 2.4:
+        return None
+    return float(batter_height_m) * (ABS_STRIKE_ZONE_TOP_RATIO - ABS_STRIKE_ZONE_BOTTOM_RATIO)
+
+
+def _strike_zone_span_from_batter_height(
+    batter_height_m: Optional[float],
+) -> tuple[float, float, Optional[float]]:
+    zone_w = STRIKE_ZONE_X_MAX - STRIKE_ZONE_X_MIN
+    default_h = STRIKE_ZONE_Y_MAX - STRIKE_ZONE_Y_MIN
+    zone_height_m = _abs_strike_zone_height_m(batter_height_m)
+    if zone_height_m is None:
+        return zone_w, default_h, None
+    zone_h = default_h * (zone_height_m / LEGACY_STRIKE_ZONE_HEIGHT_M)
+    return zone_w, _clamp_float(zone_h, 0.08, 0.45), zone_height_m
+
+
 def _auto_calibrate_strike_zone(
     *,
     raw_detections: list[dict],
@@ -546,6 +571,8 @@ def _auto_calibrate_strike_zone(
     catch_pt: Optional[tuple[float, float]],
     width: int,
     height: int,
+    zone_w: Optional[float] = None,
+    zone_h: Optional[float] = None,
 ) -> Optional[dict]:
     """Estimate a per-video 2D strike zone for umpire/catcher POV footage.
 
@@ -558,8 +585,8 @@ def _auto_calibrate_strike_zone(
     if width <= 0 or height <= 0:
         return None
 
-    zone_w = STRIKE_ZONE_X_MAX - STRIKE_ZONE_X_MIN
-    zone_h = STRIKE_ZONE_Y_MAX - STRIKE_ZONE_Y_MIN
+    zone_w = zone_w if zone_w is not None else STRIKE_ZONE_X_MAX - STRIKE_ZONE_X_MIN
+    zone_h = zone_h if zone_h is not None else STRIKE_ZONE_Y_MAX - STRIKE_ZONE_Y_MIN
     default_cx = (STRIKE_ZONE_X_MIN + STRIKE_ZONE_X_MAX) / 2.0
     default_cy = (STRIKE_ZONE_Y_MIN + STRIKE_ZONE_Y_MAX) / 2.0
 
@@ -2192,6 +2219,7 @@ def get_pitch_frames_yolov8(
     conf_threshold: float = 0.03,
     show_preview: bool = False,
     speed_calculator: Optional[BallSpeedCalculator] = None,
+    batter_height_m: Optional[float] = None,
     strike_zone: Optional[dict] = None,
 ) -> tuple[list[FrameInfo], int, int, int, dict]:
     # Resolve strike-zone bounds: override from caller wins, else module defaults.
@@ -2206,8 +2234,12 @@ def get_pitch_frames_yolov8(
             sz_x_min, sz_x_max = STRIKE_ZONE_X_MIN, STRIKE_ZONE_X_MAX
             sz_y_min, sz_y_max = STRIKE_ZONE_Y_MIN, STRIKE_ZONE_Y_MAX
     else:
-        sz_x_min, sz_x_max = STRIKE_ZONE_X_MIN, STRIKE_ZONE_X_MAX
-        sz_y_min, sz_y_max = STRIKE_ZONE_Y_MIN, STRIKE_ZONE_Y_MAX
+        zone_w, zone_h, _ = _strike_zone_span_from_batter_height(batter_height_m)
+        cx = (STRIKE_ZONE_X_MIN + STRIKE_ZONE_X_MAX) / 2.0
+        cy = (STRIKE_ZONE_Y_MIN + STRIKE_ZONE_Y_MAX) / 2.0
+        sz_x_min, sz_x_max = cx - zone_w / 2.0, cx + zone_w / 2.0
+        sz_y_min, sz_y_max = cy - zone_h / 2.0, cy + zone_h / 2.0
+    abs_zone_height_m = _abs_strike_zone_height_m(batter_height_m)
     log.info("Video from: %s (ext=%s)", video_path, os.path.splitext(video_path)[1].lower())
     # Use OpenCV to read the video information (width, height, FPS), the actual frame is read by YOLO26 later
     meta_cap = cv2.VideoCapture(video_path)
@@ -3687,12 +3719,15 @@ def get_pitch_frames_yolov8(
                 log.info("Catch frame idx for overlay fade-in: %d", _catch_frame_for_overlay)
 
             if not manual_strike_zone:
+                auto_zone_w, auto_zone_h, _ = _strike_zone_span_from_batter_height(batter_height_m)
                 auto_zone = _auto_calibrate_strike_zone(
                     raw_detections=raw_detections,
                     track_points=_full_track_pts,
                     catch_pt=catch_pt,
                     width=disp_width,
                     height=disp_height,
+                    zone_w=auto_zone_w,
+                    zone_h=auto_zone_h,
                 )
                 if auto_zone:
                     sz_x_min = float(auto_zone["x_min"])
@@ -3743,8 +3778,13 @@ def get_pitch_frames_yolov8(
                     'x_max': round(sz_x_max, 4),
                     'y_min': round(sz_y_min, 4),
                     'y_max': round(sz_y_max, 4),
-                    'source': 'manual' if manual_strike_zone else 'auto',
+                    'source': 'manual' if manual_strike_zone else ('abs_auto' if abs_zone_height_m else 'auto'),
                 }
+                if abs_zone_height_m is not None:
+                    speed_info['batter_height_m'] = round(float(batter_height_m), 3)
+                    speed_info['strike_zone_width_cm'] = round(ABS_STRIKE_ZONE_WIDTH_M * 100.0, 2)
+                    speed_info['strike_zone_height_cm'] = round(abs_zone_height_m * 100.0, 2)
+                    speed_info['strike_zone_rule'] = ABS_STRIKE_ZONE_RULE
                 log.info(
                     "Pitch location: catch_disp=(%d,%d) → norm=(%.3f, %.3f)  "
                     "strike_zone=(%.3f, %.3f)  is_strike=%s  grid=col%d/row%d  "

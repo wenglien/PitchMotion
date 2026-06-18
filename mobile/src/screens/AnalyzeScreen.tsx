@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet,
+  View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet,
   Alert, Linking, useWindowDimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -14,8 +14,33 @@ import { parseLog } from '../utils/pipelineStages';
 import { useOfflineAnalysis } from '../hooks/useOfflineAnalysis';
 import AnalysisProgress from '../components/AnalysisProgress';
 import { friendlyError, isCancellation } from '../utils/errors';
+import type { StrikeZoneCalibration } from '../types';
 
 const MAX_MB = 50;
+const ABS_ZONE_TOP_RATIO = 0.535;
+const ABS_ZONE_BOTTOM_RATIO = 0.27;
+const LEGACY_ZONE_HEIGHT_M = 0.58;
+
+function applyAbsHeightToManualZone(
+  zone: StrikeZoneCalibration | null | undefined,
+  batterHeightM: number,
+): StrikeZoneCalibration | null {
+  if (!zone) return null;
+  const currentHeight = zone.yMax - zone.yMin;
+  if (currentHeight <= 0) return zone;
+
+  const absHeightM = batterHeightM * (ABS_ZONE_TOP_RATIO - ABS_ZONE_BOTTOM_RATIO);
+  const adjustedHeight = Math.max(0.08, Math.min(0.45, currentHeight * (absHeightM / LEGACY_ZONE_HEIGHT_M)));
+  const cy = (zone.yMin + zone.yMax) / 2;
+  const halfH = adjustedHeight / 2;
+  const yMin = Math.max(0, Math.min(1 - adjustedHeight, cy - halfH));
+  return {
+    xMin: zone.xMin,
+    xMax: zone.xMax,
+    yMin,
+    yMax: yMin + adjustedHeight,
+  };
+}
 
 export default function AnalyzeScreen() {
   const { width } = useWindowDimensions();
@@ -27,6 +52,8 @@ export default function AnalyzeScreen() {
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [videoName, setVideoName] = useState<string>('video.mp4');
   const [videoMeta, setVideoMeta] = useState<{ sizeMB: string; durationS: string } | null>(null);
+  const [batterHeightText, setBatterHeightText] = useState('');
+  const [heightTouched, setHeightTouched] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
   const [currentStage, setCurrentStage] = useState<string | null>(null);
@@ -41,6 +68,13 @@ export default function AnalyzeScreen() {
   const cancelAnalysis = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  const batterHeightM = Number.parseFloat(batterHeightText);
+  const hasValidBatterHeight = Number.isFinite(batterHeightM) && batterHeightM >= 1.0 && batterHeightM <= 2.4;
+  const batterHeightError = heightTouched && batterHeightText.trim() !== '' && !hasValidBatterHeight;
+  const effectiveStrikeZone = hasValidBatterHeight
+    ? applyAbsHeightToManualZone(settings.strikeZone, batterHeightM)
+    : settings.strikeZone;
 
   const resetAnalysis = () => {
     setUploadPct(0);
@@ -94,7 +128,7 @@ export default function AnalyzeScreen() {
   }, []);
 
   const onAnalyzeOffline = async () => {
-    if (!videoUri || analyzing) return;
+    if (!videoUri || analyzing || !hasValidBatterHeight) return;
     setAnalyzing(true);
     resetAnalysis();
     const initEntry = { msg: '[DEBUG] mode=offline', isError: false };
@@ -113,7 +147,8 @@ export default function AnalyzeScreen() {
           strideCorrectionM: settings.strideCorrectionM,
           confThreshold: settings.confThreshold,
           pitcherHeightM: settings.pitcherHeightM,
-          strikeZone: settings.strikeZone,
+          batterHeightM,
+          strikeZone: effectiveStrikeZone,
         },
         {
           onStage: (stageId) => {
@@ -156,7 +191,7 @@ export default function AnalyzeScreen() {
   };
 
   const onAnalyzeOnline = async () => {
-    if (!videoUri || analyzing) return;
+    if (!videoUri || analyzing || !hasValidBatterHeight) return;
     setAnalyzing(true);
     resetAnalysis();
     const initEntry2 = { msg: '[DEBUG] mode=online', isError: false };
@@ -176,7 +211,8 @@ export default function AnalyzeScreen() {
           moundDistanceM: settings.moundDistanceM,
           strideCorrectionM: settings.strideCorrectionM,
           confThreshold: settings.confThreshold,
-          strikeZone: settings.strikeZone,
+          batterHeightM,
+          strikeZone: effectiveStrikeZone,
           signal: controller.signal,
         },
         (pct) => {
@@ -232,6 +268,13 @@ export default function AnalyzeScreen() {
   };
 
   const onAnalyze = async () => {
+    setHeightTouched(true);
+    if (!hasValidBatterHeight) {
+      setStatusMsg('請先輸入打者身高（公尺），系統會依 MLB ABS 規則計算好球帶。');
+      setStatusType('error');
+      return;
+    }
+
     if (settings.analysisMode === 'offline') {
       await onAnalyzeOffline();
       return;
@@ -250,6 +293,7 @@ export default function AnalyzeScreen() {
   };
   const isOffline = settings.analysisMode === 'offline';
   const panelWidth = Math.min(width - 32, Layout.maxWidth);
+  const canAnalyze = !!videoUri && !analyzing && hasValidBatterHeight;
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
@@ -307,16 +351,16 @@ export default function AnalyzeScreen() {
             </Text>
             <View style={styles.heroMetricRow}>
               <View style={styles.heroMetric}>
+                <Text style={styles.heroMetricValue}>{hasValidBatterHeight ? batterHeightM.toFixed(2) : '-'}</Text>
+                <Text style={styles.heroMetricLabel}>打者身高 m</Text>
+              </View>
+              <View style={styles.heroMetric}>
                 <Text style={styles.heroMetricValue}>{settings.moundDistanceM > 0 ? settings.moundDistanceM.toFixed(1) : 'AUTO'}</Text>
                 <Text style={styles.heroMetricLabel}>距離 m</Text>
               </View>
               <View style={styles.heroMetric}>
                 <Text style={styles.heroMetricValue}>{settings.confThreshold.toFixed(2)}</Text>
                 <Text style={styles.heroMetricLabel}>信心閾值</Text>
-              </View>
-              <View style={styles.heroMetric}>
-                <Text style={styles.heroMetricValue}>{MAX_MB}</Text>
-                <Text style={styles.heroMetricLabel}>MB 上限</Text>
               </View>
             </View>
           </View>
@@ -345,6 +389,36 @@ export default function AnalyzeScreen() {
               {videoUri ? '點擊更換影片' : `點擊從相簿選取\n上限 ${MAX_MB} MB`}
             </Text>
           </TouchableOpacity>
+
+          {/* Batter height */}
+          <View style={styles.heightCard}>
+            <View style={styles.heightHeader}>
+              <Text style={styles.heightTitle}>打者身高</Text>
+              <Text style={styles.heightBadge}>MLB ABS</Text>
+            </View>
+            <TextInput
+              style={[styles.heightInput, batterHeightError && styles.inputError]}
+              value={batterHeightText}
+              onChangeText={(v) => {
+                setBatterHeightText(v);
+                if (statusType === 'error') {
+                  setStatusMsg('');
+                  setStatusType('');
+                }
+              }}
+              onBlur={() => setHeightTouched(true)}
+              keyboardType="decimal-pad"
+              placeholder="例如 1.78"
+              placeholderTextColor={Colors.textMuted}
+              returnKeyType="done"
+              accessibilityLabel="打者身高，公尺，開始分析前必填"
+            />
+            <Text style={[styles.heightHint, batterHeightError && { color: Colors.red }]}>
+              {batterHeightError
+                ? '請輸入 1.00 到 2.40 公尺之間的身高'
+                : '系統會以 17 吋寬、27% 到 53.5% 身高的 MLB ABS 好球帶判定。'}
+            </Text>
+          </View>
 
           {/* Video preview */}
           {videoUri && (
@@ -398,14 +472,15 @@ export default function AnalyzeScreen() {
       {/* Analyze button */}
       <View style={[styles.actionWrap, { width: panelWidth }]}>
         <TouchableOpacity
-          style={[styles.analyzeBtn, (!videoUri || analyzing) && styles.analyzeBtnDisabled]}
+          style={[styles.analyzeBtn, !canAnalyze && styles.analyzeBtnDisabled]}
           onPress={onAnalyze}
-          disabled={!videoUri || analyzing}
+          disabled={!canAnalyze && (analyzing || !videoUri)}
           activeOpacity={0.8}
           accessibilityRole="button"
-          accessibilityState={{ disabled: !videoUri || analyzing, busy: analyzing }}
+          accessibilityState={{ disabled: !canAnalyze, busy: analyzing }}
           accessibilityLabel={
             !videoUri ? '請先選擇影片'
+              : !hasValidBatterHeight ? '請先輸入打者身高'
               : analyzing ? (isOffline ? '裝置分析進行中' : '伺服器分析進行中')
               : (isOffline ? '開始離線分析' : '開始線上分析')
           }
@@ -419,7 +494,7 @@ export default function AnalyzeScreen() {
             </View>
           ) : (
             <Text style={styles.analyzeBtnText}>
-              {isOffline ? '開始離線分析' : '開始線上分析'}
+              {!videoUri ? '請先選擇影片' : !hasValidBatterHeight ? '輸入打者身高後開始' : (isOffline ? '開始離線分析' : '開始線上分析')}
             </Text>
           )}
         </TouchableOpacity>
@@ -561,6 +636,58 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textMuted,
     textAlign: 'center',
+  },
+  heightCard: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.xl,
+    padding: 16,
+    marginTop: Spacing.md,
+    ...Shadows.soft,
+  },
+  heightHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 10,
+  },
+  heightTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: Colors.text,
+  },
+  heightBadge: {
+    fontSize: 10,
+    color: Colors.accent,
+    fontWeight: '900',
+    backgroundColor: 'rgba(37,99,235,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.22)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    overflow: 'hidden',
+  },
+  heightInput: {
+    height: 46,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    paddingHorizontal: 12,
+    fontSize: 17,
+    color: Colors.text,
+    backgroundColor: Colors.bg,
+  },
+  inputError: {
+    borderColor: Colors.red,
+  },
+  heightHint: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 18,
+    color: Colors.textMuted,
   },
   previewCard: {
     backgroundColor: Colors.surface,

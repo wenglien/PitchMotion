@@ -85,6 +85,7 @@ final class BallKinematicsAnalyzer {
         speedInfo: SpeedInfo,
         frameWidth: Int,
         frameHeight: Int,
+        strikeZoneHeightCm: Double? = nil,
         zone: (xMin: Double, xMax: Double, yMin: Double, yMax: Double) = (
             STRIKE_ZONE_X_MIN,
             STRIKE_ZONE_X_MAX,
@@ -124,7 +125,7 @@ final class BallKinematicsAnalyzer {
         let zoneHeightPx = (zone.yMax - zone.yMin) * Double(frameHeight)
         guard zoneWidthPx > 20, zoneHeightPx > 20 else { return out }
         let cmPerPxX = Self.STRIKE_ZONE_WIDTH_CM  / zoneWidthPx
-        let cmPerPxY = Self.STRIKE_ZONE_HEIGHT_CM / zoneHeightPx
+        let cmPerPxY = (strikeZoneHeightCm ?? Self.STRIKE_ZONE_HEIGHT_CM) / zoneHeightPx
 
         // 3. Fit a line to the first reliable slice of the trajectory. Use
         // actual frame indices and downweight gap-filled points so the release

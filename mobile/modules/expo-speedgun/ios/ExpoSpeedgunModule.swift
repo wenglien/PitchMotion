@@ -18,6 +18,7 @@ public final class ExpoSpeedgunModule: Module {
             let strideCorrection = options["strideCorrectionM"] as? Double
             let confThreshold = options["confThreshold"] as? Double ?? 0.05
             let pitcherHeight = options["pitcherHeightM"] as? Double
+            let batterHeight = options["batterHeightM"] as? Double
             let strikeZone = Self.parseStrikeZone(options["strikeZone"])
 
             let pipeline = SpeedgunPipeline { progress in
@@ -35,6 +36,7 @@ public final class ExpoSpeedgunModule: Module {
                     strideCorrectionM: strideCorrection,
                     confThreshold: confThreshold,
                     pitcherHeightM: pitcherHeight,
+                    batterHeightM: batterHeight,
                     strikeZone: strikeZone
                 )
                 return result

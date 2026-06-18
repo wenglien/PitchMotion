@@ -52,8 +52,31 @@ final class VideoDecoder {
         let rawCaptureFps = minDurSecs > 0
             ? Int(round(1.0 / minDurSecs))
             : fps
-        // Must be >= fps (capture can't be slower than playback); cap at 960fps (iPhone max slo-mo)
-        captureFps = max(fps, min(rawCaptureFps, 960))
+        let cappedRawCaptureFps = max(fps, min(rawCaptureFps, 960))
+        let highFpsBuckets = [120, 240, 480, 960]
+        let nearestHighFps = highFpsBuckets.min(by: {
+            abs($0 - cappedRawCaptureFps) < abs($1 - cappedRawCaptureFps)
+        })
+        let roundedHighFps: Int? = {
+            guard let nearest = nearestHighFps else { return nil }
+            let tolerance = max(4, Int(round(Double(nearest) * 0.08)))
+            return abs(nearest - cappedRawCaptureFps) <= tolerance ? nearest : nil
+        }()
+        let captureRatio = Double(roundedHighFps ?? cappedRawCaptureFps) / Double(max(1, fps))
+
+        // minFrameDuration can be polluted by a single short VFR sample. Only
+        // treat it as true high-speed capture when it resembles an iPhone
+        // capture bucket and is meaningfully above playback fps. Otherwise use
+        // nominal fps so speed timing cannot be accidentally multiplied.
+        if let roundedHighFps, roundedHighFps > fps, captureRatio >= 1.8 {
+            captureFps = roundedHighFps
+        } else {
+            captureFps = fps
+            if cappedRawCaptureFps > fps {
+                NSLog("[VideoDecoder] Ignoring suspicious captureFps=%d for nominal=%d (ratio=%.2f)",
+                      cappedRawCaptureFps, fps, captureRatio)
+            }
+        }
 
         // Handle rotation: preferredTransform rotates the natural size
         let transform = track.preferredTransform

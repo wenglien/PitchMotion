@@ -14,6 +14,11 @@ let STRIKE_ZONE_X_MIN: Double = 0.33
 let STRIKE_ZONE_X_MAX: Double = 0.67
 let STRIKE_ZONE_Y_MIN: Double = 0.59
 let STRIKE_ZONE_Y_MAX: Double = 0.83
+let ABS_STRIKE_ZONE_WIDTH_M: Double = 0.4318
+let ABS_STRIKE_ZONE_BOTTOM_RATIO: Double = 0.27
+let ABS_STRIKE_ZONE_TOP_RATIO: Double = 0.535
+let LEGACY_STRIKE_ZONE_HEIGHT_M: Double = 0.58
+let ABS_STRIKE_ZONE_RULE: String = "MLB_ABS_2026"
 
 let DEFAULT_STRIKE_ZONE: [String: Double] = [
     "x_min": STRIKE_ZONE_X_MIN,
@@ -216,6 +221,10 @@ struct SpeedInfo {
     var pitchLocY: Double?
     var isStrike: Bool?
     var plateZone: [String: Double]?
+    var batterHeightM: Double?
+    var strikeZoneWidthCm: Double?
+    var strikeZoneHeightCm: Double?
+    var strikeZoneRule: String?
 
     // Ball displacement / break (cm)
     var horizontalBreakCm: Double?
@@ -230,6 +239,9 @@ struct SpeedInfo {
     var distanceSource: String?       // "manual" | "pose_estimated" | "default"
     var distanceWarning: String?      // user-facing warning when distance was auto-guessed
     var ttcStatus: String?            // "used" | "fallback_growth" | "fallback_samples" | "fallback_slope" | "fallback_range"
+    var flightTimeSource: String?     // "ttc" | "visual_endpoint" | "release_endpoint" | "point_count"
+    var ttcFlightTimeS: Double?
+    var visualFlightTimeS: Double?
     var releaseFrameIdx: Int?
     var releaseFrameSource: String?   // "pose" | "fallback"
     var firstBallFrameIdx: Int?
@@ -242,6 +254,8 @@ struct SpeedInfo {
     // Catch point provenance
     var catchPointSource: String?     // "last_detection" | "extrapolated_audio" | "extrapolated_band" (+"+glove" when blended)
     var catchPointConfidence: Double?
+    var plateFitErrorPx: Double?
+    var plateExtrapolatedFrames: Double?
     var glovePoint: CGPoint?          // catcher wrist near catch frame, when detected
 
     /// Convert to dictionary for JS bridge
@@ -276,6 +290,10 @@ struct SpeedInfo {
         if let v = pitchLocY { dict["pitch_loc_y"] = v }
         if let v = isStrike { dict["is_strike"] = v }
         if let v = plateZone { dict["plate_zone"] = v }
+        if let v = batterHeightM { dict["batter_height_m"] = v }
+        if let v = strikeZoneWidthCm { dict["strike_zone_width_cm"] = v }
+        if let v = strikeZoneHeightCm { dict["strike_zone_height_cm"] = v }
+        if let v = strikeZoneRule { dict["strike_zone_rule"] = v }
         if let v = horizontalBreakCm { dict["horizontal_break_cm"] = v }
         if let v = verticalBreakCm { dict["vertical_break_cm"] = v }
         if let v = inducedVerticalBreakCm { dict["induced_vertical_break_cm"] = v }
@@ -286,6 +304,9 @@ struct SpeedInfo {
         if let v = distanceSource { dict["distance_source"] = v }
         if let v = distanceWarning { dict["distance_warning"] = v }
         if let v = ttcStatus { dict["ttc_status"] = v }
+        if let v = flightTimeSource { dict["flight_time_source"] = v }
+        if let v = ttcFlightTimeS { dict["ttc_flight_time_s"] = v }
+        if let v = visualFlightTimeS { dict["visual_flight_time_s"] = v }
         if let v = releaseFrameIdx { dict["release_frame_idx"] = v }
         if let v = releaseFrameSource { dict["release_frame_source"] = v }
         if let v = firstBallFrameIdx { dict["first_ball_frame_idx"] = v }
@@ -294,6 +315,8 @@ struct SpeedInfo {
         if let v = preDetectSource { dict["pre_detect_source"] = v }
         if let v = catchPointSource { dict["catch_point_source"] = v }
         if let v = catchPointConfidence { dict["catch_point_confidence"] = v }
+        if let v = plateFitErrorPx { dict["plate_fit_error_px"] = v }
+        if let v = plateExtrapolatedFrames { dict["plate_extrapolated_frames"] = v }
         if let gp = glovePoint {
             dict["glove_point"] = ["x": Int(gp.x), "y": Int(gp.y)]
         }

@@ -11,6 +11,7 @@ interface AnalysisOptions {
   strideCorrectionM?: number;
   confThreshold?: number;
   pitcherHeightM?: number;
+  batterHeightM?: number;
   strikeZone?: { xMin: number; xMax: number; yMin: number; yMax: number } | null;
 }
 

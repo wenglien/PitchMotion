@@ -55,6 +55,9 @@ export default function ResultScreen() {
   const breakConf = si.break_confidence ?? null;
   const spinRpm = si.spin_rpm ?? null;
   const hasBreakChart = breakH !== null && breakVInduced !== null;
+  const batterHeight = si.batter_height_m ?? null;
+  const zoneWidthCm = si.strike_zone_width_cm ?? null;
+  const zoneHeightCm = si.strike_zone_height_cm ?? null;
 
   const physClamped = si.physics_clamped ?? false;
   const pitchType = si.pitch_type && si.pitch_type !== 'Unknown' ? si.pitch_type : null;
@@ -205,12 +208,19 @@ export default function ResultScreen() {
       <View style={[styles.card, { width: panelWidth }]}>
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitle}>好球帶落點</Text>
-          <Text style={styles.cardSub}>本次練習 {sessionPitches.length} 球</Text>
+          <Text style={styles.cardSub}>
+            {batterHeight !== null ? `打者 ${batterHeight.toFixed(2)} m` : `本次練習 ${sessionPitches.length} 球`}
+          </Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.visualWrap}>
           <StrikeZone pitches={sessionPitches} zoneOverride={zoneOverride} />
         </View>
+        {zoneWidthCm !== null && zoneHeightCm !== null && (
+          <Text style={styles.zoneRuleText}>
+            MLB ABS：寬 {zoneWidthCm.toFixed(1)} cm，高 {zoneHeightCm.toFixed(1)} cm
+          </Text>
+        )}
         {sessionPitches.length > 0 && (
           <TouchableOpacity
             style={styles.clearBtn}
@@ -357,6 +367,12 @@ export default function ResultScreen() {
               <Text style={styles.detailValue}>{result.trajectory_count ?? '—'}</Text>
             </View>
             <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>好球帶規則</Text>
+              <Text style={styles.detailValue}>
+                {batterHeight !== null && zoneHeightCm !== null ? `ABS ${batterHeight.toFixed(2)}m / ${zoneHeightCm.toFixed(1)}cm` : '—'}
+              </Text>
+            </View>
+            <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>出手到接球幀</Text>
               <Text style={styles.detailValue}>
                 {si.release_frame_idx != null && si.catch_frame_idx != null
@@ -398,6 +414,22 @@ export default function ResultScreen() {
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>接球幀（dev）</Text>
                   <Text style={styles.detailValue}>{si.catch_frame_idx ?? '—'}</Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>時間來源（dev）</Text>
+                  <Text style={styles.detailValue}>{si.flight_time_source ?? '—'}</Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>TTC 狀態（dev）</Text>
+                  <Text style={styles.detailValue}>{si.ttc_status ?? '—'}</Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>TTC / 影像秒數（dev）</Text>
+                  <Text style={styles.detailValue}>
+                    {si.ttc_flight_time_s != null || si.visual_flight_time_s != null
+                      ? `${si.ttc_flight_time_s?.toFixed(3) ?? '—'} / ${si.visual_flight_time_s?.toFixed(3) ?? '—'}`
+                      : '—'}
+                  </Text>
                 </View>
               </>
             )}
@@ -605,6 +637,13 @@ const styles = StyleSheet.create({
   visualWrap: {
     alignItems: 'center',
     marginTop: Spacing.md,
+  },
+  zoneRuleText: {
+    marginTop: 8,
+    textAlign: 'center',
+    color: Colors.textMuted,
+    fontSize: FontSize.xs,
+    fontWeight: '700',
   },
 
   clearBtn: { marginTop: Spacing.md, alignItems: 'center', paddingVertical: Spacing.sm },

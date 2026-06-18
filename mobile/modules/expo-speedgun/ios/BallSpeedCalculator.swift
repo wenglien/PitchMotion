@@ -97,8 +97,9 @@ final class BallSpeedCalculator {
         lastBallFrameIdx: Int?,
         ballSizePreFrames: Double? = nil,
         preDetectInfo: inout (sec: Double, source: String)?
-    ) -> Double {
+    ) -> (time: Double, source: String) {
         var rawTime: Double?
+        var source = "point_count"
 
         // Priority 1: first ball → endpoint + release-to-first compensation.
         // This is deliberately more stable than raw pose-release → endpoint:
@@ -114,6 +115,7 @@ final class BallSpeedCalculator {
             )
             preDetectInfo = (preFrames / Double(fps), preSource)
             rawTime = max(1.0, detFrames + preFrames) / Double(fps)
+            source = "visual_endpoint"
             NSLog("[BallSpeedCalculator] Flight time: first(%d)->last(%d)=%.0f + pre=%.0f frames (%@) -> %.3fs",
                   first, last, detFrames, preFrames, preSource, rawTime ?? 0)
         }
@@ -121,6 +123,7 @@ final class BallSpeedCalculator {
         // Priority 2: raw release → endpoint only when no first-ball anchor exists.
         if rawTime == nil, let release = releaseFrameIdx, let last = lastBallFrameIdx, last > release {
             rawTime = Double(last - release) / Double(fps)
+            source = "release_endpoint"
             NSLog("[BallSpeedCalculator] Flight time fallback: release(%d)->last(%d) -> %.3fs",
                   release, last, rawTime ?? 0)
         }
@@ -128,12 +131,19 @@ final class BallSpeedCalculator {
         // Last resort: trajectory point count
         if rawTime == nil {
             rawTime = Double(max(1, numTrajectoryPoints)) / Double(fps)
+            source = "point_count"
             NSLog("[BallSpeedCalculator] Flight time last-resort: points=%d fps=%d -> %.3fs",
                   numTrajectoryPoints, fps, rawTime ?? 0)
         }
 
         let time0 = rawTime ?? MIN_FLIGHT_TIME_SEC
-        return clampFlightTime(time0, distance: effectiveDistance)
+        return (clampFlightTime(time0, distance: effectiveDistance), source)
+    }
+
+    private func shouldPreferEndpointTime(ttcTotalTime: Double, endpointTime: Double) -> Bool {
+        guard endpointTime > 0, ttcTotalTime > 0 else { return false }
+        let tolerance = max(0.055, endpointTime * 0.14)
+        return ttcTotalTime + tolerance < endpointTime
     }
 
     private func clampFlightTime(_ raw: Double, distance: Double?) -> Double {
@@ -319,12 +329,27 @@ final class BallSpeedCalculator {
             return info
         }
 
-        // Try TTC (optical looming) first — most reliable for catcher-POV
-        // where ball approaches camera and grows rapidly in final frames.
+        // Try TTC (optical looming), but cross-check it against the explicit
+        // first-ball→endpoint timing. A single merged/blurred bbox near the
+        // glove can make area growth look too steep, producing a too-short TTC
+        // and inflated speed. Endpoint time is conservative because it is tied
+        // to audio/visual frame anchors.
         let (ttcTime, ttcStatus) = estimateTTCWithStatus(frameInfos: frameInfos)
 
         var preDetectInfo: (sec: Double, source: String)? = nil
+        var endpointPreDetectInfo: (sec: Double, source: String)? = nil
+        let endpointEstimate = estimateFlightTime(
+            numTrajectoryPoints: numFrames,
+            releaseFrameIdx: releaseFrameIdx,
+            firstBallFrameIdx: firstBallFrameIdx,
+            lastBallFrameIdx: lastBallFrameIdx,
+            ballSizePreFrames: ballSizePreFrames,
+            preDetectInfo: &endpointPreDetectInfo
+        )
         let totalTime: Double
+        let flightTimeSource: String
+        let ttcTotalTime: Double?
+        var resolvedTtcStatus = ttcStatus
         if let ttc = ttcTime {
             // TTC gives time from first detection to contact.
             // Add pre-detection offset (release to firstBallFrame).
@@ -333,20 +358,30 @@ final class BallSpeedCalculator {
                 firstBallFrameIdx: firstBallFrameIdx,
                 ballSizePreFrames: ballSizePreFrames
             )
-            preDetectInfo = (preFrames / Double(fps), preSource)
             let rawTime = ttc + preFrames / Double(fps)
-            totalTime = clampFlightTime(rawTime, distance: distance)
-            NSLog("[BallSpeedCalculator] Using TTC: %.3fs + pre=%.3fs (%@) → total=%.3fs",
-                  ttc, preFrames / Double(fps), preSource, totalTime)
+            let clampedTtcTime = clampFlightTime(rawTime, distance: distance)
+            ttcTotalTime = clampedTtcTime
+
+            if endpointEstimate.source != "point_count",
+               shouldPreferEndpointTime(ttcTotalTime: clampedTtcTime, endpointTime: endpointEstimate.time) {
+                totalTime = endpointEstimate.time
+                flightTimeSource = endpointEstimate.source
+                preDetectInfo = endpointPreDetectInfo
+                resolvedTtcStatus = "rejected_short_vs_endpoint"
+                NSLog("[BallSpeedCalculator] Rejecting TTC: ttcTotal=%.3fs endpoint=%.3fs source=%@",
+                      clampedTtcTime, endpointEstimate.time, endpointEstimate.source)
+            } else {
+                totalTime = clampedTtcTime
+                flightTimeSource = "ttc"
+                preDetectInfo = (preFrames / Double(fps), preSource)
+                NSLog("[BallSpeedCalculator] Using TTC: %.3fs + pre=%.3fs (%@) → total=%.3fs",
+                      ttc, preFrames / Double(fps), preSource, totalTime)
+            }
         } else {
-            totalTime = estimateFlightTime(
-                numTrajectoryPoints: numFrames,
-                releaseFrameIdx: releaseFrameIdx,
-                firstBallFrameIdx: firstBallFrameIdx,
-                lastBallFrameIdx: lastBallFrameIdx,
-                ballSizePreFrames: ballSizePreFrames,
-                preDetectInfo: &preDetectInfo
-            )
+            ttcTotalTime = nil
+            totalTime = endpointEstimate.time
+            flightTimeSource = endpointEstimate.source
+            preDetectInfo = endpointPreDetectInfo
         }
 
         let avgSpeedMs = distance / totalTime
@@ -381,8 +416,11 @@ final class BallSpeedCalculator {
         info.strideCorrectionM = applyStrideCorrection ? strideCorrectionM : 0
         info.flightTimeS = totalTime
         info.numFrames = numFrames
-        info.calculationMethod = (ttcTime != nil) ? "ttc" : "theoretical"
-        info.ttcStatus = ttcStatus
+        info.calculationMethod = (flightTimeSource == "ttc") ? "ttc" : "theoretical"
+        info.ttcStatus = resolvedTtcStatus
+        info.flightTimeSource = flightTimeSource
+        info.ttcFlightTimeS = ttcTotalTime
+        info.visualFlightTimeS = endpointEstimate.time
         info.preDetectSec = preDetectInfo?.sec
         info.preDetectSource = preDetectInfo?.source
         info.trajectoryLinearity = linearity

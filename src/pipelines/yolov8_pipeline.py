@@ -27,6 +27,7 @@ def run_yolov8_pipeline(
     logger: Optional[logging.Logger] = None,
     pitch_classifier=None,      # 若傳入 ML 分類器則優先使用，否則自動用規則分類器
     enable_pitch_classification: bool = True,  # 設為 False 可完全關閉球種判定
+    batter_height_m: Optional[float] = None,  # MLB ABS: top 53.5%, bottom 27% of measured batter height
     strike_zone: Optional[dict] = None,  # 覆寫 STRIKE_ZONE_* 預設值；dict with x_min/x_max/y_min/y_max (0-1)
 ) -> list[dict]:
     """
@@ -128,6 +129,7 @@ def run_yolov8_pipeline(
                 conf_threshold=conf,
                 show_preview=show_preview,
                 speed_calculator=speed_calculator,
+                batter_height_m=batter_height_m,
                 strike_zone=strike_zone,
             )
             if ball_frames:
@@ -202,4 +204,3 @@ def run_yolov8_pipeline(
         )
 
     return all_speed_info
-

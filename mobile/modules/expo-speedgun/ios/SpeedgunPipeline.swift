@@ -22,6 +22,7 @@ final class SpeedgunPipeline {
         strideCorrectionM: Double?,
         confThreshold: Double,
         pitcherHeightM: Double? = nil,
+        batterHeightM: Double? = nil,
         strikeZone: [String: Double]? = nil
     ) async throws -> [String: Any] {
         // Resolve URI to file URL
@@ -44,7 +45,8 @@ final class SpeedgunPipeline {
             throw SpeedgunError.videoLoadFailed("File not found: \(videoURL.path)")
         }
         let manualStrikeZone = strikeZone != nil
-        var resolvedStrikeZone = resolveStrikeZone(strikeZone)
+        let absZoneHeightM = absStrikeZoneHeightM(batterHeightM)
+        var resolvedStrikeZone = resolveStrikeZone(strikeZone, batterHeightM: batterHeightM)
 
         // Stage 1: Video Setup
         reportProgress("setup", 0.02, "Loading video...")
@@ -546,7 +548,8 @@ final class SpeedgunPipeline {
                     frameInfos: frameInfos,
                     displayWidth: displayWidth,
                     displayHeight: displayHeight,
-                    lastBallFrame: lastBallFrame
+                    lastBallFrame: lastBallFrame,
+                    batterHeightM: batterHeightM
                 )
                 NSLog(
                     "[SpeedgunPipeline] Auto strike-zone calibration: x=%.3f-%.3f y=%.3f-%.3f",
@@ -573,7 +576,7 @@ final class SpeedgunPipeline {
             if let plate = platePos {
                 var pos = plate.point
                 var source = plate.source
-                var confidence = plate.source == "last_detection" ? 0.7 : 0.6
+                var confidence = plate.confidence
 
                 // Single Vision pass at the catch instant: catcher glove for the
                 // catch-point cross-check + catcher body for the zone anchor.
@@ -597,10 +600,18 @@ final class SpeedgunPipeline {
                     speedInfo.glovePoint = glove
                     let diag = Double(displayWidth * displayWidth + displayHeight * displayHeight).squareRoot()
                     let divergence = hypot(Double(glove.x - pos.x), Double(glove.y - pos.y))
-                    if divergence <= 0.12 * diag {
-                        pos = CGPoint(x: (pos.x + glove.x) / 2, y: (pos.y + glove.y) / 2)
+                    let maxBlendDist = 0.10 * diag
+                    if divergence <= maxBlendDist {
+                        let closeness = 1.0 - divergence / maxBlendDist
+                        let gloveWeight = clamp(0.20 + 0.45 * closeness + 0.20 * (1.0 - confidence), min: 0.20, max: 0.75)
+                        pos = CGPoint(
+                            x: pos.x * CGFloat(1.0 - gloveWeight) + glove.x * CGFloat(gloveWeight),
+                            y: pos.y * CGFloat(1.0 - gloveWeight) + glove.y * CGFloat(gloveWeight)
+                        )
                         source += "+glove"
-                        confidence = 0.9
+                        confidence = clamp(confidence + 0.18 * closeness, min: confidence, max: 0.95)
+                        NSLog("[SpeedgunPipeline] Glove blended into plate point: divergence=%.0fpx weight=%.2f conf=%.2f",
+                              divergence, gloveWeight, confidence)
                     } else {
                         confidence = min(confidence, 0.4)
                         NSLog("[SpeedgunPipeline] Glove diverges from extrapolated catch point: %.0fpx (%.1f%% of diag)",
@@ -612,7 +623,7 @@ final class SpeedgunPipeline {
                 // zone sits in front of him instead of at the pitcher-pose /
                 // default position. Shoulder width gives the px-per-meter scale:
                 //   zone width  = plate width (17 in = 0.4318 m)
-                //   zone height = regulation band 1.04 m − 0.46 m = 0.58 m
+                //   zone height = ABS 27% to 53.5% of measured batter height
                 //   zone top    ≈ crouched catcher's shoulder height (~1.0 m)
                 var zoneAnchoredToCatcher = false
                 if !manualStrikeZone,
@@ -620,8 +631,9 @@ final class SpeedgunPipeline {
                    let shoulderY = catcherObs?.shoulderY,
                    let shoulderW = catcherObs?.shoulderWidthPx {
                     let ppm = Double(shoulderW) / SHOULDER_WIDTH_M
-                    let zoneWNorm = clamp(0.4318 * ppm / Double(displayWidth), min: 0.10, max: 0.50)
-                    let zoneHNorm = clamp(0.58 * ppm / Double(displayHeight), min: 0.08, max: 0.45)
+                    let zoneWNorm = clamp(ABS_STRIKE_ZONE_WIDTH_M * ppm / Double(displayWidth), min: 0.10, max: 0.50)
+                    let zoneHeightM = absZoneHeightM ?? LEGACY_STRIKE_ZONE_HEIGHT_M
+                    let zoneHNorm = clamp(zoneHeightM * ppm / Double(displayHeight), min: 0.08, max: 0.45)
                     let cxNorm = clamp(
                         Double(bodyCX) / Double(displayWidth),
                         min: zoneWNorm / 2.0 + 0.02, max: 1.0 - zoneWNorm / 2.0 - 0.02
@@ -637,10 +649,10 @@ final class SpeedgunPipeline {
                         "y_max": cyNorm + zoneHNorm / 2.0,
                     ]
                     NSLog(
-                        "[SpeedgunPipeline] Catcher-anchored strike zone: x=%.3f-%.3f y=%.3f-%.3f (shoulderW=%.0fpx)",
+                        "[SpeedgunPipeline] Catcher-anchored strike zone: x=%.3f-%.3f y=%.3f-%.3f (shoulderW=%.0fpx, rule=%@)",
                         resolvedStrikeZone["x_min"] ?? 0, resolvedStrikeZone["x_max"] ?? 0,
                         resolvedStrikeZone["y_min"] ?? 0, resolvedStrikeZone["y_max"] ?? 0,
-                        Double(shoulderW)
+                        Double(shoulderW), absZoneHeightM != nil ? ABS_STRIKE_ZONE_RULE : "legacy"
                     )
                     zoneAnchoredToCatcher = true
                 }
@@ -672,8 +684,9 @@ final class SpeedgunPipeline {
                     if catchAreas.count >= 3 {
                         let ballDiaPx = median(catchAreas).squareRoot()
                         let ppm = ballDiaPx / BASEBALL_DIAMETER_M
-                        let zoneWNorm = clamp(0.4318 * ppm / Double(displayWidth), min: 0.12, max: 0.55)
-                        let zoneHNorm = clamp(0.58 * ppm / Double(displayHeight), min: 0.10, max: 0.50)
+                        let zoneWNorm = clamp(ABS_STRIKE_ZONE_WIDTH_M * ppm / Double(displayWidth), min: 0.12, max: 0.55)
+                        let zoneHeightM = absZoneHeightM ?? LEGACY_STRIKE_ZONE_HEIGHT_M
+                        let zoneHNorm = clamp(zoneHeightM * ppm / Double(displayHeight), min: 0.10, max: 0.50)
                         let catchXNorm = Double(pos.x) / Double(displayWidth)
                         let catchYNorm = Double(pos.y) / Double(displayHeight)
                         let prevCX = ((resolvedStrikeZone["x_min"] ?? STRIKE_ZONE_X_MIN)
@@ -700,10 +713,11 @@ final class SpeedgunPipeline {
                             "y_max": cyNorm + zoneHNorm / 2.0,
                         ]
                         NSLog(
-                            "[SpeedgunPipeline] Plate-plane strike zone from ball size: dia=%.0fpx ppm=%.0f x=%.3f-%.3f y=%.3f-%.3f",
+                            "[SpeedgunPipeline] Plate-plane strike zone from ball size: dia=%.0fpx ppm=%.0f x=%.3f-%.3f y=%.3f-%.3f rule=%@",
                             ballDiaPx, ppm,
                             resolvedStrikeZone["x_min"] ?? 0, resolvedStrikeZone["x_max"] ?? 0,
-                            resolvedStrikeZone["y_min"] ?? 0, resolvedStrikeZone["y_max"] ?? 0
+                            resolvedStrikeZone["y_min"] ?? 0, resolvedStrikeZone["y_max"] ?? 0,
+                            absZoneHeightM != nil ? ABS_STRIKE_ZONE_RULE : "legacy"
                         )
                     }
                 }
@@ -711,6 +725,8 @@ final class SpeedgunPipeline {
                 speedInfo.catchPoint = pos
                 speedInfo.catchPointSource = source
                 speedInfo.catchPointConfidence = confidence
+                speedInfo.plateFitErrorPx = plate.fitErrorPx
+                speedInfo.plateExtrapolatedFrames = plate.extrapolatedFrames
                 let xNorm = Double(pos.x) / Double(displayWidth)
                 let yNorm = Double(pos.y) / Double(displayHeight)
                 speedInfo.plateXNorm = xNorm
@@ -720,6 +736,12 @@ final class SpeedgunPipeline {
                 speedInfo.pitchLocY = loc.y
                 speedInfo.isStrike = loc.isStrike
                 speedInfo.plateZone = resolvedStrikeZone
+                if let absZoneHeightM = absZoneHeightM, let batterHeightM = batterHeightM {
+                    speedInfo.batterHeightM = batterHeightM
+                    speedInfo.strikeZoneWidthCm = ABS_STRIKE_ZONE_WIDTH_M * 100.0
+                    speedInfo.strikeZoneHeightCm = absZoneHeightM * 100.0
+                    speedInfo.strikeZoneRule = ABS_STRIKE_ZONE_RULE
+                }
             }
 
             // Attach distance source / warning for UI surface
@@ -754,6 +776,7 @@ final class SpeedgunPipeline {
                 speedInfo: speedInfo,
                 frameWidth: displayWidth,
                 frameHeight: displayHeight,
+                strikeZoneHeightCm: absZoneHeightM.map { $0 * 100.0 },
                 zone: (
                     xMin: resolvedStrikeZone["x_min"] ?? STRIKE_ZONE_X_MIN,
                     xMax: resolvedStrikeZone["x_max"] ?? STRIKE_ZONE_X_MAX,
@@ -899,8 +922,37 @@ final class SpeedgunPipeline {
 
     // MARK: - Helpers
 
-    private func resolveStrikeZone(_ override: [String: Double]?) -> [String: Double] {
-        guard let override else { return DEFAULT_STRIKE_ZONE }
+    private func absStrikeZoneHeightM(_ batterHeightM: Double?) -> Double? {
+        guard let batterHeightM,
+              batterHeightM >= 1.0,
+              batterHeightM <= 2.4 else {
+            return nil
+        }
+        return batterHeightM * (ABS_STRIKE_ZONE_TOP_RATIO - ABS_STRIKE_ZONE_BOTTOM_RATIO)
+    }
+
+    private func strikeZoneSpan(batterHeightM: Double?) -> (width: Double, height: Double, absHeightM: Double?) {
+        let zoneW = STRIKE_ZONE_X_MAX - STRIKE_ZONE_X_MIN
+        let defaultH = STRIKE_ZONE_Y_MAX - STRIKE_ZONE_Y_MIN
+        guard let absHeightM = absStrikeZoneHeightM(batterHeightM) else {
+            return (zoneW, defaultH, nil)
+        }
+        let zoneH = clamp(defaultH * (absHeightM / LEGACY_STRIKE_ZONE_HEIGHT_M), min: 0.08, max: 0.45)
+        return (zoneW, zoneH, absHeightM)
+    }
+
+    private func resolveStrikeZone(_ override: [String: Double]?, batterHeightM: Double? = nil) -> [String: Double] {
+        guard let override else {
+            let span = strikeZoneSpan(batterHeightM: batterHeightM)
+            let cx = (STRIKE_ZONE_X_MIN + STRIKE_ZONE_X_MAX) / 2.0
+            let cy = (STRIKE_ZONE_Y_MIN + STRIKE_ZONE_Y_MAX) / 2.0
+            return [
+                "x_min": cx - span.width / 2.0,
+                "x_max": cx + span.width / 2.0,
+                "y_min": cy - span.height / 2.0,
+                "y_max": cy + span.height / 2.0,
+            ]
+        }
         let xMin = override["x_min"] ?? STRIKE_ZONE_X_MIN
         let xMax = override["x_max"] ?? STRIKE_ZONE_X_MAX
         let yMin = override["y_min"] ?? STRIKE_ZONE_Y_MIN
@@ -981,12 +1033,14 @@ final class SpeedgunPipeline {
         frameInfos: [FrameInfo],
         displayWidth: Int,
         displayHeight: Int,
-        lastBallFrame: Int?
+        lastBallFrame: Int?,
+        batterHeightM: Double? = nil
     ) -> [String: Double] {
         guard displayWidth > 0, displayHeight > 0 else { return DEFAULT_STRIKE_ZONE }
 
-        let zoneW = STRIKE_ZONE_X_MAX - STRIKE_ZONE_X_MIN
-        let zoneH = STRIKE_ZONE_Y_MAX - STRIKE_ZONE_Y_MIN
+        let span = strikeZoneSpan(batterHeightM: batterHeightM)
+        let zoneW = span.width
+        let zoneH = span.height
         let defaultCX = (STRIKE_ZONE_X_MIN + STRIKE_ZONE_X_MAX) / 2.0
         let defaultCY = (STRIKE_ZONE_Y_MIN + STRIKE_ZONE_Y_MAX) / 2.0
 
@@ -1075,18 +1129,73 @@ final class SpeedgunPipeline {
         )
     }
 
-    /// Estimate the ball position at the plate using trajectory extrapolation.
-    /// Strategy:
-    /// 1. Collect the last ≤7 actual YOLO-detected frames (ballLostTracking == false).
-    /// 2. Fit the approach: quadratic in y — gravity plus perspective make the
-    ///    apparent drop accelerate, so constant-velocity extrapolation
-    ///    systematically undershoots (worst for breaking balls) — and robust
-    ///    median velocity in x.
-    /// 3. Horizon: when an audio catch frame exists, extrapolate exactly to that
-    ///    instant (time anchor); otherwise extrapolate until y crosses the top of
-    ///    the plate band.
-    /// 4. Clamp to frame bounds ONLY — never into the strike-zone band, so high
-    ///    and low pitches keep their true location for ball/strike calls.
+    private struct QuadraticFit {
+        let a: Double
+        let b: Double
+        let c: Double
+        let rmse: Double
+    }
+
+    private func evaluateQuadratic(_ fit: QuadraticFit, _ t: Double) -> Double {
+        fit.a * t * t + fit.b * t + fit.c
+    }
+
+    private func weightedQuadraticFit(ts: [Double], values: [Double], weights: [Double]) -> QuadraticFit? {
+        guard ts.count == values.count, values.count == weights.count, ts.count >= 4 else { return nil }
+
+        var s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0
+        var t0 = 0.0, t1 = 0.0, t2 = 0.0
+        var weightSum = 0.0
+
+        for i in 0..<ts.count {
+            let w = max(0.001, weights[i])
+            let x = ts[i]
+            let y = values[i]
+            let x2 = x * x
+            s0 += w
+            s1 += w * x
+            s2 += w * x2
+            s3 += w * x2 * x
+            s4 += w * x2 * x2
+            t0 += w * y
+            t1 += w * y * x
+            t2 += w * y * x2
+            weightSum += w
+        }
+
+        // Normal equations for y = a*t^2 + b*t + c.
+        let a11 = s4, a12 = s3, a13 = s2
+        let a21 = s3, a22 = s2, a23 = s1
+        let a31 = s2, a32 = s1, a33 = s0
+        let det = a11 * (a22 * a33 - a23 * a32)
+            - a12 * (a21 * a33 - a23 * a31)
+            + a13 * (a21 * a32 - a22 * a31)
+        guard abs(det) > 1e-9, weightSum > 0 else { return nil }
+
+        let b1 = t2, b2 = t1, b3 = t0
+        let qa = (b1 * (a22 * a33 - a23 * a32)
+            - a12 * (b2 * a33 - a23 * b3)
+            + a13 * (b2 * a32 - a22 * b3)) / det
+        let qb = (a11 * (b2 * a33 - a23 * b3)
+            - b1 * (a21 * a33 - a23 * a31)
+            + a13 * (a21 * b3 - b2 * a31)) / det
+        let qc = (a11 * (a22 * b3 - b2 * a32)
+            - a12 * (a21 * b3 - b2 * a31)
+            + b1 * (a21 * a32 - a22 * a31)) / det
+
+        var err = 0.0
+        for i in 0..<ts.count {
+            let residual = values[i] - (qa * ts[i] * ts[i] + qb * ts[i] + qc)
+            err += max(0.001, weights[i]) * residual * residual
+        }
+        let rmse = sqrt(err / weightSum)
+        return QuadraticFit(a: qa, b: qb, c: qc, rmse: rmse)
+    }
+
+    /// Estimate the ball position at the plate using a recency-weighted tail fit.
+    /// We fit x(t) and y(t) independently with a quadratic over the final actual
+    /// YOLO detections. This preserves late horizontal movement while damping the
+    /// frame-to-frame bbox jitter that dominates near the glove.
     private func estimatePlatePosition(
         frameInfos: [FrameInfo],
         displayWidth: Int,
@@ -1095,37 +1204,31 @@ final class SpeedgunPipeline {
         catchFrame: Int?,
         fps: Int,
         plateZone: [String: Double]
-    ) -> (point: CGPoint, source: String)? {
+    ) -> (point: CGPoint, source: String, confidence: Double, fitErrorPx: Double?, extrapolatedFrames: Double)? {
         guard let last = lastBallFrame else { return nil }
 
-        // --- Collect last N actual detections (not gap-filled synthetic points) ---
-        // 15-frame lookback: at 120fps this is ~125ms of history; at 240fps ~62ms.
-        // Up to 7 actual detections so the fit is stable against the high
-        // per-frame bbox jitter in the final approach phase.
-        let maxLookback = 15
-        var actualDetections: [(frameIdx: Int, x: Double, y: Double)] = []
+        // Collect actual detections only (not gap-filled synthetic points). The
+        // lookback scales with capture fps so slow-mo gets enough real time.
+        let maxLookback = min(max(18, Int(round(Double(max(1, fps)) * 0.18))), 48)
+        let maxSamples = 10
+        var actualDetections: [(frameIdx: Int, x: Double, y: Double, area: Double)] = []
         let searchStart = max(0, last - maxLookback)
         for i in stride(from: last, through: searchStart, by: -1) {
             let fi = frameInfos[i]
             if fi.ballInFrame && !fi.ballLostTracking {
-                actualDetections.insert((i, Double(fi.ballCenter.x), Double(fi.ballCenter.y)), at: 0)
+                actualDetections.insert((i, Double(fi.ballCenter.x), Double(fi.ballCenter.y), fi.ballArea), at: 0)
             }
-            if actualDetections.count >= 7 { break }
+            if actualDetections.count >= maxSamples { break }
         }
 
         guard actualDetections.count >= 2 else {
-            return (frameInfos[last].ballCenter, "last_detection")
+            return (frameInfos[last].ballCenter, "last_detection", 0.45, nil, 0)
         }
 
         let pLast = actualDetections[actualDetections.count - 1]
         let curX = pLast.x
         let curY = pLast.y
 
-        // --- Median per-frame velocity across consecutive pairs ---
-        // Using only the last two points makes extrapolation highly sensitive to
-        // 4K bbox jitter (±1px = ±50mph-equivalent motion at 120fps catcher-POV).
-        // Median over up to 6 consecutive-pair deltas is much more stable. Used
-        // for x always, and as the y fallback when the quadratic fit is rejected.
         var vxs: [Double] = []
         var vys: [Double] = []
         for i in 1..<actualDetections.count {
@@ -1138,57 +1241,68 @@ final class SpeedgunPipeline {
         let vx = median(vxs)
         let vyLinear = median(vys)
 
-        // --- Quadratic y(t), t = frames after the last detection ---
-        // Physical gate: the approach must move downward (b > 0) with non-negative
-        // curvature (a ≥ 0, gravity/perspective accelerate the drop). Fits that
-        // fail the gate are jitter-dominated — fall back to the linear median.
-        var yAccel = 0.0
-        var vyAtLast = vyLinear
-        if actualDetections.count >= 4 {
-            let ts = actualDetections.map { Double($0.frameIdx - pLast.frameIdx) }
-            let ys = actualDetections.map { $0.y }
-            let coeffs = polyfit(ts, ys, degree: 2)   // y = a·t² + b·t + c
-            if coeffs.count == 3, coeffs[1] > 0, coeffs[0] >= 0 {
-                yAccel = coeffs[0]
-                vyAtLast = coeffs[1]
-            }
+        let ts = actualDetections.map { Double($0.frameIdx - pLast.frameIdx) }
+        let xs = actualDetections.map { $0.x }
+        let ys = actualDetections.map { $0.y }
+        let medianArea = median(actualDetections.map { max($0.area, 1.0) })
+        let weights = actualDetections.enumerated().map { idx, det -> Double in
+            let recency = Double(idx + 1) / Double(actualDetections.count)
+            let areaWeight = medianArea > 1 ? clamp(sqrt(max(det.area, 1.0) / medianArea), min: 0.75, max: 1.25) : 1.0
+            return (0.45 + 0.55 * recency) * areaWeight
         }
 
+        let xFit = actualDetections.count >= 4 ? weightedQuadraticFit(ts: ts, values: xs, weights: weights) : nil
+        let yFit = actualDetections.count >= 4 ? weightedQuadraticFit(ts: ts, values: ys, weights: weights) : nil
+
+        let diag = Double(displayWidth * displayWidth + displayHeight * displayHeight).squareRoot()
+        let fitErrorPx = hypot(xFit?.rmse ?? 0, yFit?.rmse ?? 0)
+        let fitQuality = clamp(1.0 - fitErrorPx / max(12.0, diag * 0.018), min: 0.0, max: 1.0)
+
+        let useXFit = xFit != nil && (xFit!.rmse <= max(10.0, Double(displayWidth) * 0.018))
+        let useYFit = yFit != nil
+            && yFit!.b > 0.25
+            && yFit!.a >= -0.08
+            && yFit!.rmse <= max(12.0, Double(displayHeight) * 0.018)
+
         func extrapolated(_ tFrames: Double) -> CGPoint {
-            let x = curX + vx * tFrames
-            let y = curY + vyAtLast * tFrames + yAccel * tFrames * tFrames
+            let x = useXFit ? evaluateQuadratic(xFit!, tFrames) : curX + vx * tFrames
+            let y = useYFit ? evaluateQuadratic(yFit!, tFrames) : curY + vyLinear * tFrames
             return CGPoint(
                 x: clamp(x, min: 0.0, max: Double(displayWidth)),
                 y: clamp(y, min: 0.0, max: Double(displayHeight))
             )
         }
 
-        // Cap extrapolation to 0.5s of real time
-        let maxFrames = Double(max(1, fps)) * 0.5
-
-        // --- Audio catch frame is the strongest endpoint signal: extrapolate
-        //     exactly (catchFrame − lastDetection) frames instead of guessing
-        //     where the plate band is ---
-        if let cf = catchFrame, cf >= pLast.frameIdx {
-            let t = min(Double(cf - pLast.frameIdx), maxFrames)
-            if t <= 0 { return (CGPoint(x: curX, y: curY), "last_detection") }
-            return (extrapolated(t), "extrapolated_audio")
+        func confidence(for tFrames: Double, source: String) -> Double {
+            let sampleScore = clamp(Double(actualDetections.count - 2) / 6.0, min: 0.25, max: 1.0)
+            let horizonScore = clamp(1.0 - tFrames / max(1.0, Double(max(1, fps)) * 0.35), min: 0.20, max: 1.0)
+            let sourceBoost = source == "last_detection" ? 0.06 : (source == "extrapolated_audio" ? 0.10 : 0.0)
+            return clamp(0.28 + 0.34 * fitQuality + 0.22 * sampleScore + 0.10 * horizonScore + sourceBoost, min: 0.25, max: 0.95)
         }
 
-        // --- No time anchor: extrapolate until y crosses the plate band top ---
+        let maxFrames = Double(max(1, fps)) * 0.5
+
+        if let cf = catchFrame, cf >= pLast.frameIdx {
+            let t = min(Double(cf - pLast.frameIdx), maxFrames)
+            if t <= 0 {
+                return (CGPoint(x: curX, y: curY), "last_detection", confidence(for: 0, source: "last_detection"), fitErrorPx, 0)
+            }
+            return (extrapolated(t), "extrapolated_audio", confidence(for: t, source: "extrapolated_audio"), fitErrorPx, t)
+        }
+
         let zoneYMin = plateZone["y_min"] ?? STRIKE_ZONE_Y_MIN
         let plateBandLo = zoneYMin * Double(displayHeight)
 
-        // Ball already at/below the band top — use the detection directly
         if curY >= plateBandLo {
-            return (CGPoint(x: curX, y: curY), "last_detection")
+            return (CGPoint(x: curX, y: curY), "last_detection", confidence(for: 0, source: "last_detection"), fitErrorPx, 0)
         }
 
+        let vyAtLast = useYFit ? yFit!.b : vyLinear
+        let yAccel = useYFit ? yFit!.a : 0.0
         guard vyAtLast > 0.5 else {
-            return (CGPoint(x: curX, y: curY), "last_detection")
+            return (CGPoint(x: curX, y: curY), "last_detection", confidence(for: 0, source: "last_detection"), fitErrorPx, 0)
         }
 
-        // Solve curY + vy·t + a·t² = plateBandLo for the positive root
         let drop = plateBandLo - curY
         let tCross: Double
         if yAccel > 1e-9 {
@@ -1197,9 +1311,9 @@ final class SpeedgunPipeline {
             tCross = drop / vyAtLast
         }
         guard tCross > 0, tCross <= maxFrames else {
-            return (CGPoint(x: curX, y: curY), "last_detection")
+            return (CGPoint(x: curX, y: curY), "last_detection", confidence(for: 0, source: "last_detection"), fitErrorPx, 0)
         }
-        return (extrapolated(tCross), "extrapolated_band")
+        return (extrapolated(tCross), "extrapolated_band", confidence(for: tCross, source: "extrapolated_band"), fitErrorPx, tCross)
     }
 
     // MARK: - Catcher Detection (catch-point cross-check + strike-zone anchor)

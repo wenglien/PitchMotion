@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.speedgun.mobile",
+      "bundleIdentifier": "com.wenglien.speedgun.mobile",
       "buildNumber": "1",
       "requireFullScreen": false,
       "config": {
@@ -29,7 +29,7 @@
       }
     },
     "android": {
-      "package": "com.speedgun.mobile",
+      "package": "com.wenglien.speedgun.mobile",
       "versionCode": 1,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {

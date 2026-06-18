@@ -471,6 +471,7 @@ def _run_pipeline_thread(job_id: str, input_path: Path, tmpdir_path: Path,
                           output_path: Path, base_url: str,
                           mound_distance_m: float, stride_correction_m: float,
                           conf_threshold: float, filename: str,
+                          batter_height_m: Optional[float] = None,
                           strike_zone: Optional[dict] = None):
     handler = _JobLogHandler(job_id)
     handler.setFormatter(logging.Formatter("%(name)s – %(message)s"))
@@ -512,6 +513,7 @@ def _run_pipeline_thread(job_id: str, input_path: Path, tmpdir_path: Path,
             conf=conf_threshold,
             debug=False,
             output_scale=1.0,
+            batter_height_m=batter_height_m,
             strike_zone=strike_zone,
         )
 
@@ -614,6 +616,7 @@ async def analyze(
     mound_distance_m: float = Form(0.0),
     stride_correction_m: float = Form(0.0),
     conf_threshold: float = Form(0.05),
+    batter_height_m: Optional[float] = Form(None),
     zone_x_min: Optional[float] = Form(None),
     zone_x_max: Optional[float] = Form(None),
     zone_y_min: Optional[float] = Form(None),
@@ -655,11 +658,16 @@ async def analyze(
             }
             log.info("Job %s – strike_zone override: %s", job_id, strike_zone_override)
 
+    resolved_batter_height_m = None
+    if batter_height_m is not None and 1.0 <= batter_height_m <= 2.4:
+        resolved_batter_height_m = float(batter_height_m)
+        log.info("Job %s – batter_height_m: %.2f", job_id, resolved_batter_height_m)
+
     t = threading.Thread(
         target=_run_pipeline_thread,
         args=(job_id, input_path, tmpdir_path, output_path, base_url,
               mound_distance_m, stride_correction_m, conf_threshold, filename,
-              strike_zone_override),
+              resolved_batter_height_m, strike_zone_override),
         daemon=True,
     )
     t.start()

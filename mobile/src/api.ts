@@ -26,6 +26,7 @@ export function uploadVideo(
     moundDistanceM?: number;
     strideCorrectionM?: number;
     confThreshold?: number;
+    batterHeightM?: number;
     strikeZone?: StrikeZoneCalibration | null;
     signal?: AbortSignal;
   } = {},
@@ -40,6 +41,7 @@ export function uploadVideo(
     moundDistanceM = 18.44,
     strideCorrectionM = 0,
     confThreshold = 0.03,
+    batterHeightM,
     strikeZone = null,
     signal,
   } = opts;
@@ -53,6 +55,9 @@ export function uploadVideo(
   form.append('mound_distance_m', String(moundDistanceM));
   form.append('stride_correction_m', String(strideCorrectionM));
   form.append('conf_threshold', String(confThreshold));
+  if (typeof batterHeightM === 'number' && Number.isFinite(batterHeightM)) {
+    form.append('batter_height_m', String(batterHeightM));
+  }
   if (
     strikeZone &&
     [strikeZone.xMin, strikeZone.xMax, strikeZone.yMin, strikeZone.yMax].every(
@@ -208,6 +213,7 @@ export async function analyzeVideo(
     moundDistanceM?: number;
     strideCorrectionM?: number;
     confThreshold?: number;
+    batterHeightM?: number;
     strikeZone?: StrikeZoneCalibration | null;
     signal?: AbortSignal;
   } = {},

@@ -54,6 +54,7 @@ export function useOfflineAnalysis() {
         strideCorrectionM?: number;
         confThreshold?: number;
         pitcherHeightM?: number;
+        batterHeightM?: number;
         strikeZone?: StrikeZoneCalibration | null;
       },
       callbacks?: OfflineAnalysisCallbacks,
@@ -107,6 +108,7 @@ export function useOfflineAnalysis() {
           strideCorrectionM: opts.strideCorrectionM,
           confThreshold: opts.confThreshold,
           pitcherHeightM: opts.pitcherHeightM,
+          batterHeightM: opts.batterHeightM,
           strikeZone: opts.strikeZone,
         });
 
@@ -138,7 +140,15 @@ export function useOfflineAnalysis() {
             trajectory_quality_warning: speedInfo.trajectory_quality_warning,
             plate_x_norm: speedInfo.plate_x_norm,
             plate_y_norm: speedInfo.plate_y_norm,
+            catch_point_confidence: speedInfo.catch_point_confidence,
+            catch_point_source: speedInfo.catch_point_source,
+            plate_fit_error_px: speedInfo.plate_fit_error_px,
+            plate_extrapolated_frames: speedInfo.plate_extrapolated_frames,
             plate_zone: speedInfo.plate_zone,
+            batter_height_m: speedInfo.batter_height_m,
+            strike_zone_width_cm: speedInfo.strike_zone_width_cm,
+            strike_zone_height_cm: speedInfo.strike_zone_height_cm,
+            strike_zone_rule: speedInfo.strike_zone_rule,
             pitch_loc_x: speedInfo.pitch_loc_x,
             pitch_loc_y: speedInfo.pitch_loc_y,
             is_strike: speedInfo.is_strike,
@@ -147,6 +157,9 @@ export function useOfflineAnalysis() {
             distance_source: speedInfo.distance_source,
             distance_warning: speedInfo.distance_warning,
             ttc_status: speedInfo.ttc_status,
+            flight_time_source: speedInfo.flight_time_source,
+            ttc_flight_time_s: speedInfo.ttc_flight_time_s,
+            visual_flight_time_s: speedInfo.visual_flight_time_s,
             release_frame_idx: speedInfo.release_frame_idx,
             release_frame_source: speedInfo.release_frame_source,
             first_ball_frame_idx: speedInfo.first_ball_frame_idx,
