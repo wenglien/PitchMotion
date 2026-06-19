@@ -3,13 +3,24 @@ import {
   View, Text, TextInput, ScrollView, TouchableOpacity,
   KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet,
 } from 'react-native';
-import { Colors } from '../theme';
+import { Ionicons } from '@expo/vector-icons';
+import { Colors, FontSize, Radius, Shadows, Spacing, TouchTarget } from '../theme';
 import { useSettings } from '../context/SettingsContext';
 import { checkHealth } from '../api';
 import type { AnalysisMode } from '../types';
+import SegmentedTabs from '../components/SegmentedTabs';
+
+const BASIC_TAB = '基本';
+const ADVANCED_TAB = '進階';
+const SETTINGS_TABS = [BASIC_TAB, ADVANCED_TAB];
+
+const MOUND_PRESETS = [5, 7, 14, 18.44];
+const STRIDE_PRESETS = [0, 1.5, 1.8];
+const CONF_PRESETS = ['0.03', '0.05', '0.10'];
 
 export default function SettingsScreen() {
   const { settings, updateSettings } = useSettings();
+  const [activeTab, setActiveTab] = useState(BASIC_TAB);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; ms: number; msg: string } | null>(null);
 
@@ -27,6 +38,8 @@ export default function SettingsScreen() {
   const [zyMinText, setZyMinText] = useState(settings.strikeZone ? String(settings.strikeZone.yMin) : '');
   const [zyMaxText, setZyMaxText] = useState(settings.strikeZone ? String(settings.strikeZone.yMax) : '');
 
+  const isOffline = settings.analysisMode === 'offline';
+
   const onTestConnection = async () => {
     const url = settings.backendUrl.trim();
     if (!url) {
@@ -42,7 +55,7 @@ export default function SettingsScreen() {
       setTestResult(
         ok
           ? { ok: true, ms, msg: `連線成功（${ms} ms）` }
-          : { ok: false, ms, msg: `伺服器無回應或回傳錯誤狀態` },
+          : { ok: false, ms, msg: '伺服器無回應或回傳錯誤狀態' },
       );
     } catch {
       setTestResult({ ok: false, ms: Date.now() - t0, msg: '連線失敗，請檢查 URL 與網路' });
@@ -50,8 +63,6 @@ export default function SettingsScreen() {
       setTesting(false);
     }
   };
-
-  const isOffline = settings.analysisMode === 'offline';
 
   const commitStrikeZone = () => {
     const values = [zxMinText, zxMaxText, zyMinText, zyMaxText];
@@ -80,9 +91,19 @@ export default function SettingsScreen() {
     updateSettings({ strikeZone: null });
   };
 
+  const modeOptions: Array<{
+    key: AnalysisMode;
+    title: string;
+    desc: string;
+    icon: keyof typeof Ionicons.glyphMap;
+  }> = [
+    { key: 'offline', title: '離線模式', desc: '裝置端 AI', icon: 'phone-portrait-outline' },
+    { key: 'online', title: '線上模式', desc: '後端運算', icon: 'cloud-outline' },
+  ];
+
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1 }}
+      style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView
@@ -90,410 +111,740 @@ export default function SettingsScreen() {
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Analysis Mode */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>分析模式</Text>
-          <View style={styles.modeRow}>
-            <TouchableOpacity
-              style={[styles.modeBtn, isOffline && styles.modeBtnActive]}
-              onPress={() => updateSettings({ analysisMode: 'offline' as AnalysisMode })}
-              activeOpacity={0.7}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: isOffline }}
-              accessibilityLabel="離線模式，裝置端 AI 運算"
-            >
-              <Text style={styles.modeBtnIcon}>📱</Text>
-              <Text style={[styles.modeBtnLabel, isOffline && styles.modeBtnLabelActive]}>
-                離線模式
-              </Text>
-              <Text style={styles.modeBtnDesc}>裝置端 AI 運算</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modeBtn, !isOffline && styles.modeBtnActive]}
-              onPress={() => updateSettings({ analysisMode: 'online' as AnalysisMode })}
-              activeOpacity={0.7}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: !isOffline }}
-              accessibilityLabel="線上模式，上傳到伺服器運算"
-            >
-              <Text style={styles.modeBtnIcon}>☁️</Text>
-              <Text style={[styles.modeBtnLabel, !isOffline && styles.modeBtnLabelActive]}>
-                線上模式
-              </Text>
-              <Text style={styles.modeBtnDesc}>上傳至伺服器</Text>
-            </TouchableOpacity>
+        <View style={styles.headerCard}>
+          <View style={styles.headerIcon}>
+            <Ionicons name="options-outline" size={24} color={Colors.accent} />
           </View>
-          <Text style={styles.modeHint}>
-            {isOffline
-              ? '使用裝置內建 AI 分析，完全離線、不需要網路連線。'
-              : '將影片上傳至後端伺服器分析，需要網路連線。'}
-          </Text>
+          <View style={styles.headerCopy}>
+            <Text style={styles.eyebrow}>SETTINGS</Text>
+            <Text style={styles.headerTitle}>分析設定</Text>
+            <Text style={styles.headerSub}>
+              {isOffline ? '目前使用裝置端分析' : '目前使用伺服器分析'}
+            </Text>
+          </View>
         </View>
 
-        {/* Backend URL — only show in online mode */}
-        {!isOffline && (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>伺服器連線</Text>
+        <SegmentedTabs
+          tabs={SETTINGS_TABS}
+          activeTab={activeTab}
+          onSelect={setActiveTab}
+          containerStyle={styles.tabs}
+        />
 
-            <View style={styles.field}>
-              <Text style={styles.label}>Backend URL</Text>
-              <TextInput
-                style={styles.input}
-                value={settings.backendUrl}
-                onChangeText={(v) => {
-                  updateSettings({ backendUrl: v });
-                  if (testResult) setTestResult(null);  // invalidate stale result
-                }}
-                placeholder="https://your-server.example.com"
-                placeholderTextColor={Colors.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                returnKeyType="done"
-                clearButtonMode="while-editing"
-                accessibilityLabel="後端伺服器網址"
-              />
-              <Text style={styles.hint}>
-                需要 backend 服務時才需要填寫；如果你只想用裝置端 AI，請改回離線模式。{'\n'}
-                範例：自架 server (https://...) 或 ngrok / Tailscale 隧道網址。
-              </Text>
+        {activeTab === BASIC_TAB ? (
+          <>
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View>
+                  <Text style={styles.sectionTitle}>分析模式</Text>
+                  <Text style={styles.sectionSub}>{isOffline ? '免網路，適合現場練習' : '適合使用遠端算力'}</Text>
+                </View>
+                <View style={styles.statusPill}>
+                  <View style={[styles.statusDot, { backgroundColor: isOffline ? Colors.green : Colors.accent }]} />
+                  <Text style={styles.statusPillText}>{isOffline ? '離線' : '線上'}</Text>
+                </View>
+              </View>
+              <View style={styles.modeRow}>
+                {modeOptions.map((option) => {
+                  const selected = settings.analysisMode === option.key;
+                  return (
+                    <TouchableOpacity
+                      key={option.key}
+                      style={[styles.modeBtn, selected && styles.modeBtnActive]}
+                      onPress={() => updateSettings({ analysisMode: option.key })}
+                      activeOpacity={0.75}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={`${option.title}，${option.desc}`}
+                    >
+                      <View style={[styles.modeIcon, selected && styles.modeIconActive]}>
+                        <Ionicons
+                          name={option.icon}
+                          size={20}
+                          color={selected ? '#fff' : Colors.textMuted}
+                        />
+                      </View>
+                      <Text style={[styles.modeBtnLabel, selected && styles.modeBtnLabelActive]}>
+                        {option.title}
+                      </Text>
+                      <Text style={styles.modeBtnDesc}>{option.desc}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
 
-            <TouchableOpacity
-              style={[styles.testBtn, (!settings.backendUrl.trim() || testing) && { opacity: 0.5 }]}
-              onPress={onTestConnection}
-              disabled={testing || !settings.backendUrl.trim()}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: testing || !settings.backendUrl.trim(), busy: testing }}
-              accessibilityLabel="測試後端伺服器連線"
-            >
-              {testing ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <ActivityIndicator size="small" color="#fff" />
-                  <Text style={styles.testBtnText}>測試中…</Text>
+            {!isOffline && (
+              <View style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <View>
+                    <Text style={styles.sectionTitle}>伺服器連線</Text>
+                    <Text style={styles.sectionSub}>Backend URL</Text>
+                  </View>
+                  <Ionicons name="server-outline" size={20} color={Colors.textMuted} />
                 </View>
-              ) : (
-                <Text style={styles.testBtnText}>測試連線</Text>
-              )}
-            </TouchableOpacity>
-            {testResult !== null && (
-              <Text style={[styles.testResult, { color: testResult.ok ? Colors.green : Colors.red }]}>
-                {testResult.ok ? '✓ ' : '✗ '}{testResult.msg}
-              </Text>
+                <View style={styles.field}>
+                  <TextInput
+                    style={styles.input}
+                    value={settings.backendUrl}
+                    onChangeText={(v) => {
+                      updateSettings({ backendUrl: v });
+                      if (testResult) setTestResult(null);
+                    }}
+                    placeholder="https://your-server.example.com"
+                    placeholderTextColor={Colors.textMuted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    returnKeyType="done"
+                    clearButtonMode="while-editing"
+                    accessibilityLabel="後端伺服器網址"
+                  />
+                </View>
+                <TouchableOpacity
+                  style={[styles.primaryBtn, (!settings.backendUrl.trim() || testing) && styles.btnDisabled]}
+                  onPress={onTestConnection}
+                  disabled={testing || !settings.backendUrl.trim()}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: testing || !settings.backendUrl.trim(), busy: testing }}
+                  accessibilityLabel="測試後端伺服器連線"
+                >
+                  {testing ? (
+                    <View style={styles.btnInner}>
+                      <ActivityIndicator size="small" color="#fff" />
+                      <Text style={styles.primaryBtnText}>測試中…</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.btnInner}>
+                      <Ionicons name="pulse-outline" size={18} color="#fff" />
+                      <Text style={styles.primaryBtnText}>測試連線</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+                {testResult !== null && (
+                  <View style={[styles.resultBanner, testResult.ok ? styles.resultGood : styles.resultBad]}>
+                    <Ionicons
+                      name={testResult.ok ? 'checkmark-circle-outline' : 'alert-circle-outline'}
+                      size={18}
+                      color={testResult.ok ? Colors.green : Colors.red}
+                    />
+                    <Text style={[styles.resultText, { color: testResult.ok ? Colors.green : Colors.red }]}>
+                      {testResult.msg}
+                    </Text>
+                  </View>
+                )}
+              </View>
             )}
-          </View>
-        )}
 
-        {/* Analysis Parameters */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>分析參數</Text>
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View>
+                  <Text style={styles.sectionTitle}>量測資料</Text>
+                  <Text style={styles.sectionSub}>影響球速與距離估算</Text>
+                </View>
+                <Ionicons name="analytics-outline" size={20} color={Colors.textMuted} />
+              </View>
 
-          <View style={styles.field}>
-            <Text style={styles.label}>投打距離 (公尺)</Text>
-            <TextInput
-              style={styles.input}
-              value={moundText}
-              onChangeText={setMoundText}
-              onBlur={() => {
-                const n = parseFloat(moundText);
-                const val = isNaN(n) || n < 0 ? 0 : n;
-                setMoundText(val > 0 ? String(val) : '');
-                updateSettings({ moundDistanceM: val });
-              }}
-              keyboardType="decimal-pad"
-              placeholder="請量測實際距離 (例如 7.0)"
-              placeholderTextColor={Colors.textMuted}
-              returnKeyType="done"
-              accessibilityLabel="投打距離（公尺），影響球速計算準度"
-            />
-            <Text style={styles.hint}>
-              ⚠️ 此數值直接影響球速準度。請務必自行量測。{'\n'}
-              MLB 18.44 m · 高中 ~16 m · 少棒 ~14 m · 後院練投 5–10 m{'\n'}
-              留空 = 自動從 pose 估算（準度較低，建議手動輸入）
-            </Text>
-          </View>
+              <View style={styles.field}>
+                <Text style={styles.label}>投打距離</Text>
+                <View style={styles.inputWithUnit}>
+                  <TextInput
+                    style={styles.unitInput}
+                    value={moundText}
+                    onChangeText={setMoundText}
+                    onBlur={() => {
+                      const n = parseFloat(moundText);
+                      const val = isNaN(n) || n < 0 ? 0 : n;
+                      setMoundText(val > 0 ? String(val) : '');
+                      updateSettings({ moundDistanceM: val });
+                    }}
+                    keyboardType="decimal-pad"
+                    placeholder="例如 7.0"
+                    placeholderTextColor={Colors.textMuted}
+                    returnKeyType="done"
+                    accessibilityLabel="投打距離，公尺"
+                  />
+                  <Text style={styles.unitText}>m</Text>
+                </View>
+                <View style={styles.quickRow}>
+                  {MOUND_PRESETS.map((value) => {
+                    const selected = Number(moundText) === value;
+                    return (
+                      <TouchableOpacity
+                        key={value}
+                        style={[styles.quickChip, selected && styles.quickChipActive]}
+                        onPress={() => {
+                          setMoundText(String(value));
+                          updateSettings({ moundDistanceM: value });
+                        }}
+                        activeOpacity={0.75}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={`投打距離 ${value} 公尺`}
+                      >
+                        <Text style={[styles.quickChipText, selected && styles.quickChipTextActive]}>
+                          {value}m
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <Text style={styles.hint}>留空會自動估算；手動量測通常更穩。</Text>
+              </View>
 
-          <View style={styles.field}>
-            <Text style={styles.label}>投手身高 (公尺，選填)</Text>
-            <TextInput
-              style={styles.input}
-              value={pitcherHeightText}
-              onChangeText={setPitcherHeightText}
-              onBlur={() => {
-                const n = parseFloat(pitcherHeightText);
-                if (!isNaN(n) && n > 1 && n < 2.4) {
-                  setPitcherHeightText(String(n));
-                  updateSettings({ pitcherHeightM: n });
-                } else {
-                  setPitcherHeightText('');
-                  updateSettings({ pitcherHeightM: undefined });
-                }
-              }}
-              keyboardType="decimal-pad"
-              placeholder="例如 1.75"
-              placeholderTextColor={Colors.textMuted}
-              returnKeyType="done"
-              accessibilityLabel="投手身高（公尺），可選"
-            />
-            <Text style={styles.hint}>
-              若留空會用肩寬估距；填入身高時改用全身高，對側身姿勢更穩。
-            </Text>
-          </View>
+              <View style={styles.field}>
+                <Text style={styles.label}>投手身高</Text>
+                <View style={styles.inputWithUnit}>
+                  <TextInput
+                    style={styles.unitInput}
+                    value={pitcherHeightText}
+                    onChangeText={setPitcherHeightText}
+                    onBlur={() => {
+                      const n = parseFloat(pitcherHeightText);
+                      if (!isNaN(n) && n > 1 && n < 2.4) {
+                        setPitcherHeightText(String(n));
+                        updateSettings({ pitcherHeightM: n });
+                      } else {
+                        setPitcherHeightText('');
+                        updateSettings({ pitcherHeightM: undefined });
+                      }
+                    }}
+                    keyboardType="decimal-pad"
+                    placeholder="選填，例如 1.75"
+                    placeholderTextColor={Colors.textMuted}
+                    returnKeyType="done"
+                    accessibilityLabel="投手身高，公尺，可選"
+                  />
+                  <Text style={styles.unitText}>m</Text>
+                </View>
+              </View>
 
-          <View style={styles.field}>
-            <Text style={styles.label}>跨步補償距離 (公尺)</Text>
-            <TextInput
-              style={styles.input}
-              value={strideText}
-              onChangeText={setStrideText}
-              onBlur={() => {
-                const n = parseFloat(strideText);
-                const val = isNaN(n) ? 0 : n;
-                setStrideText(String(val));
-                updateSettings({ strideCorrectionM: val });
-              }}
-              keyboardType="decimal-pad"
-              placeholder="例如 1.7"
-              placeholderTextColor={Colors.textMuted}
-              returnKeyType="done"
-              accessibilityLabel="跨步補償（公尺）"
-            />
-            <Text style={styles.hint}>
-              投手跨步距離（公尺），從投球距離中扣除以提升準確度，不確定請填 0
-            </Text>
-          </View>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>偵測信心閾值</Text>
-            <TextInput
-              style={styles.input}
-              value={confText}
-              onChangeText={setConfText}
-              onBlur={() => {
-                const n = parseFloat(confText);
-                const val = isNaN(n) || n <= 0 ? 0.03 : n;
-                setConfText(String(val));
-                updateSettings({ confThreshold: val });
-              }}
-              keyboardType="decimal-pad"
-              placeholder="0.03"
-              placeholderTextColor={Colors.textMuted}
-              returnKeyType="done"
-              accessibilityLabel="偵測信心閾值，數值越小偵測越多"
-            />
-            <Text style={styles.hint}>
-              數值越小 = 偵測到的球越多，但雜訊也較高。建議 0.03–0.10。
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>好球帶校正</Text>
-          <Text style={styles.hint}>
-            主審視角框線座標，0–1 代表影片畫面比例。預設 x 0.33–0.67，y 0.56–0.86。
-          </Text>
-          <View style={styles.zoneGrid}>
-            {([
-              ['x_min', zxMinText, setZxMinText, '0.33', '好球帶左邊界'],
-              ['x_max', zxMaxText, setZxMaxText, '0.67', '好球帶右邊界'],
-              ['y_min', zyMinText, setZyMinText, '0.56', '好球帶上邊界'],
-              ['y_max', zyMaxText, setZyMaxText, '0.86', '好球帶下邊界'],
-            ] as const).map(([label, value, setter, placeholder, a11y]) => (
-              <View key={label} style={styles.zoneField}>
-                <Text style={styles.label}>{label}</Text>
+              <View style={[styles.field, styles.fieldLast]}>
+                <Text style={styles.label}>跨步補償</Text>
+                <View style={styles.inputWithUnit}>
+                  <TextInput
+                    style={styles.unitInput}
+                    value={strideText}
+                    onChangeText={setStrideText}
+                    onBlur={() => {
+                      const n = parseFloat(strideText);
+                      const val = isNaN(n) ? 0 : n;
+                      setStrideText(String(val));
+                      updateSettings({ strideCorrectionM: val });
+                    }}
+                    keyboardType="decimal-pad"
+                    placeholder="例如 1.7"
+                    placeholderTextColor={Colors.textMuted}
+                    returnKeyType="done"
+                    accessibilityLabel="跨步補償距離，公尺"
+                  />
+                  <Text style={styles.unitText}>m</Text>
+                </View>
+                <View style={styles.quickRow}>
+                  {STRIDE_PRESETS.map((value) => {
+                    const selected = Number(strideText) === value;
+                    return (
+                      <TouchableOpacity
+                        key={value}
+                        style={[styles.quickChip, selected && styles.quickChipActive]}
+                        onPress={() => {
+                          setStrideText(String(value));
+                          updateSettings({ strideCorrectionM: value });
+                        }}
+                        activeOpacity={0.75}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={`跨步補償 ${value} 公尺`}
+                      >
+                        <Text style={[styles.quickChipText, selected && styles.quickChipTextActive]}>
+                          {value}m
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View>
+                  <Text style={styles.sectionTitle}>偵測精度</Text>
+                  <Text style={styles.sectionSub}>YOLO confidence threshold</Text>
+                </View>
+                <View style={styles.valuePill}>
+                  <Text style={styles.valuePillText}>{settings.confThreshold}</Text>
+                </View>
+              </View>
+              <View style={[styles.field, styles.fieldLast]}>
+                <Text style={styles.label}>偵測信心閾值</Text>
                 <TextInput
                   style={styles.input}
-                  value={value}
-                  onChangeText={setter}
-                  onBlur={commitStrikeZone}
+                  value={confText}
+                  onChangeText={setConfText}
+                  onBlur={() => {
+                    const n = parseFloat(confText);
+                    const val = isNaN(n) || n <= 0 ? 0.03 : n;
+                    setConfText(String(val));
+                    updateSettings({ confThreshold: val });
+                  }}
                   keyboardType="decimal-pad"
-                  placeholder={placeholder}
+                  placeholder="0.03"
                   placeholderTextColor={Colors.textMuted}
                   returnKeyType="done"
-                  accessibilityLabel={a11y}
+                  accessibilityLabel="偵測信心閾值"
                 />
+                <View style={styles.quickRow}>
+                  {CONF_PRESETS.map((value) => {
+                    const selected = confText === value;
+                    return (
+                      <TouchableOpacity
+                        key={value}
+                        style={[styles.quickChip, selected && styles.quickChipActive]}
+                        onPress={() => {
+                          setConfText(value);
+                          updateSettings({ confThreshold: Number(value) });
+                        }}
+                        activeOpacity={0.75}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={`偵測信心閾值 ${value}`}
+                      >
+                        <Text style={[styles.quickChipText, selected && styles.quickChipTextActive]}>
+                          {value}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <Text style={styles.hint}>較低會抓到更多候選球點，較高會減少雜訊。</Text>
               </View>
-            ))}
-          </View>
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={resetStrikeZone}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel="重置好球帶為預設值"
-          >
-            <Text style={styles.secondaryBtnText}>重置為預設</Text>
-          </TouchableOpacity>
-          {settings.strikeZone && (
-            <Text style={[styles.hint, { color: Colors.green }]}>
-              已套用：x {settings.strikeZone.xMin}–{settings.strikeZone.xMax}，
-              y {settings.strikeZone.yMin}–{settings.strikeZone.yMax}
-            </Text>
-          )}
-        </View>
+            </View>
 
-        {/* About */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>關於</Text>
-          <Text style={styles.aboutText}>
-            <Text style={{ color: Colors.text, fontWeight: '700' }}>SpeedGun</Text>
-            {'\n'}AI 棒球球速與球路分析工具。
-            {'\n\n'}
-            {isOffline
-              ? '選擇影片 → 裝置端 AI 分析 → 即時取得球速與位移資料。'
-              : '上傳影片 → 伺服器分析 → 即時取得 mph / km/h 球速。'}
-            {'\n\n'}採用 YOLO 棒球偵測、身體姿勢估測，以及物理模型球速計算。
-          </Text>
-        </View>
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View>
+                  <Text style={styles.sectionTitle}>好球帶校正</Text>
+                  <Text style={styles.sectionSub}>主審視角畫面比例 0-1</Text>
+                </View>
+                <Ionicons name="grid-outline" size={20} color={Colors.textMuted} />
+              </View>
+              <View style={styles.zoneGrid}>
+                {([
+                  ['x_min', zxMinText, setZxMinText, '0.33', '好球帶左邊界'],
+                  ['x_max', zxMaxText, setZxMaxText, '0.67', '好球帶右邊界'],
+                  ['y_min', zyMinText, setZyMinText, '0.56', '好球帶上邊界'],
+                  ['y_max', zyMaxText, setZyMaxText, '0.86', '好球帶下邊界'],
+                ] as const).map(([label, value, setter, placeholder, a11y]) => (
+                  <View key={label} style={styles.zoneField}>
+                    <Text style={styles.label}>{label}</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={value}
+                      onChangeText={setter}
+                      onBlur={commitStrikeZone}
+                      keyboardType="decimal-pad"
+                      placeholder={placeholder}
+                      placeholderTextColor={Colors.textMuted}
+                      returnKeyType="done"
+                      accessibilityLabel={a11y}
+                    />
+                  </View>
+                ))}
+              </View>
+              <TouchableOpacity
+                style={styles.secondaryBtn}
+                onPress={resetStrikeZone}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityLabel="重置好球帶為預設值"
+              >
+                <Ionicons name="refresh-outline" size={17} color={Colors.text} />
+                <Text style={styles.secondaryBtnText}>重置為預設</Text>
+              </TouchableOpacity>
+              {settings.strikeZone && (
+                <View style={styles.zoneApplied}>
+                  <Ionicons name="checkmark-circle-outline" size={17} color={Colors.green} />
+                  <Text style={styles.zoneAppliedText}>
+                    x {settings.strikeZone.xMin}-{settings.strikeZone.xMax} / y {settings.strikeZone.yMin}-{settings.strikeZone.yMax}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View>
+                  <Text style={styles.sectionTitle}>關於</Text>
+                  <Text style={styles.sectionSub}>SpeedGun</Text>
+                </View>
+                <Ionicons name="information-circle-outline" size={20} color={Colors.textMuted} />
+              </View>
+              <Text style={styles.aboutText}>
+                AI 棒球球速與球路分析工具，整合 YOLO 棒球偵測、姿勢估測與物理模型。
+              </Text>
+            </View>
+          </>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
   scroll: {
     flex: 1,
     backgroundColor: Colors.bg,
   },
   content: {
-    paddingBottom: 40,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: 48,
+  },
+  headerCard: {
+    minHeight: 96,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.xxl,
+    padding: Spacing.lg,
+    ...Shadows.soft,
+  },
+  headerIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(14,165,233,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(14,165,233,0.22)',
+  },
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  eyebrow: {
+    color: Colors.textMuted,
+    fontSize: FontSize.xs,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    marginBottom: 3,
+  },
+  headerTitle: {
+    color: Colors.text,
+    fontSize: 24,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  headerSub: {
+    color: Colors.textMuted,
+    fontSize: FontSize.sm,
+    marginTop: 4,
+  },
+  tabs: {
+    marginHorizontal: 0,
+    marginTop: Spacing.md,
+    marginBottom: 0,
   },
   card: {
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 16,
-    padding: 20,
-    marginHorizontal: 16,
-    marginTop: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    marginTop: Spacing.md,
+    ...Shadows.soft,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginBottom: Spacing.md,
   },
   sectionTitle: {
-    fontSize: 14,
+    fontSize: FontSize.lg,
+    color: Colors.text,
+    fontWeight: '900',
+  },
+  sectionSub: {
+    fontSize: FontSize.sm,
     color: Colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: 16,
-    fontWeight: '600',
+    marginTop: 2,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 32,
+    borderRadius: 999,
+    backgroundColor: Colors.surface2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 10,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusPillText: {
+    color: Colors.text,
+    fontSize: FontSize.xs,
+    fontWeight: '900',
   },
   modeRow: {
     flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12,
+    gap: Spacing.sm,
   },
   modeBtn: {
     flex: 1,
-    borderWidth: 2,
+    minHeight: 118,
+    borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.surface2,
+    padding: Spacing.md,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
   },
   modeBtnActive: {
     borderColor: Colors.accent,
-    backgroundColor: Colors.accent + '0D',
+    backgroundColor: 'rgba(14,165,233,0.08)',
   },
-  modeBtnIcon: {
-    fontSize: 24,
-    marginBottom: 4,
+  modeIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 2,
+  },
+  modeIconActive: {
+    backgroundColor: Colors.accent,
+    borderColor: Colors.accent,
   },
   modeBtnLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: Colors.textMuted,
+    fontSize: FontSize.md,
+    fontWeight: '900',
+    color: Colors.text,
+    textAlign: 'center',
   },
   modeBtnLabelActive: {
     color: Colors.accent,
   },
   modeBtnDesc: {
-    fontSize: 11,
+    fontSize: FontSize.sm,
     color: Colors.textMuted,
-    textAlign: 'center',
-    lineHeight: 15,
-  },
-  modeHint: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    lineHeight: 18,
     textAlign: 'center',
   },
   field: {
-    marginBottom: 18,
+    marginBottom: Spacing.lg,
+  },
+  fieldLast: {
+    marginBottom: 0,
+  },
+  label: {
+    fontSize: FontSize.sm,
+    color: Colors.textMuted,
+    marginBottom: Spacing.xs,
+    fontWeight: '800',
+  },
+  input: {
+    minHeight: TouchTarget.min,
+    backgroundColor: Colors.surface2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    color: Colors.text,
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    paddingVertical: 10,
+    paddingHorizontal: Spacing.md,
+  },
+  inputWithUnit: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.md,
+  },
+  unitInput: {
+    flex: 1,
+    minWidth: 0,
+    color: Colors.text,
+    fontSize: FontSize.lg,
+    fontWeight: '800',
+    paddingVertical: 0,
+    fontVariant: ['tabular-nums'],
+  },
+  unitText: {
+    color: Colors.textMuted,
+    fontSize: FontSize.sm,
+    fontWeight: '900',
+  },
+  quickRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+  },
+  quickChip: {
+    minHeight: TouchTarget.min,
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.md,
+  },
+  quickChipActive: {
+    borderColor: Colors.accent,
+    backgroundColor: 'rgba(14,165,233,0.10)',
+  },
+  quickChipText: {
+    color: Colors.textMuted,
+    fontSize: FontSize.sm,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  quickChipTextActive: {
+    color: Colors.accent,
+  },
+  hint: {
+    fontSize: FontSize.sm,
+    color: Colors.textMuted,
+    marginTop: Spacing.sm,
+    lineHeight: 18,
+  },
+  primaryBtn: {
+    minHeight: TouchTarget.min,
+    backgroundColor: Colors.accent,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnDisabled: {
+    opacity: 0.5,
+  },
+  btnInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+  },
+  primaryBtnText: {
+    color: '#fff',
+    fontSize: FontSize.md,
+    fontWeight: '800',
+  },
+  resultBanner: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.md,
+    marginTop: Spacing.md,
+  },
+  resultGood: {
+    backgroundColor: 'rgba(16,185,129,0.08)',
+    borderColor: 'rgba(16,185,129,0.24)',
+  },
+  resultBad: {
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    borderColor: 'rgba(239,68,68,0.24)',
+  },
+  resultText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    fontWeight: '800',
+  },
+  valuePill: {
+    minHeight: 34,
+    minWidth: 62,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(14,165,233,0.24)',
+    backgroundColor: 'rgba(14,165,233,0.10)',
+    paddingHorizontal: Spacing.md,
+  },
+  valuePillText: {
+    color: Colors.accent,
+    fontSize: FontSize.sm,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
   },
   zoneGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
-    marginTop: 12,
+    gap: Spacing.sm,
   },
   zoneField: {
-    width: '47%',
-  },
-  label: {
-    fontSize: 13,
-    color: Colors.textMuted,
-    marginBottom: 6,
-    fontWeight: '600',
-    letterSpacing: 0.3,
-  },
-  input: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-    color: Colors.text,
-    fontSize: 16,
-    padding: 12,
-    paddingHorizontal: 14,
-  },
-  hint: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginTop: 4,
-    lineHeight: 18,
-  },
-  testBtn: {
-    backgroundColor: Colors.accent,
-    borderRadius: 10,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-  testBtnText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  testResult: {
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginTop: 8,
+    flexBasis: '47%',
+    flexGrow: 1,
   },
   secondaryBtn: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-    height: 42,
+    minHeight: TouchTarget.min,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 12,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.surface2,
+    marginTop: Spacing.md,
   },
   secondaryBtnText: {
     color: Colors.text,
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: FontSize.md,
+    fontWeight: '800',
+  },
+  zoneApplied: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.lg,
+    backgroundColor: 'rgba(16,185,129,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.24)',
+    paddingHorizontal: Spacing.md,
+    marginTop: Spacing.md,
+  },
+  zoneAppliedText: {
+    flex: 1,
+    color: Colors.green,
+    fontSize: FontSize.sm,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
   },
   aboutText: {
-    fontSize: 14,
+    fontSize: FontSize.md,
     color: Colors.textMuted,
-    lineHeight: 24,
+    lineHeight: 22,
   },
 });

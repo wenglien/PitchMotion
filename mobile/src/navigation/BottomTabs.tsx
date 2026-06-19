@@ -1,8 +1,8 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { View } from 'react-native';
-import { Colors } from '../theme';
+import { StyleSheet, View } from 'react-native';
+import { Colors, Radius } from '../theme';
 import { BottomTabParamList } from './types';
 import { useResult } from '../context/ResultContext';
 import AnalyzeScreen from '../screens/AnalyzeScreen';
@@ -12,11 +12,11 @@ import SettingsScreen from '../screens/SettingsScreen';
 
 const Tab = createBottomTabNavigator<BottomTabParamList>();
 
-const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
-  Analyze: 'videocam-outline',
-  Result: 'speedometer-outline',
-  History: 'time-outline',
-  Settings: 'settings-outline',
+const icons: Record<string, { inactive: keyof typeof Ionicons.glyphMap; active: keyof typeof Ionicons.glyphMap }> = {
+  Analyze: { inactive: 'videocam-outline', active: 'videocam' },
+  Result: { inactive: 'speedometer-outline', active: 'speedometer' },
+  History: { inactive: 'time-outline', active: 'time' },
+  Settings: { inactive: 'settings-outline', active: 'settings' },
 };
 
 const TAB_LABELS: Record<string, string> = {
@@ -34,12 +34,13 @@ export default function BottomTabs() {
       screenOptions={({ route }) => ({
         headerStyle: { backgroundColor: Colors.bg, shadowColor: 'transparent', elevation: 0 },
         headerTitleStyle: { fontWeight: '800', color: Colors.text, fontSize: 18 },
+        headerShadowVisible: false,
         tabBarStyle: {
           backgroundColor: Colors.surface,
           borderTopWidth: 1,
           borderTopColor: Colors.border,
-          height: 68,
-          paddingBottom: 10,
+          height: 72,
+          paddingBottom: 11,
           paddingTop: 8,
         },
         tabBarActiveTintColor: Colors.accent,
@@ -52,21 +53,15 @@ export default function BottomTabs() {
         tabBarIcon: ({ color, size, focused }) => {
           const showDot = route.name === 'Result' && hasNewResult && !focused;
           return (
-            <View>
-              <Ionicons name={icons[route.name]} size={size} color={color} />
+            <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
+              <Ionicons
+                name={focused ? icons[route.name].active : icons[route.name].inactive}
+                size={focused ? size - 1 : size}
+                color={focused ? '#fff' : color}
+              />
               {showDot && (
                 <View
-                  style={{
-                    position: 'absolute',
-                    top: -2,
-                    right: -4,
-                    width: 8,
-                    height: 8,
-                    borderRadius: 4,
-                    backgroundColor: Colors.red,
-                    borderWidth: 1,
-                    borderColor: Colors.surface,
-                  }}
+                  style={styles.newDot}
                 />
               )}
             </View>
@@ -103,3 +98,27 @@ export default function BottomTabs() {
     </Tab.Navigator>
   );
 }
+
+const styles = StyleSheet.create({
+  iconWrap: {
+    width: 34,
+    height: 28,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconWrapActive: {
+    backgroundColor: Colors.accent,
+  },
+  newDot: {
+    position: 'absolute',
+    top: -2,
+    right: -4,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.red,
+    borderWidth: 1,
+    borderColor: Colors.surface,
+  },
+});

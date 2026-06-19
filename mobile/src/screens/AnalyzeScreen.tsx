@@ -22,6 +22,7 @@ const MAX_MB = 50;
 const ABS_ZONE_TOP_RATIO = 0.535;
 const ABS_ZONE_BOTTOM_RATIO = 0.27;
 const LEGACY_ZONE_HEIGHT_M = 0.58;
+const BATTER_HEIGHT_PRESETS = ['1.65', '1.75', '1.85'];
 
 type SelectedVideoMeta = {
   sizeMB: string;
@@ -382,6 +383,16 @@ export default function AnalyzeScreen() {
       done: true,
     },
   ];
+  const actionLabel = !videoUri
+    ? '請先選擇影片'
+    : !hasValidBatterHeight
+      ? '輸入打者身高後開始'
+      : isOffline ? '開始離線分析' : '開始線上分析';
+  const actionIcon: keyof typeof Ionicons.glyphMap = !videoUri
+    ? 'videocam-outline'
+    : !hasValidBatterHeight
+      ? 'body-outline'
+      : isOffline ? 'phone-portrait-outline' : 'cloud-upload-outline';
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
@@ -433,6 +444,22 @@ export default function AnalyzeScreen() {
                 <View style={[styles.modeDot, { backgroundColor: isOffline ? Colors.green : Colors.accent }]} />
                 <Text style={styles.modePillText}>{isOffline ? '離線' : '雲端'}</Text>
               </View>
+            </View>
+            <View style={styles.stepRail}>
+              {readinessItems.map((item, index) => (
+                <View key={item.key} style={styles.stepItem}>
+                  <View style={[styles.stepNode, item.done && styles.stepNodeDone]}>
+                    <Ionicons
+                      name={item.done ? 'checkmark' : item.icon}
+                      size={15}
+                      color={item.done ? '#fff' : Colors.textMuted}
+                    />
+                  </View>
+                  <Text style={[styles.stepText, item.done && styles.stepTextDone]}>
+                    {index === 0 ? '選片' : index === 1 ? '身高' : '開始'}
+                  </Text>
+                </View>
+              ))}
             </View>
             <View style={styles.readinessGrid}>
               {readinessItems.map((item) => (
@@ -560,6 +587,33 @@ export default function AnalyzeScreen() {
                 />
                 <Text style={styles.inputUnit}>m</Text>
               </View>
+              <View style={styles.presetRow}>
+                {BATTER_HEIGHT_PRESETS.map((preset) => {
+                  const selected = batterHeightText === preset;
+                  return (
+                    <TouchableOpacity
+                      key={preset}
+                      style={[styles.presetChip, selected && styles.presetChipActive]}
+                      onPress={() => {
+                        setBatterHeightText(preset);
+                        setHeightTouched(true);
+                        if (statusType === 'error') {
+                          setStatusMsg('');
+                          setStatusType('');
+                        }
+                      }}
+                      activeOpacity={0.75}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={`套用打者身高 ${preset} 公尺`}
+                    >
+                      <Text style={[styles.presetChipText, selected && styles.presetChipTextActive]}>
+                        {preset}m
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
               <View style={styles.zonePreviewRow}>
                 <View style={styles.zonePreviewItem}>
                   <Text style={styles.zonePreviewValue}>43.2</Text>
@@ -653,9 +707,10 @@ export default function AnalyzeScreen() {
               </Text>
             </View>
           ) : (
-            <Text style={styles.analyzeBtnText}>
-              {!videoUri ? '請先選擇影片' : !hasValidBatterHeight ? '輸入打者身高後開始' : (isOffline ? '開始離線分析' : '開始線上分析')}
-            </Text>
+            <View style={styles.buttonInner}>
+              <Ionicons name={actionIcon} size={20} color="#fff" />
+              <Text style={styles.analyzeBtnText}>{actionLabel}</Text>
+            </View>
           )}
         </TouchableOpacity>
       </View>
@@ -721,9 +776,49 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.8,
   },
+  stepRail: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.surface2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.xl,
+    padding: Spacing.sm,
+    marginTop: Spacing.lg,
+  },
+  stepItem: {
+    flex: 1,
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  stepNode: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  stepNodeDone: {
+    backgroundColor: Colors.green,
+    borderColor: Colors.green,
+  },
+  stepText: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  stepTextDone: {
+    color: Colors.text,
+  },
   readinessGrid: {
     gap: Spacing.sm,
-    marginTop: Spacing.lg,
+    marginTop: Spacing.sm,
   },
   readinessItem: {
     minHeight: 48,
@@ -914,6 +1009,36 @@ const styles = StyleSheet.create({
   },
   inputError: {
     borderColor: Colors.red,
+  },
+  presetRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+  },
+  presetChip: {
+    minHeight: 44,
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.md,
+  },
+  presetChipActive: {
+    borderColor: Colors.accent,
+    backgroundColor: 'rgba(14,165,233,0.10)',
+  },
+  presetChipText: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  presetChipTextActive: {
+    color: Colors.accent,
   },
   heightHint: {
     marginTop: Spacing.sm,
@@ -1157,5 +1282,11 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 17,
     fontWeight: '600',
+  },
+  buttonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
   },
 });

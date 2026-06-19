@@ -3,6 +3,7 @@ import {
   View, Text, FlatList, TouchableOpacity, ActivityIndicator,
   StyleSheet, Alert,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Colors, Spacing, Radius, FontSize, Shadows } from '../theme';
 import { Session } from '../types';
@@ -49,6 +50,14 @@ export default function HistoryScreen() {
       ],
     );
   };
+  const totalPitches = sessions.reduce((sum, session) => sum + session.records.length, 0);
+  const allSpeeds = sessions
+    .flatMap((session) => session.records)
+    .map(getSpeedKmh)
+    .filter((v): v is number => v !== null);
+  const bestMph = allSpeeds.length
+    ? (Math.max(...allSpeeds) * KMH_TO_MPH).toFixed(1)
+    : null;
 
   const renderSession = ({ item, index }: { item: Session; index: number }) => {
     const { dateLabel, records } = item;
@@ -131,8 +140,21 @@ export default function HistoryScreen() {
   if (!loading && sessions.length === 0) {
     return (
       <View style={styles.centered}>
+        <View style={styles.emptyIcon}>
+          <Ionicons name="time-outline" size={28} color={Colors.accent} />
+        </View>
         <Text style={styles.emptyTitle}>尚無投球紀錄</Text>
         <Text style={styles.emptyBody}>完成第一次分析後，紀錄會自動儲存在這裡。</Text>
+        <TouchableOpacity
+          style={styles.emptyAction}
+          onPress={() => navigation.getParent()?.navigate('Analyze')}
+          activeOpacity={0.75}
+          accessibilityRole="button"
+          accessibilityLabel="前往分析頁面"
+        >
+          <Ionicons name="videocam-outline" size={18} color="#fff" />
+          <Text style={styles.emptyActionText}>開始分析</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -147,17 +169,42 @@ export default function HistoryScreen() {
         refreshing={loading}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
-          <View style={styles.listHeader}>
-            <Text style={styles.listHeaderText}>{sessions.length} 次練習</Text>
-            <TouchableOpacity
-              onPress={onClearAll}
-              hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
-              accessibilityRole="button"
-              accessibilityLabel="清除所有歷史投球紀錄"
-              accessibilityHint="此動作無法復原"
-            >
-              <Text style={styles.clearBtn}>清除全部</Text>
-            </TouchableOpacity>
+          <View>
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryHeader}>
+                <View>
+                  <Text style={styles.summaryEyebrow}>HISTORY</Text>
+                  <Text style={styles.summaryTitle}>練習紀錄</Text>
+                </View>
+                <Ionicons name="bar-chart-outline" size={22} color={Colors.textMuted} />
+              </View>
+              <View style={styles.summaryGrid}>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryValue}>{sessions.length}</Text>
+                  <Text style={styles.summaryLabel}>練習</Text>
+                </View>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryValue}>{totalPitches}</Text>
+                  <Text style={styles.summaryLabel}>投球</Text>
+                </View>
+                <View style={styles.summaryItem}>
+                  <Text style={[styles.summaryValue, { color: Colors.accent }]}>{bestMph ?? '-'}</Text>
+                  <Text style={styles.summaryLabel}>最佳 mph</Text>
+                </View>
+              </View>
+            </View>
+            <View style={styles.listHeader}>
+              <Text style={styles.listHeaderText}>最近練習</Text>
+              <TouchableOpacity
+                onPress={onClearAll}
+                hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
+                accessibilityRole="button"
+                accessibilityLabel="清除所有歷史投球紀錄"
+                accessibilityHint="此動作無法復原"
+              >
+                <Text style={styles.clearBtn}>清除全部</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         }
       />
@@ -189,9 +236,92 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
   },
+  emptyIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(14,165,233,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(14,165,233,0.22)',
+    marginBottom: Spacing.md,
+  },
+  emptyAction: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.accent,
+    borderRadius: Radius.xl,
+    paddingHorizontal: Spacing.xl,
+    marginTop: Spacing.lg,
+  },
+  emptyActionText: {
+    color: '#fff',
+    fontSize: FontSize.md,
+    fontWeight: '800',
+  },
   listContent: {
     paddingHorizontal: Spacing.lg,
     paddingBottom: 40,
+  },
+  summaryCard: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    marginTop: Spacing.lg,
+    ...Shadows.soft,
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    marginBottom: Spacing.md,
+  },
+  summaryEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: '900',
+    color: Colors.textMuted,
+    letterSpacing: 0.8,
+    marginBottom: 3,
+  },
+  summaryTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: '900',
+    color: Colors.text,
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  summaryItem: {
+    flex: 1,
+    minHeight: 62,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.surface2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.xs,
+  },
+  summaryValue: {
+    fontSize: FontSize.xl,
+    lineHeight: 24,
+    fontWeight: '900',
+    color: Colors.text,
+    fontVariant: ['tabular-nums'],
+  },
+  summaryLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    fontWeight: '800',
+    marginTop: 4,
   },
   listHeader: {
     flexDirection: 'row',

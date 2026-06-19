@@ -14,6 +14,10 @@ import { useNavigation } from '@react-navigation/native';
 
 const VIDEO_TAB_OVERLAY = '分析疊圖';
 const VIDEO_TAB_ORIGINAL = '原始錄影';
+const RESULT_TAB_OVERVIEW = '總覽';
+const RESULT_TAB_VIDEO = '影片';
+const RESULT_TAB_DETAILS = '細節';
+const RESULT_TABS = [RESULT_TAB_OVERVIEW, RESULT_TAB_VIDEO, RESULT_TAB_DETAILS];
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -34,6 +38,7 @@ export default function ResultScreen() {
   const navigation = useNavigation<any>();
   const [showLogs, setShowLogs] = useState(false);
   const [videoTab, setVideoTab] = useState<string>(VIDEO_TAB_OVERLAY);
+  const [resultTab, setResultTab] = useState<string>(RESULT_TAB_OVERVIEW);
   const logScrollRef = useRef<ScrollView>(null);
 
   if (!result) {
@@ -95,6 +100,9 @@ export default function ResultScreen() {
   const hasOriginal = !!originalUrl;
   const showOverlayTab = hasOverlay && videoTab === VIDEO_TAB_OVERLAY;
   const activeVideoUrl = showOverlayTab ? overlayUrl : (hasOriginal ? originalUrl : overlayUrl);
+  const hasResultVideo = (hasOverlay || hasOriginal) && !!activeVideoUrl;
+  const resultTabs = hasResultVideo ? RESULT_TABS : RESULT_TABS.filter((tab) => tab !== RESULT_TAB_VIDEO);
+  const selectedResultTab = resultTabs.includes(resultTab) ? resultTab : RESULT_TAB_OVERVIEW;
   const videoAspectRatio = result.video_width && result.video_height
     ? result.video_width / result.video_height
     : 16 / 9;
@@ -276,6 +284,17 @@ export default function ResultScreen() {
         </View>
       </View>
 
+      <View style={[styles.resultTabsWrap, { width: panelWidth }]}>
+        <SegmentedTabs
+          tabs={resultTabs}
+          activeTab={selectedResultTab}
+          onSelect={setResultTab}
+          containerStyle={styles.resultTabs}
+        />
+      </View>
+
+      {selectedResultTab === RESULT_TAB_OVERVIEW && (
+        <>
       {/* ── Analysis Quality ──────────────────────────────── */}
       <View style={[styles.card, { width: panelWidth }]}>
         <View style={styles.qualityHeader}>
@@ -438,9 +457,11 @@ export default function ResultScreen() {
 
         </View>
       )}
+        </>
+      )}
 
       {/* ── Video Player ──────────────────────────────────── */}
-      {(hasOverlay || hasOriginal) && activeVideoUrl && (
+      {selectedResultTab === RESULT_TAB_VIDEO && hasResultVideo && activeVideoUrl && (
         <View style={[styles.videoCard, { width: panelWidth }]}>
           <View style={styles.videoCardHeader}>
             <View style={styles.videoTitleWrap}>
@@ -485,6 +506,8 @@ export default function ResultScreen() {
         </View>
       )}
 
+      {selectedResultTab === RESULT_TAB_DETAILS && (
+        <>
       {/* ── 分析詳情（給使用者的精簡版；__DEV__ 顯示完整內部數值） ── */}
       {result.yolo_ball_in_frame_count !== undefined && (
         <View style={[styles.card, { width: panelWidth }]}>
@@ -661,6 +684,8 @@ export default function ResultScreen() {
           )}
         </View>
       )}
+        </>
+      )}
 
       {/* ── CTA ───────────────────────────────────────────── */}
       <View style={[styles.ctaWrap, { width: panelWidth }]}>
@@ -740,6 +765,13 @@ const styles = StyleSheet.create({
   speedNA: { fontSize: FontSize.xl, color: '#94a3b8', paddingVertical: 24 },
 
   heroDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.1)', marginVertical: Spacing.md },
+  resultTabsWrap: {
+    marginTop: Spacing.md,
+  },
+  resultTabs: {
+    marginHorizontal: 0,
+    marginVertical: 0,
+  },
 
   statsGrid: {
     flexDirection: 'row',
