@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import Foundation
 
 public final class ExpoSpeedgunModule: Module {
     public func definition() -> ModuleDefinition {
@@ -44,6 +45,46 @@ public final class ExpoSpeedgunModule: Module {
                 return ["error": error.localizedDescription]
             }
         }
+
+        AsyncFunction("getVideoMetadata") { (videoUri: String) -> [String: Any] in
+            do {
+                let videoURL = try Self.resolveVideoURL(videoUri)
+                let decoder = try VideoDecoder(url: videoURL)
+                let targetAnalysisFps = 120
+                let interpolationFactor = decoder.captureFps < targetAnalysisFps
+                    ? max(2, min(4, Int(ceil(Double(targetAnalysisFps) / Double(max(1, decoder.captureFps))))))
+                    : 1
+                return [
+                    "fps": decoder.fps,
+                    "capture_fps": decoder.captureFps,
+                    "effective_fps": decoder.fps * interpolationFactor,
+                    "effective_capture_fps": decoder.captureFps * interpolationFactor,
+                    "interpolation_factor": interpolationFactor,
+                    "width": decoder.displayWidth,
+                    "height": decoder.displayHeight,
+                    "duration_s": decoder.duration,
+                    "total_frames": decoder.totalFrames,
+                ]
+            } catch {
+                return ["error": error.localizedDescription]
+            }
+        }
+    }
+
+    private static func resolveVideoURL(_ videoUri: String) throws -> URL {
+        if videoUri.hasPrefix("file://") {
+            guard let u = URL(string: videoUri) else {
+                throw SpeedgunError.videoLoadFailed("Invalid file URI: \(videoUri)")
+            }
+            return u
+        }
+        if videoUri.hasPrefix("/") {
+            return URL(fileURLWithPath: videoUri)
+        }
+        if videoUri.hasPrefix("ph://") {
+            throw SpeedgunError.videoLoadFailed("Photos library assets not yet supported. Please use a file path.")
+        }
+        return URL(string: videoUri) ?? URL(fileURLWithPath: videoUri)
     }
 
     private static func parseStrikeZone(_ raw: Any?) -> [String: Double]? {

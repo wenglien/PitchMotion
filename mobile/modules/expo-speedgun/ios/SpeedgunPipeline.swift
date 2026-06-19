@@ -86,23 +86,34 @@ final class SpeedgunPipeline {
         }
 
         // Optical-flow interpolation:
-        // ENABLED  for normal/high-fps video (captureFps < 120): doubles frame density,
-        //          reducing per-frame ball displacement and improving YOLO detection.
-        //          30fps → 60fps effective, 60fps → 120fps effective.
-        // DISABLED for slo-mo video (captureFps >= 120): frames already extremely dense
+        // ENABLED  for normal video below 120fps: raises analysis density toward
+        //          120fps, reducing per-frame ball displacement and improving YOLO
+        //          detection. 30fps → 120fps, 60fps → 120fps.
+        // DISABLED for true high-fps/slo-mo video (captureFps >= 120): frames are already dense
         //          (240fps real = 7.5px/frame ball movement). Synthesising mid-frames wastes
         //          CPU, adds near-identical YOLO passes, and doubles the static-FP counter
         //          tick rate — making the real ball look "static" even faster.
-        let useInterpolation = decoder.captureFps < 120
-        let interpolator: FrameInterpolator? = useInterpolation ? (try? FrameInterpolator()) : nil
+        let targetAnalysisFps = 120
+        let requestedInterpolationFactor = decoder.captureFps < targetAnalysisFps
+            ? max(2, min(4, Int(ceil(Double(targetAnalysisFps) / Double(max(1, decoder.captureFps))))))
+            : 1
+        let interpolator: FrameInterpolator? = requestedInterpolationFactor > 1 ? (try? FrameInterpolator()) : nil
+        let interpolationFactor = interpolator == nil ? 1 : requestedInterpolationFactor
+        let useInterpolation = interpolationFactor > 1
+        let interpolationTimes: [Float] = useInterpolation
+            ? (1..<interpolationFactor).map { Float($0) / Float(interpolationFactor) }
+            : []
 
         // effectiveFps       — display/playback fps after interpolation (frame count & progress)
         // effectiveCaptureFps — true capture fps after interpolation (speed calculation & timing)
-        // For normal 30fps:   effectiveFps=60, effectiveCaptureFps=60  (interp on,  same)
+        // For normal 30fps:   effectiveFps=120, effectiveCaptureFps=120 (interp 4x)
+        // For normal 60fps:   effectiveFps=120, effectiveCaptureFps=120 (interp 2x)
         // For slo-mo 240fps:  effectiveFps=30, effectiveCaptureFps=240 (interp off, differ by 8×)
-        let effectiveFps         = useInterpolation ? fps * 2               : fps
-        let effectiveCaptureFps  = useInterpolation ? decoder.captureFps * 2 : decoder.captureFps
-        let effectiveTotalFrames = useInterpolation ? totalFrames * 2        : totalFrames
+        let effectiveFps = fps * interpolationFactor
+        let effectiveCaptureFps = decoder.captureFps * interpolationFactor
+        let effectiveTotalFrames = useInterpolation
+            ? max(1, (totalFrames - 1) * interpolationFactor + 1)
+            : totalFrames
 
         // Log slo-mo detection
         let slowMotionFactor = decoder.captureFps / decoder.fps
@@ -111,7 +122,7 @@ final class SpeedgunPipeline {
                   fps, decoder.captureFps, slowMotionFactor, effectiveCaptureFps)
         }
 
-        let interpStr = useInterpolation ? "interp=2x" : "interp=OFF(slo-mo)"
+        let interpStr = useInterpolation ? "interp=\(interpolationFactor)x" : "interp=OFF"
         let captureFpsStr = decoder.captureFps != fps ? " captureFps=\(decoder.captureFps)" : ""
         reportProgress("setup", 0.04, "Video: \(displayWidth)x\(displayHeight) @ \(fps)fps\(captureFpsStr) → \(effectiveFps)fps (\(interpStr)), \(effectiveTotalFrames) frames")
 
@@ -134,7 +145,8 @@ final class SpeedgunPipeline {
         // release window and make the detected release appear late.
         // Must use effectiveFps (display fps) here because frameIndex increments at effectiveFps rate.
         // But we want ~30 poses per second of REAL time, so divide by effectiveCaptureFps.
-        // For normal 30fps: effectiveCaptureFps=60 → every 2 frames.
+        // For normal 30fps: effectiveCaptureFps=120 → every 4 frames.
+        // For normal 60fps: effectiveCaptureFps=120 → every 4 frames.
         // For 120fps: effectiveCaptureFps=120 → every 4 frames.
         // For slo-mo 240fps: effectiveCaptureFps=240 → every 8 frames.
         let poseEveryN = max(1, Int(round(Double(effectiveCaptureFps) / 30.0)))
@@ -146,15 +158,11 @@ final class SpeedgunPipeline {
         // Static FP tracking
         var staticDetections: [Int: [(cx: Double, cy: Double, area: Double, count: Int)]] = [:]
 
-        // Dynamic static-FP radius: must scale by effectiveCaptureFps (real capture rate),
-        // NOT effectiveFps (display rate). For slo-mo, effectiveFps=30 but effectiveCaptureFps=240.
-        //
-        // Physics: at 90mph (40m/s) pitching 18.44m, ball moves X px in 6 effective frames:
-        //   Normal 30fps (effectiveCaptureFps=60):  40 * (6/60)  * (720/18.44) ≈ 156px  → OK near threshold
-        //   Slo-mo 240fps (effectiveCaptureFps=240): 40 * (6/240) * (720/18.44) ≈  39px  → far below 150px!
-        // Without scaling, slo-mo ball (39px movement) is incorrectly flagged as static.
-        // With scaling: radius = 150 * (240/60) = 600px → 39px < 600px → not static ✓
-        let dynamicStaticRadius = HC_STATIC_RADIUS * max(1.0, Double(effectiveCaptureFps) / 60.0)
+        // Keep the static-FP radius in image pixels. Scaling it up with fps
+        // makes a real ball that moves smoothly through nearby pixels look
+        // "static" for long enough to be filtered, especially after 30/60fps
+        // footage is interpolated to 120fps.
+        let dynamicStaticRadius = HC_STATIC_RADIUS
         // Scale static-FP persistence threshold with real capture fps too:
         // at 120fps effective, a truly-static object is visible 2× more often in the same
         // wall-clock window than at 60fps — without scaling, a swaying fence-post etc. that
@@ -253,18 +261,28 @@ final class SpeedgunPipeline {
         // Always use 1280px high-res detection (full flight mode from frame 0)
         while let pixelBuffer = decoder.nextFrame() {
             autoreleasepool {
-                // If interpolation is on and we have a previous frame, insert the mid-frame first.
-                // If interpolate() fails (e.g. Metal error), insert a blank slot to keep
-                // frameIndex in sync with effectiveFps (every real frame = 2 effective frames).
+                // If interpolation is on and we have a previous frame, insert
+                // synthetic frames first so the effective timeline is ordered:
+                // previous real → generated slots → current real.
                 if useInterpolation, let prev = prevPixelBuffer {
-                    if let interp = interpolator,
-                       let midFrame = interp.interpolate(frameA: prev, frameB: pixelBuffer) {
-                        processFrame(midFrame, isInterpolated: true)
+                    let generated = interpolator?.interpolate(
+                        frameA: prev,
+                        frameB: pixelBuffer,
+                        times: interpolationTimes
+                    ) ?? []
+                    if generated.count == interpolationTimes.count {
+                        for midFrame in generated {
+                            processFrame(midFrame, isInterpolated: true)
+                        }
                     } else {
-                        // Interpolation failed: advance frameIndex by 1 to stay in sync
-                        frameInfos.append(FrameInfo(frameIndex: frameIndex))
-                        rawDetections.append(RawDetection(frameIndex: frameIndex, detections: []))
-                        frameIndex += 1
+                        // Keep the effective timeline stable even if optical flow
+                        // fails on a pair; timing remains correct and later gap-fill
+                        // can bridge these blank slots.
+                        for _ in interpolationTimes {
+                            frameInfos.append(FrameInfo(frameIndex: frameIndex))
+                            rawDetections.append(RawDetection(frameIndex: frameIndex, detections: []))
+                            frameIndex += 1
+                        }
                     }
                 }
 
@@ -299,12 +317,20 @@ final class SpeedgunPipeline {
         //   effectiveFps=30 → maxAge=15 (0.5s playback = 0.0625s real at 240fps) ← WRONG
         //   effectiveCaptureFps=240 → maxAge=120 (0.5s real) ← CORRECT
         // Scaling table:
-        //   Normal 30fps:  effectiveCaptureFps=60  → maxAge=30  (0.5s real)
-        //   Normal 120fps: effectiveCaptureFps=240 → maxAge=120 (0.5s real)
+        //   Normal 30fps:  effectiveCaptureFps=120 → maxAge=60  (0.5s real)
+        //   Normal 60fps:  effectiveCaptureFps=120 → maxAge=60  (0.5s real)
+        //   Normal 120fps: effectiveCaptureFps=120 → maxAge=60  (0.5s real)
         //   Slo-mo 240fps: effectiveCaptureFps=240 → maxAge=120 (0.5s real)
         reportProgress("tracking", 0.58, "Running SORT tracker...")
         let effectiveMaxAge = max(10, Int(round(Double(effectiveCaptureFps) * 0.5)))
-        let sortTracker = SORTTracker(maxAge: effectiveMaxAge, minHits: 1, iouThreshold: 0.1)
+        let frameDiag = Double(displayWidth * displayWidth + displayHeight * displayHeight).squareRoot()
+        let associationDistance = clamp(frameDiag * 0.055, min: 80.0, max: 260.0)
+        let sortTracker = SORTTracker(
+            maxAge: effectiveMaxAge,
+            minHits: 1,
+            iouThreshold: 0.1,
+            maxCenterDistance: associationDistance
+        )
         var tracks: [Int: [TrackPoint]] = [:]
 
         for rd in rawDetections {
@@ -322,9 +348,16 @@ final class SpeedgunPipeline {
             }
         }
 
-        // Find best track (longest, with most vertical movement)
+        // Find best track. Use 2D motion instead of vertical-only movement so
+        // a slightly off-axis camera does not reject a valid diagonal/horizontal
+        // pitch path.
         let minTrackPoints = effectiveFps >= 60 ? 1 : 3
-        let bestTrack = selectBestTrack(tracks: tracks, frameHeight: displayHeight, minPoints: minTrackPoints)
+        let bestTrack = selectBestTrack(
+            tracks: tracks,
+            frameWidth: displayWidth,
+            frameHeight: displayHeight,
+            minPoints: minTrackPoints
+        )
 
         // Update frameInfos from best track.
         // Strategy: use SORT track points as the authoritative positions for
@@ -425,21 +458,29 @@ final class SpeedgunPipeline {
             applyStrideCorrection: applyStride
         )
 
+        func currentTrajectoryPoints() -> [CGPoint] {
+            frameInfos
+                .filter { $0.ballInFrame }
+                .map { $0.ballCenter }
+        }
+
+        func currentTrajectorySamples() -> [BallTrajectorySample] {
+            frameInfos
+                .filter { $0.ballInFrame }
+                .map {
+                    BallTrajectorySample(
+                        frameIndex: $0.frameIndex,
+                        point: $0.ballCenter,
+                        isSynthetic: $0.ballLostTracking
+                    )
+                }
+        }
+
         // Build trajectory points
         let firstBallFrame = frameInfos.firstIndex(where: { $0.ballInFrame })
-        let lastBallFrame  = frameInfos.lastIndex(where: { $0.ballInFrame })
-        let trajectoryPoints: [CGPoint] = frameInfos
-            .filter { $0.ballInFrame }
-            .map { $0.ballCenter }
-        let trajectorySamples: [BallTrajectorySample] = frameInfos
-            .filter { $0.ballInFrame }
-            .map {
-                BallTrajectorySample(
-                    frameIndex: $0.frameIndex,
-                    point: $0.ballCenter,
-                    isSynthetic: $0.ballLostTracking
-                )
-            }
+        var lastBallFrame  = frameInfos.lastIndex(where: { $0.ballInFrame })
+        var trajectoryPoints = currentTrajectoryPoints()
+        var trajectorySamples = currentTrajectorySamples()
 
         // Detect release point from pose signals, constrained by the first
         // reliable ball frame to avoid scene-dependent windup false peaks.
@@ -727,6 +768,21 @@ final class SpeedgunPipeline {
                 speedInfo.catchPointConfidence = confidence
                 speedInfo.plateFitErrorPx = plate.fitErrorPx
                 speedInfo.plateExtrapolatedFrames = plate.extrapolatedFrames
+
+                if let extendedLastFrame = completeTrajectoryTailToEndpoint(
+                    frameInfos: &frameInfos,
+                    endpoint: pos,
+                    endpointFrame: validatedCatchFrame,
+                    fallbackExtraFrames: plate.extrapolatedFrames,
+                    fps: effectiveCaptureFps,
+                    displayWidth: displayWidth,
+                    displayHeight: displayHeight
+                ) {
+                    lastBallFrame = extendedLastFrame
+                    trajectoryPoints = currentTrajectoryPoints()
+                    trajectorySamples = currentTrajectorySamples()
+                }
+
                 let xNorm = Double(pos.x) / Double(displayWidth)
                 let yNorm = Double(pos.y) / Double(displayHeight)
                 speedInfo.plateXNorm = xNorm
@@ -830,7 +886,7 @@ final class SpeedgunPipeline {
                 frameInfos: frameInfos,
                 speedInfo: speedInfo,
                 outputURL: overlayURL,
-                interpFactor: useInterpolation ? 2 : 1,
+                interpFactor: interpolationFactor,
                 progressCallback: { [weak self] pct, detail in
                     self?.reportProgress("overlay", 0.71 + pct * 0.24, detail)
                 }
@@ -885,6 +941,8 @@ final class SpeedgunPipeline {
         )
         // #endregion
         result["trajectory_count"] = trajectoryPoints.count
+        result["trajectory_actual_count"] = trajectorySamples.filter { !$0.isSynthetic }.count
+        result["trajectory_synthetic_count"] = trajectorySamples.filter { $0.isSynthetic }.count
 
         // Sampled trajectory points normalised to video frame (x: 0-1 left→right, y: 0-1 top→bottom)
         if !trajectoryPoints.isEmpty && displayWidth > 0 && displayHeight > 0 {
@@ -910,7 +968,11 @@ final class SpeedgunPipeline {
         }
 
         result["total_frames"] = effectiveTotalFrames
-        result["fps"] = effectiveFps   // effective fps after interpolation (60 if source was 30)
+        result["fps"] = effectiveFps
+        result["source_fps"] = fps
+        result["capture_fps"] = decoder.captureFps
+        result["effective_capture_fps"] = effectiveCaptureFps
+        result["interpolation_factor"] = interpolationFactor
         result["video_width"] = displayWidth
         result["video_height"] = displayHeight
         // YOLO detection stats for debug display
@@ -1827,26 +1889,62 @@ final class SpeedgunPipeline {
         return tempDir.appendingPathComponent(filename)
     }
 
-    /// Select best SORT track: longest track with significant y-movement
-    private func selectBestTrack(tracks: [Int: [TrackPoint]], frameHeight: Int, minPoints: Int = 3) -> [TrackPoint]? {
+    /// Select best SORT track: longest coherent moving track.
+    ///
+    /// Earlier versions scored only y-axis movement, which assumed a nearly
+    /// centered catcher-view camera. Slight horizontal camera angle changes can
+    /// make a valid pitch move diagonally or mostly sideways in image space, so
+    /// score the full 2D path instead.
+    private func selectBestTrack(
+        tracks: [Int: [TrackPoint]],
+        frameWidth: Int,
+        frameHeight: Int,
+        minPoints: Int = 3
+    ) -> [TrackPoint]? {
         guard !tracks.isEmpty else { return nil }
 
         var bestTrack: [TrackPoint]?
         var bestScore = 0.0
+        let diag = Double(frameWidth * frameWidth + frameHeight * frameHeight).squareRoot()
 
         for (_, points) in tracks {
             guard points.count >= minPoints else { continue }
+            let sorted = points.sorted { $0.frameIndex < $1.frameIndex }
+            guard let first = sorted.first, let last = sorted.last else { continue }
 
-            let ys = points.map { $0.cy }
-            let yRange = (ys.max() ?? 0) - (ys.min() ?? 0)
-            let yMovementRatio = yRange / Double(frameHeight)
+            let displacement = hypot(last.cx - first.cx, last.cy - first.cy)
+            var pathLength = 0.0
+            var jumpPenalty = 0.0
+            for i in 1..<sorted.count {
+                let prev = sorted[i - 1]
+                let cur = sorted[i]
+                let gap = max(1, cur.frameIndex - prev.frameIndex)
+                let step = hypot(cur.cx - prev.cx, cur.cy - prev.cy)
+                pathLength += step
+                let stepRatio = step / Double(gap) / max(1.0, diag)
+                if stepRatio > 0.08 {
+                    jumpPenalty += (stepRatio - 0.08) * 8.0
+                }
+            }
 
-            // Score: length × y-movement (penalize static tracks)
-            let score = Double(points.count) * max(yMovementRatio, 0.01)
+            let span = max(1, last.frameIndex - first.frameIndex + 1)
+            let coverage = clamp(Double(sorted.count) / Double(span), min: 0.15, max: 1.0)
+            let displacementRatio = displacement / max(1.0, diag)
+            let pathRatio = pathLength / max(1.0, diag)
+            let straightness = pathLength > 1 ? clamp(displacement / pathLength, min: 0.25, max: 1.0) : 0.25
+            let motionScore = max(displacementRatio, pathRatio * 0.55)
+            let staticPenalty = motionScore < 0.012 ? 0.25 : 1.0
+
+            let score = Double(sorted.count)
+                * max(motionScore, 0.01)
+                * (0.55 + 0.45 * coverage)
+                * (0.65 + 0.35 * straightness)
+                * staticPenalty
+                / max(1.0, 1.0 + jumpPenalty)
 
             if score > bestScore {
                 bestScore = score
-                bestTrack = points
+                bestTrack = sorted
             }
         }
 
@@ -1854,8 +1952,9 @@ final class SpeedgunPipeline {
     }
 
     /// Filter high-confidence static false positives.
-    /// `staticRadius` should be scaled to effectiveFps so a moving ball is not
-    /// falsely classified as static at high frame rates.
+    /// `staticRadius` intentionally stays in image pixels; only persistence is
+    /// scaled by fps. This keeps interpolated low-fps clips from treating smooth
+    /// ball motion as a static object.
     /// `minPersist` should also be scaled with capture fps — at 120fps a static
     /// object takes 2× more frames to register as "static" over the same wall-clock window.
     private func filterStaticFP(
@@ -1975,7 +2074,22 @@ final class SpeedgunPipeline {
 
         guard anchors.count >= 2 else { return }
 
-        let maxGap = max(5, Int(round(Double(max(1, fps)) * 0.45)))
+        let maxGap = max(5, Int(round(Double(max(1, fps)) * TRAJECTORY_COMPLETION_MAX_GAP_SEC)))
+        let diag = Double(displayWidth * displayWidth + displayHeight * displayHeight).squareRoot()
+
+        let firstFrame = anchors.first?.frameIndex ?? 0
+        let fitTs = anchors.map { Double($0.frameIndex - firstFrame) }
+        let fitXs = anchors.map { $0.cx }
+        let fitYs = anchors.map { $0.cy }
+        let medianArea = median(anchors.map { max($0.area, 1.0) })
+        let fitWeights = anchors.map {
+            medianArea > 1 ? clamp(sqrt(max($0.area, 1.0) / medianArea), min: 0.6, max: 1.4) : 1.0
+        }
+        let xFit = anchors.count >= 4 ? weightedQuadraticFit(ts: fitTs, values: fitXs, weights: fitWeights) : nil
+        let yFit = anchors.count >= 4 ? weightedQuadraticFit(ts: fitTs, values: fitYs, weights: fitWeights) : nil
+        let globalFitIsStable = xFit != nil
+            && yFit != nil
+            && hypot(xFit!.rmse, yFit!.rmse) <= max(18.0, diag * 0.035)
 
         func clampPoint(_ p: CGPoint) -> CGPoint {
             CGPoint(
@@ -2027,7 +2141,19 @@ final class SpeedgunPipeline {
                 }
 
                 let t = Double(frameIdx - prev.frameIndex) / Double(frameSpan)
-                let p = catmullRom(p0, p1, p2, p3, t)
+                var p = catmullRom(p0, p1, p2, p3, t)
+                if globalFitIsStable, let xFit, let yFit {
+                    let ft = Double(frameIdx - firstFrame)
+                    let fitted = clampPoint(CGPoint(
+                        x: evaluateQuadratic(xFit, ft),
+                        y: evaluateQuadratic(yFit, ft)
+                    ))
+                    let gapWeight = clamp(Double(gap) / Double(maxGap), min: 0.25, max: 0.70)
+                    p = clampPoint(CGPoint(
+                        x: Double(p.x) * (1.0 - gapWeight) + Double(fitted.x) * gapWeight,
+                        y: Double(p.y) * (1.0 - gapWeight) + Double(fitted.y) * gapWeight
+                    ))
+                }
                 frameInfos[frameIdx].ballInFrame = true
                 frameInfos[frameIdx].ballCenter = p
                 frameInfos[frameIdx].ballColor = (255, 30, 30)
@@ -2041,5 +2167,69 @@ final class SpeedgunPipeline {
             NSLog("[SpeedgunPipeline] Selected-track gap fill: added %d synthetic frames across %d anchors",
                   filledCount, anchors.count)
         }
+    }
+
+    private func completeTrajectoryTailToEndpoint(
+        frameInfos: inout [FrameInfo],
+        endpoint: CGPoint,
+        endpointFrame: Int?,
+        fallbackExtraFrames: Double?,
+        fps: Int,
+        displayWidth: Int,
+        displayHeight: Int
+    ) -> Int? {
+        guard let last = frameInfos.lastIndex(where: { $0.ballInFrame }),
+              last >= 0,
+              last < frameInfos.count else {
+            return nil
+        }
+
+        let maxTailFrames = max(3, Int(round(Double(max(1, fps)) * TRAJECTORY_ENDPOINT_MAX_SEC)))
+        let targetFromAudio = endpointFrame
+        let targetFromFit = fallbackExtraFrames.map { last + Int(round($0)) }
+        guard let rawTarget = targetFromAudio ?? targetFromFit else { return nil }
+
+        let target = min(frameInfos.count - 1, min(rawTarget, last + maxTailFrames))
+        guard target > last else { return nil }
+
+        let start = frameInfos[last].ballCenter
+        let dx = Double(endpoint.x - start.x)
+        let dy = Double(endpoint.y - start.y)
+        let dist = hypot(dx, dy)
+        let diag = Double(displayWidth * displayWidth + displayHeight * displayHeight).squareRoot()
+        guard dist > 2.0, dist <= max(80.0, diag * 0.45) else { return nil }
+
+        let tailArea = frameInfos[last].ballArea
+        var filled = 0
+        let span = max(1, target - last)
+        for frameIdx in (last + 1)...target {
+            guard frameIdx >= 0 && frameIdx < frameInfos.count else { continue }
+            if frameInfos[frameIdx].ballInFrame && !frameInfos[frameIdx].ballLostTracking {
+                continue
+            }
+
+            let t = Double(frameIdx - last) / Double(span)
+            // Smoothstep keeps the visual tail from snapping as it approaches
+            // the estimated plate/catch endpoint.
+            let eased = t * t * (3.0 - 2.0 * t)
+            let x = Double(start.x) + dx * eased
+            let y = Double(start.y) + dy * eased
+            frameInfos[frameIdx].ballInFrame = true
+            frameInfos[frameIdx].ballCenter = CGPoint(
+                x: clamp(x, min: 0.0, max: Double(displayWidth)),
+                y: clamp(y, min: 0.0, max: Double(displayHeight))
+            )
+            frameInfos[frameIdx].ballColor = (255, 30, 30)
+            frameInfos[frameIdx].ballLostTracking = true
+            if tailArea > 0 { frameInfos[frameIdx].ballArea = tailArea }
+            filled += 1
+        }
+
+        if filled > 0 {
+            NSLog("[SpeedgunPipeline] Endpoint trajectory completion: added %d synthetic tail frames (%d → %d)",
+                  filled, last, target)
+            return target
+        }
+        return nil
     }
 }

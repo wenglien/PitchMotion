@@ -15,6 +15,10 @@ import { useNavigation } from '@react-navigation/native';
 const VIDEO_TAB_OVERLAY = '分析疊圖';
 const VIDEO_TAB_ORIGINAL = '原始錄影';
 
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
 function resolveUriHelper(url: string | undefined, baseUrl: string): string | null {
   if (!url) return null;
   if (url.startsWith('file://') || url.startsWith('/')) return url;
@@ -97,6 +101,49 @@ export default function ResultScreen() {
   const detectionPct = result.total_frames && result.yolo_raw_detection_frames != null
     ? Math.round((result.yolo_raw_detection_frames / result.total_frames) * 100)
     : null;
+  const trajectoryActual = result.trajectory_actual_count ?? null;
+  const trajectorySynthetic = result.trajectory_synthetic_count ?? null;
+  const trajectoryTotal = result.trajectory_count ?? null;
+  const actualTrajectoryRatio = trajectoryTotal && trajectoryActual != null
+    ? trajectoryActual / Math.max(1, trajectoryTotal)
+    : breakActualRatio;
+  const syntheticPct = trajectoryTotal && trajectorySynthetic != null
+    ? Math.round((trajectorySynthetic / Math.max(1, trajectoryTotal)) * 100)
+    : null;
+  const sourceFps = result.source_fps ?? null;
+  const captureFps = result.capture_fps ?? null;
+  const effectiveCaptureFps = result.effective_capture_fps ?? result.fps ?? null;
+  const interpolationFactor = result.interpolation_factor ?? null;
+  const qualityParts = {
+    detection: detectionPct !== null ? clamp01(detectionPct / 18) : 0.55,
+    actual: actualTrajectoryRatio !== null && actualTrajectoryRatio !== undefined ? clamp01(actualTrajectoryRatio) : 0.65,
+    plate: si.plate_fit_error_px != null ? clamp01(1 - si.plate_fit_error_px / 90) : (si.catch_point_confidence ?? 0.55),
+    break: breakConf ?? 0.55,
+    distance: si.distance_source === 'manual' ? 1 : si.distance_source === 'pose_estimated' ? 0.72 : 0.42,
+    warning: hasWarn || physClamped ? 0.72 : 1,
+  };
+  const qualityScore = Math.round(clamp01(
+    0.22 * qualityParts.detection
+    + 0.22 * qualityParts.actual
+    + 0.20 * qualityParts.plate
+    + 0.16 * qualityParts.break
+    + 0.12 * qualityParts.distance
+    + 0.08 * qualityParts.warning,
+  ) * 100);
+  const qualityTone = qualityScore >= 78 ? 'good' : qualityScore >= 58 ? 'fair' : 'poor';
+  const qualityLabel = qualityTone === 'good' ? '高可信' : qualityTone === 'fair' ? '需留意' : '建議重拍';
+  const qualityRows = [
+    { label: '偵測覆蓋', value: detectionPct !== null ? `${detectionPct}%` : '—' },
+    { label: '實測軌跡', value: actualTrajectoryRatio != null ? `${Math.round(actualTrajectoryRatio * 100)}%` : '—' },
+    { label: '落點信心', value: si.catch_point_confidence != null ? `${Math.round(si.catch_point_confidence * 100)}%` : '—' },
+    { label: '位移信心', value: breakConf !== null ? `${Math.round(breakConf * 100)}%` : '—' },
+  ];
+  const qualitySuggestions = [
+    detectionPct !== null && detectionPct < 6 ? '偵測覆蓋偏低，建議使用 120fps 或提高光線。' : null,
+    actualTrajectoryRatio != null && actualTrajectoryRatio < 0.55 ? '軌跡補點比例偏高，數據較依賴模型推估。' : null,
+    si.distance_source !== 'manual' ? '輸入實際投打距離可提升球速與位移可信度。' : null,
+    hasWarn || physClamped ? '本次軌跡或速度有品質警告，請優先參考趨勢。' : null,
+  ].filter(Boolean) as string[];
   const heroStats = [
     { label: '最高 mph', value: maxKmh !== null ? kmhToMph(maxKmh) : '-' },
     { label: '距離 m', value: distM !== null ? distM.toFixed(1) : '-' },
@@ -227,6 +274,63 @@ export default function ResultScreen() {
             </View>
           )}
         </View>
+      </View>
+
+      {/* ── Analysis Quality ──────────────────────────────── */}
+      <View style={[styles.card, { width: panelWidth }]}>
+        <View style={styles.qualityHeader}>
+          <View>
+            <Text style={styles.cardTitle}>分析品質</Text>
+            <Text style={styles.cardSub}>偵測與軌跡可信度</Text>
+          </View>
+          <View style={[
+            styles.qualityScorePill,
+            qualityTone === 'good' && styles.qualityGood,
+            qualityTone === 'fair' && styles.qualityFair,
+            qualityTone === 'poor' && styles.qualityPoor,
+          ]}>
+            <Text style={styles.qualityScoreText}>{qualityScore}</Text>
+            <Text style={styles.qualityScoreUnit}>%</Text>
+          </View>
+        </View>
+        <View style={styles.qualityBarTrack}>
+          <View style={[
+            styles.qualityBarFill,
+            { width: `${qualityScore}%` },
+            qualityTone === 'good' && styles.qualityBarGood,
+            qualityTone === 'fair' && styles.qualityBarFair,
+            qualityTone === 'poor' && styles.qualityBarPoor,
+          ]} />
+        </View>
+        <View style={styles.qualitySummaryRow}>
+          <Text style={[
+            styles.qualityLabel,
+            qualityTone === 'good' && { color: Colors.green },
+            qualityTone === 'fair' && { color: Colors.yellow },
+            qualityTone === 'poor' && { color: Colors.red },
+          ]}>
+            {qualityLabel}
+          </Text>
+          <Text style={styles.qualityMeta}>
+            {effectiveCaptureFps ? `分析 ${effectiveCaptureFps}fps` : 'FPS —'}
+            {interpolationFactor && interpolationFactor > 1 ? ` / ${interpolationFactor}x 補幀` : ''}
+          </Text>
+        </View>
+        <View style={styles.qualityGrid}>
+          {qualityRows.map((row) => (
+            <View key={row.label} style={styles.qualityTile}>
+              <Text style={styles.qualityTileValue}>{row.value}</Text>
+              <Text style={styles.qualityTileLabel}>{row.label}</Text>
+            </View>
+          ))}
+        </View>
+        {qualitySuggestions.length > 0 && (
+          <View style={styles.qualityNotePanel}>
+            {qualitySuggestions.slice(0, 3).map((tip) => (
+              <Text key={tip} style={styles.qualityNote}>• {tip}</Text>
+            ))}
+          </View>
+        )}
       </View>
 
 
@@ -401,7 +505,15 @@ export default function ResultScreen() {
             </View>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>幀率（FPS）</Text>
-              <Text style={styles.detailValue}>{result.fps ?? '—'}</Text>
+              <Text style={styles.detailValue}>
+                {sourceFps ? `${sourceFps} → ${result.fps ?? '—'}` : result.fps ?? '—'}
+              </Text>
+            </View>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>補幀設定</Text>
+              <Text style={styles.detailValue}>
+                {interpolationFactor ? `${interpolationFactor}x / capture ${captureFps ?? '—'} → ${effectiveCaptureFps ?? '—'}` : '—'}
+              </Text>
             </View>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>偵測到球的幀數</Text>
@@ -416,7 +528,21 @@ export default function ResultScreen() {
             </View>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>軌跡點數</Text>
-              <Text style={styles.detailValue}>{result.trajectory_count ?? '—'}</Text>
+              <Text style={styles.detailValue}>
+                {trajectoryTotal ?? '—'}
+                {syntheticPct !== null ? `（補點 ${syntheticPct}%）` : ''}
+              </Text>
+            </View>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>落點來源 / 誤差</Text>
+              <Text style={styles.detailValue}>
+                {si.catch_point_source ?? '—'}
+                {si.plate_fit_error_px != null ? ` / ${si.plate_fit_error_px.toFixed(1)}px` : ''}
+              </Text>
+            </View>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>距離來源</Text>
+              <Text style={styles.detailValue}>{si.distance_source ?? '—'}</Text>
             </View>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>好球帶規則</Text>
@@ -667,6 +793,125 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   warnChipText: { fontSize: FontSize.xs, color: Colors.yellow, fontWeight: '600' },
+
+  /* Quality */
+  qualityHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  qualityScorePill: {
+    minWidth: 74,
+    height: 54,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    borderWidth: 1,
+  },
+  qualityGood: {
+    backgroundColor: 'rgba(16,185,129,0.10)',
+    borderColor: 'rgba(16,185,129,0.28)',
+  },
+  qualityFair: {
+    backgroundColor: 'rgba(217,119,6,0.10)',
+    borderColor: 'rgba(217,119,6,0.30)',
+  },
+  qualityPoor: {
+    backgroundColor: 'rgba(239,68,68,0.10)',
+    borderColor: 'rgba(239,68,68,0.30)',
+  },
+  qualityScoreText: {
+    color: Colors.text,
+    fontSize: 24,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  qualityScoreUnit: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    fontWeight: '900',
+    marginLeft: 2,
+    marginTop: 7,
+  },
+  qualityBarTrack: {
+    height: 8,
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: Colors.surface2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginTop: Spacing.md,
+  },
+  qualityBarFill: {
+    height: '100%',
+    borderRadius: 999,
+  },
+  qualityBarGood: { backgroundColor: Colors.green },
+  qualityBarFair: { backgroundColor: Colors.yellow },
+  qualityBarPoor: { backgroundColor: Colors.red },
+  qualitySummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginTop: Spacing.sm,
+  },
+  qualityLabel: {
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  qualityMeta: {
+    flex: 1,
+    textAlign: 'right',
+    color: Colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  qualityGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+  },
+  qualityTile: {
+    flexBasis: '47%',
+    flexGrow: 1,
+    minHeight: 60,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface2,
+    padding: Spacing.md,
+  },
+  qualityTileValue: {
+    color: Colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  qualityTileLabel: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  qualityNotePanel: {
+    marginTop: Spacing.md,
+    borderRadius: Radius.lg,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+    gap: 5,
+  },
+  qualityNote: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
 
   /* Shared card */
   card: {

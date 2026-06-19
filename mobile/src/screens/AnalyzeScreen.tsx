@@ -16,11 +16,26 @@ import { useOfflineAnalysis } from '../hooks/useOfflineAnalysis';
 import AnalysisProgress from '../components/AnalysisProgress';
 import { friendlyError, isCancellation } from '../utils/errors';
 import type { StrikeZoneCalibration } from '../types';
+import { getVideoMetadata, type VideoMetadata } from '../../modules/expo-speedgun';
 
 const MAX_MB = 50;
 const ABS_ZONE_TOP_RATIO = 0.535;
 const ABS_ZONE_BOTTOM_RATIO = 0.27;
 const LEGACY_ZONE_HEIGHT_M = 0.58;
+
+type SelectedVideoMeta = {
+  sizeMB: string;
+  durationS: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+  captureFps?: number;
+  effectiveFps?: number;
+  effectiveCaptureFps?: number;
+  interpolationFactor?: number;
+  totalFrames?: number;
+  metadataPending?: boolean;
+};
 
 function applyAbsHeightToManualZone(
   zone: StrikeZoneCalibration | null | undefined,
@@ -52,7 +67,7 @@ export default function AnalyzeScreen() {
 
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [videoName, setVideoName] = useState<string>('video.mp4');
-  const [videoMeta, setVideoMeta] = useState<{ sizeMB: string; durationS: string } | null>(null);
+  const [videoMeta, setVideoMeta] = useState<SelectedVideoMeta | null>(null);
   const [batterHeightText, setBatterHeightText] = useState('');
   const [heightTouched, setHeightTouched] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -123,7 +138,37 @@ export default function AnalyzeScreen() {
     resetAnalysis();
     const sizeMB = asset.fileSize ? (asset.fileSize / 1024 / 1024).toFixed(1) : '?';
     const durationS = asset.duration != null ? (asset.duration / 1000).toFixed(1) : '?';
-    setVideoMeta({ sizeMB, durationS });
+    const baseMeta: SelectedVideoMeta = {
+      sizeMB,
+      durationS,
+      width: asset.width,
+      height: asset.height,
+      metadataPending: true,
+    };
+    setVideoMeta(baseMeta);
+    getVideoMetadata(asset.uri)
+      .then((meta: VideoMetadata) => {
+        if (meta.error) {
+          setVideoMeta((prev) => prev ? { ...prev, metadataPending: false } : prev);
+          return;
+        }
+        setVideoMeta((prev) => prev ? {
+          ...prev,
+          durationS: meta.duration_s != null ? meta.duration_s.toFixed(1) : prev.durationS,
+          width: meta.width ?? prev.width,
+          height: meta.height ?? prev.height,
+          fps: meta.fps,
+          captureFps: meta.capture_fps,
+          effectiveFps: meta.effective_fps,
+          effectiveCaptureFps: meta.effective_capture_fps,
+          interpolationFactor: meta.interpolation_factor,
+          totalFrames: meta.total_frames,
+          metadataPending: false,
+        } : prev);
+      })
+      .catch(() => {
+        setVideoMeta((prev) => prev ? { ...prev, metadataPending: false } : prev);
+      });
     setStatusMsg(`✓ ${asset.fileName || 'Video selected'}`);
     setStatusType('success');
   }, []);
@@ -300,6 +345,20 @@ export default function AnalyzeScreen() {
     : null;
   const actionDisabled = analyzing || !videoUri;
   const needsHeight = !!videoUri && !hasValidBatterHeight;
+  const videoFpsLabel = videoMeta?.fps
+    ? `${videoMeta.fps}fps${videoMeta.captureFps && videoMeta.captureFps !== videoMeta.fps ? ` / capture ${videoMeta.captureFps}` : ''}`
+    : videoMeta?.metadataPending ? '讀取中' : '待分析確認';
+  const effectiveFpsLabel = videoMeta?.effectiveCaptureFps
+    ? `${videoMeta.effectiveCaptureFps}fps`
+    : videoMeta?.metadataPending ? '讀取中' : '分析時確認';
+  const interpolationLabel = videoMeta?.interpolationFactor && videoMeta.interpolationFactor > 1
+    ? `${videoMeta.interpolationFactor}x 補幀`
+    : videoMeta?.interpolationFactor === 1
+      ? '不補幀'
+      : videoMeta?.metadataPending ? '讀取中' : '自動判斷';
+  const resolutionLabel = videoMeta?.width && videoMeta?.height
+    ? `${videoMeta.width} × ${videoMeta.height}`
+    : '—';
   const readinessItems = [
     {
       key: 'video',
@@ -424,6 +483,32 @@ export default function AnalyzeScreen() {
                     <View style={styles.metaChip} accessibilityLabel={`影片大小 ${videoMeta.sizeMB} MB`}>
                       <Ionicons name="server-outline" size={14} color={Colors.textMuted} />
                       <Text style={styles.metaChipText}>{videoMeta.sizeMB}MB</Text>
+                    </View>
+                  </View>
+                )}
+                {videoMeta && (
+                  <View style={styles.specPanel}>
+                    <View style={styles.specHeaderRow}>
+                      <Text style={styles.specTitle}>影片規格</Text>
+                      <Text style={styles.specBadge}>{interpolationLabel}</Text>
+                    </View>
+                    <View style={styles.specGrid}>
+                      <View style={styles.specItem}>
+                        <Text style={styles.specValue}>{videoFpsLabel}</Text>
+                        <Text style={styles.specLabel}>原始 FPS</Text>
+                      </View>
+                      <View style={styles.specItem}>
+                        <Text style={styles.specValue}>{effectiveFpsLabel}</Text>
+                        <Text style={styles.specLabel}>分析 FPS</Text>
+                      </View>
+                      <View style={styles.specItem}>
+                        <Text style={styles.specValue}>{resolutionLabel}</Text>
+                        <Text style={styles.specLabel}>解析度</Text>
+                      </View>
+                      <View style={styles.specItem}>
+                        <Text style={styles.specValue}>{videoMeta.totalFrames ?? '—'}</Text>
+                        <Text style={styles.specLabel}>原始幀數</Text>
+                      </View>
                     </View>
                   </View>
                 )}
@@ -903,6 +988,65 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
+  },
+  specPanel: {
+    marginTop: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    padding: Spacing.md,
+  },
+  specHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  specTitle: {
+    color: Colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  specBadge: {
+    color: Colors.accent,
+    fontSize: 11,
+    fontWeight: '900',
+    backgroundColor: 'rgba(14,165,233,0.10)',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    overflow: 'hidden',
+  },
+  specGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  specItem: {
+    flexBasis: '47%',
+    flexGrow: 1,
+    minHeight: 56,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface2,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    justifyContent: 'center',
+  },
+  specValue: {
+    color: Colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  specLabel: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 3,
   },
   capturePanel: {
     gap: Spacing.sm,

@@ -325,13 +325,15 @@ final class SORTTracker {
     let maxAge: Int
     let minHits: Int
     let iouThreshold: Double
+    let maxCenterDistance: Double?
     private var trackers: [KalmanBoxTracker] = []
     private(set) var frameCount = 0
 
-    init(maxAge: Int = 10, minHits: Int = 1, iouThreshold: Double = 0.1) {
+    init(maxAge: Int = 10, minHits: Int = 1, iouThreshold: Double = 0.1, maxCenterDistance: Double? = nil) {
         self.maxAge = maxAge
         self.minHits = minHits
         self.iouThreshold = iouThreshold
+        self.maxCenterDistance = maxCenterDistance
     }
 
     /// Process one frame's detections. Returns active tracks: [(x1,y1,x2,y2,trackId)]
@@ -456,17 +458,21 @@ final class SORTTracker {
             return (matches, unmatchedDets, unmatchedTrks)
 
         } else {
-            // IOU all zero (tiny ball, 4K/120fps). Fall back to centre-distance matching.
-            // Max allowed distance: 2× the diagonal of the detection bbox, capped at 300px.
+            // IOU all zero (tiny ball, angled camera, or low-fps/high-speed
+            // motion). Fall back to centre-distance matching; otherwise a ball
+            // that moved more than its own box width starts a new track every
+            // frame.
             var distMatrix = Array(repeating: Array(repeating: Double.infinity, count: nt), count: nd)
             for i in 0..<nd {
                 let (dx1, dy1, dx2, dy2, _) = dets[i]
                 let dcx = (dx1 + dx2) / 2, dcy = (dy1 + dy2) / 2
                 let dDiag = sqrt((dx2-dx1)*(dx2-dx1) + (dy2-dy1)*(dy2-dy1))
-                let maxDist = max(dDiag * 2.0, 50.0)   // at least 50px tolerance
                 for j in 0..<nt {
                     let (tx1, ty1, tx2, ty2) = trks[j]
                     let tcx = (tx1 + tx2) / 2, tcy = (ty1 + ty2) / 2
+                    let tDiag = sqrt((tx2-tx1)*(tx2-tx1) + (ty2-ty1)*(ty2-ty1))
+                    let boxBasedDistance = max(dDiag, tDiag) * 6.0
+                    let maxDist = max(boxBasedDistance, maxCenterDistance ?? 50.0)
                     let dist = sqrt((dcx-tcx)*(dcx-tcx) + (dcy-tcy)*(dcy-tcy))
                     distMatrix[i][j] = dist <= maxDist ? dist : Double.infinity
                 }

@@ -181,10 +181,16 @@ export function useOfflineAnalysis() {
           video_width: raw.video_width as number | undefined,
           video_height: raw.video_height as number | undefined,
           trajectory_count: raw.trajectory_count as number | undefined,
+          trajectory_actual_count: raw.trajectory_actual_count as number | undefined,
+          trajectory_synthetic_count: raw.trajectory_synthetic_count as number | undefined,
           yolo_frames_processed: raw.yolo_frames_processed as number | undefined,
           yolo_raw_detection_frames: raw.yolo_raw_detection_frames as number | undefined,
           yolo_total_detections: raw.yolo_total_detections as number | undefined,
           yolo_ball_in_frame_count: raw.yolo_ball_in_frame_count as number | undefined,
+          source_fps: raw.source_fps as number | undefined,
+          capture_fps: raw.capture_fps as number | undefined,
+          effective_capture_fps: raw.effective_capture_fps as number | undefined,
+          interpolation_factor: raw.interpolation_factor as number | undefined,
           trajectory_points_norm: raw.trajectory_points_norm as import('../types').TrajectoryPoint[] | undefined,
         };
 

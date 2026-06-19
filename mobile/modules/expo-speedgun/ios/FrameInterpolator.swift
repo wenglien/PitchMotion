@@ -67,35 +67,52 @@ final class FrameInterpolator {
 
     // MARK: - Public API
 
-    /// Synthesise the mid-frame (t=0.5) between `frameA` and `frameB`.
+    /// Synthesise one frame between `frameA` and `frameB`.
     /// Returns nil on any failure (falls through gracefully).
     func interpolate(frameA: CVPixelBuffer,
-                     frameB: CVPixelBuffer) -> CVPixelBuffer? {
+                     frameB: CVPixelBuffer,
+                     time t: Float = 0.5) -> CVPixelBuffer? {
+        interpolate(frameA: frameA, frameB: frameB, times: [t]).first
+    }
+
+    /// Synthesise multiple in-between frames. Optical flow is computed once for
+    /// the pair, then reused for each requested interpolation time.
+    func interpolate(frameA: CVPixelBuffer,
+                     frameB: CVPixelBuffer,
+                     times: [Float]) -> [CVPixelBuffer] {
+        let validTimes = times
+            .filter { $0 > 0 && $0 < 1 }
+            .sorted()
+        guard !validTimes.isEmpty else { return [] }
+
         let W = CVPixelBufferGetWidth(frameA)
         let H = CVPixelBufferGetHeight(frameA)
 
         // Reallocate textures if resolution changed
         if W != lastWidth || H != lastHeight {
-            guard allocateTextures(width: W, height: H) else { return nil }
+            guard allocateTextures(width: W, height: H) else { return [] }
             lastWidth  = W
             lastHeight = H
         }
 
         // Copy pixel buffers → Metal textures (BGRA)
         guard copyPixelBuffer(frameA, to: texA!),
-              copyPixelBuffer(frameB, to: texB!) else { return nil }
+              copyPixelBuffer(frameB, to: texB!) else { return [] }
 
         // Compute optical flow A→B and B→A
         guard computeOpticalFlow(from: frameA, to: frameB, into: texFlowFwd!),
-              computeOpticalFlow(from: frameB, to: frameA, into: texFlowBwd!) else { return nil }
+              computeOpticalFlow(from: frameB, to: frameA, into: texFlowBwd!) else { return [] }
 
-        // Run Metal interpolation kernel
-        guard renderInterpolated(width: W, height: H) else { return nil }
-
-        // Copy result texture → output CVPixelBuffer
-        guard let outBuf = outPixelBuffer else { return nil }
-        copyTexture(texOut!, to: outBuf)
-        return outBuf
+        var outputs: [CVPixelBuffer] = []
+        for t in validTimes {
+            guard renderInterpolated(width: W, height: H, time: t),
+                  let outBuf = makePixelBuffer(width: W, height: H) else {
+                continue
+            }
+            copyTexture(texOut!, to: outBuf)
+            outputs.append(outBuf)
+        }
+        return outputs
     }
 
     // MARK: - Private helpers
@@ -119,15 +136,20 @@ final class FrameInterpolator {
               texFlowFwd != nil, texFlowBwd != nil else { return false }
 
         // Allocate output pixel buffer
+        guard let buf = makePixelBuffer(width: W, height: H) else { return false }
+        outPixelBuffer = buf
+        return true
+    }
+
+    private func makePixelBuffer(width W: Int, height H: Int) -> CVPixelBuffer? {
         var pb: CVPixelBuffer?
         let status = CVPixelBufferCreate(
             kCFAllocatorDefault, W, H,
             kCVPixelFormatType_32BGRA,
             [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary,
             &pb)
-        guard status == kCVReturnSuccess, let buf = pb else { return false }
-        outPixelBuffer = buf
-        return true
+        guard status == kCVReturnSuccess else { return nil }
+        return pb
     }
 
     /// Copy a BGRA CVPixelBuffer into an MTLTexture row-by-row via replaceRegion.
@@ -199,7 +221,7 @@ final class FrameInterpolator {
     }
 
     /// Dispatch the Metal interpolation kernel and write to `texOut`.
-    private func renderInterpolated(width W: Int, height H: Int) -> Bool {
+    private func renderInterpolated(width W: Int, height H: Int, time: Float) -> Bool {
         guard let cmdBuf = commandQueue.makeCommandBuffer(),
               let encoder = cmdBuf.makeComputeCommandEncoder() else { return false }
 
@@ -210,7 +232,7 @@ final class FrameInterpolator {
         encoder.setTexture(texFlowBwd, index: 3)
         encoder.setTexture(texOut,     index: 4)
 
-        var t: Float = 0.5
+        var t = time
         encoder.setBytes(&t, length: MemoryLayout<Float>.size, index: 0)
 
         let tgSize = MTLSize(width: 16, height: 16, depth: 1)

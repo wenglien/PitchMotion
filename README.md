@@ -65,9 +65,6 @@ speedgun-mobile/
 ├── backend/                        # FastAPI 後端（Web 模式）
 │   ├── main.py                     # API 入口（/analyze, /overlays, /history）
 │   └── requirements.txt
-├── frontend/                       # React + Vite Web 前端
-│   └── src/
-│       └── pages/                  # UploadPage, ResultPage, HistoryPage …
 ├── pitch_classifier/               # Python 球種辨識模組（後端 / 研究）
 │   ├── feature_extractor.py        # 從軌跡提取特徵（對應 Swift PitchClassifier）
 │   └── rule_classifier.py          # 規則分類器（對應 Swift RuleBasedPitchClassifier）
@@ -150,7 +147,6 @@ xcrun devicectl device install app \
 ### 環境需求
 
 - **Python** 3.10 或 3.11
-- **Node.js** 20+
 - YOLO 權重檔（見下方）
 
 ### 安裝與啟動
@@ -159,14 +155,11 @@ xcrun devicectl device install app \
 # 1. 初始化（建立 venv + 安裝依賴 + 建立 .env）
 ./scripts/bootstrap_dev.sh
 
-# 2. 安裝前端依賴
-cd frontend && npm install && cd ..
-
-# 3. 取得 YOLO 權重，放到：
+# 2. 取得 YOLO 權重，放到：
 #    yolov8/runs/detect/baseball_yolo26n_v4/weights/best.pt
 #    或在 .env 設定：YOLO_WEIGHTS=/path/to/best.pt
 
-# 4. 一鍵啟動後端 + 前端
+# 3. 一鍵啟動後端
 ./dev_start.sh
 ```
 ---
@@ -232,8 +225,8 @@ cd frontend && npm install && cd ..
 
 - `YOLO_WEIGHTS`：YOLO 權重路徑（必備）
 - `LOCAL_DATA_DIR`：overlay 與紀錄目錄（預設 `/tmp/speedgun_dev`）
-- `API_BASE_URL`：回傳給前端的 base URL
-- `BACKEND_PORT` / `FRONTEND_PORT`：服務 port（統一在 `.env` 管理）
+- `API_BASE_URL`：回傳給 mobile app 或測試工具的 base URL
+- `BACKEND_PORT`：後端服務 port（統一在 `.env` 管理）
 
 ---
 
@@ -252,10 +245,6 @@ cd frontend && npm install && cd ..
 pip uninstall -y mediapipe
 pip install mediapipe==0.10.21
 ```
-
-**Q：前端打不到後端？**
-- 確認 `.env` 的 `BACKEND_PORT` 與後端實際 port 一致
-- 可在 `frontend/.env.local` 設定：`VITE_API_BASE_URL=http://localhost:8080`
 
 **Q：環境建置有問題？**
 ```bash

@@ -96,6 +96,12 @@ let KALMAN_ROI_MIN_CONF: Double = 0.03
 // Overlay
 let DEFAULT_OUTPUT_SCALE: Double = 0.5
 
+// Synthetic trajectory completion for the analysis overlay. YOLO can miss the
+// ball through motion blur or near the glove, so the overlay fills short visual
+// gaps from the selected track instead of drawing a broken trail.
+let TRAJECTORY_COMPLETION_MAX_GAP_SEC: Double = 0.90
+let TRAJECTORY_ENDPOINT_MAX_SEC: Double = 0.35
+
 // MARK: - Data Structures
 
 /// Single ball detection from YOLO

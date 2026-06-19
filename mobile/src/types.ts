@@ -79,11 +79,17 @@ export interface PitchResult {
   video_width?: number;
   video_height?: number;
   trajectory_count?: number;
+  trajectory_actual_count?: number;
+  trajectory_synthetic_count?: number;
   trajectory_points_norm?: TrajectoryPoint[];   // sampled, normalised to video frame
   yolo_frames_processed?: number;
   yolo_raw_detection_frames?: number;
   yolo_total_detections?: number;
   yolo_ball_in_frame_count?: number;
+  source_fps?: number;
+  capture_fps?: number;
+  effective_capture_fps?: number;
+  interpolation_factor?: number;
 }
 
 export interface SessionPitch {
