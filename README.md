@@ -1,115 +1,96 @@
-# SpeedGun — 棒球投球分析
+# SpeedGun — iOS 棒球投球分析
 
-以深度學習分析棒球投球的開源專案，支援**離線 iOS App** 與 **Web 前後端**兩種使用模式，提供球速測量、球種辨識、落點標記、球路位移（Break）分析等功能。
+SpeedGun 是以 **iOS 離線分析**為主的棒球投球分析 App。影片會在裝置端透過 CoreML / Swift 管線完成球體偵測、姿勢估距、球速計算、球種辨識、好球帶落點、位移量（Break）與分析品質評估。
+
+> 目前不再維護桌面版或 Web frontend。`frontend/` 已移除；Python 後端保留作為開發、研究與模型驗證輔助。
 
 ---
 
-## 功能總覽
+## 目前重點功能
 
-| 功能 | iOS App（離線） | Web（後端） |
-|------|:--------------:|:-----------:|
-| 棒球偵測（YOLO） | CoreML on-device | PyTorch |
-| 姿勢分析（Pose） | CoreML on-device | MediaPipe |
-| 球速計算 | 
-| 球種辨識 | 規則分類器 | 規則分類器 |
-| 好球帶落點 | 動畫顯示 | 
-| 球路位移（Break）圖 | MLB 風格 X/Y 圖 | 
-| Overlay 影片輸出 | 
-| 歷史紀錄 | 
+| 功能 | 狀態 | 說明 |
+|------|------|------|
+| 離線 iOS 分析 | 支援 | CoreML YOLO + Pose，全程 on-device |
+| 球速計算 | 支援 | 透過軌跡、飛行時間、距離估算與透視修正計算 |
+| 30/60fps 補幀 | 支援 | 低 FPS 影片會自動提高分析密度，目標接近 120fps |
+| 軌跡補點 | 支援 | YOLO 中途漏偵時會補出連續軌跡，避免 overlay 斷線 |
+| 角度容錯 | 支援 | 強化偏斜拍攝時的追蹤選球與 plate/catcher 估計 |
+| MLB ABS 好球帶 | 支援 | 分析前必填打者身高，依 ABS 比例計算好球帶高度 |
+| 好球帶落點 | 支援 | 2D 平面顯示，軌跡線保留 3D 視覺厚度與光影 |
+| 位移量 Break | 支援 | 顯示水平位移、Induced Vertical Break、可信度與來源 |
+| 分析品質 | 支援 | 結果頁顯示偵測覆蓋率、實測軌跡比例、落點與位移信心 |
+| Overlay 影片 | 支援 | 原影片上疊加軌跡、球速與好球帶資訊 |
+| 歷史紀錄 | 支援 | 本機保存分析紀錄與單次投球詳情 |
 
 ---
 
 ## 專案結構
 
-```
+```text
 speedgun-mobile/
-├── mobile/                         # [主要] Expo React Native iOS App
+├── mobile/                         # 主要 App：Expo React Native iOS
 │   ├── modules/expo-speedgun/      # 原生 Swift 分析模組（Expo Module）
+│   │   ├── src/ExpoSpeedgun.ts     # JS/TS bridge
 │   │   └── ios/
-│   │       ├── SpeedgunPipeline.swift      # 主流程協調器
+│   │       ├── ExpoSpeedgunModule.swift    # analyzeVideoOffline / getVideoMetadata
+│   │       ├── SpeedgunPipeline.swift      # 主分析流程
 │   │       ├── YOLODetector.swift          # CoreML YOLO 棒球偵測
 │   │       ├── PoseEstimator.swift         # CoreML 姿勢估計
-│   │       ├── SORTTracker.swift           # 物件追蹤（SORT 演算法）
-│   │       ├── BallSpeedCalculator.swift   # 球速計算（透視修正）
-│   │       ├── ReleasePointDetector.swift  # 出球點偵測
-│   │       ├── PitchClassifier.swift       # 球種辨識（規則分類器）
-│   │       ├── BallKinematics.swift        # 球路位移（Break）分析
-│   │       ├── OverlayGenerator.swift      # Overlay 影片產生
-│   │       ├── FrameInterpolator.swift     # 影格插值（Metal）
-│   │       └── Types.swift                 # 共用資料型別與常數
+│   │       ├── SORTTracker.swift           # 物件追蹤
+│   │       ├── FrameInterpolator.swift     # 影格插值 / 補幀
+│   │       ├── BallSpeedCalculator.swift   # 球速計算
+│   │       ├── BallKinematics.swift        # 位移量 / Break
+│   │       ├── PitchClassifier.swift       # 球種辨識
+│   │       ├── OverlayGenerator.swift      # Overlay 影片輸出
+│   │       └── Types.swift                 # 共用型別與分析常數
 │   ├── src/
 │   │   ├── screens/
-│   │   │   ├── AnalyzeScreen.tsx           # 主分析頁
-│   │   │   ├── ResultScreen.tsx            # 結果頁（球速、落點、位移圖）
+│   │   │   ├── AnalyzeScreen.tsx           # 選影片、打者身高、影片規格、開始分析
+│   │   │   ├── ResultScreen.tsx            # 結果、分析品質、好球帶、位移圖
 │   │   │   ├── HistoryScreen.tsx           # 歷史紀錄
 │   │   │   ├── SessionDetailScreen.tsx     # 單次投球詳情
-│   │   │   └── SettingsScreen.tsx          # 設定（距離、閾值等）
+│   │   │   └── SettingsScreen.tsx          # 設定
 │   │   ├── components/
-│   │   │   ├── StrikeZone.tsx              # 好球帶落點動畫（軌跡 + 3D 效果）
-│   │   │   ├── BreakChart.tsx              # 球路位移 MLB 風格 X/Y 散佈圖
+│   │   │   ├── StrikeZone.tsx              # 好球帶落點與 3D 視覺軌跡線
+│   │   │   ├── BreakChart.tsx              # MLB 風格 X/Y 位移圖
 │   │   │   ├── PitchCard.tsx               # 單球資訊卡片
-│   │   │   ├── PitchTypeBadge.tsx          # 球種
-│   │   │   └── AnalysisProgress.tsx        # 分析進度條
-│   │   ├── context/
-│   │   │   ├── ResultContext.tsx           # 本次投球 Session 狀態管理
-│   │   │   └── SettingsContext.tsx         # 設定狀態管理
+│   │   │   └── AnalysisProgress.tsx        # 分析進度
 │   │   ├── hooks/
-│   │   │   ├── useOfflineAnalysis.ts       # 呼叫原生分析模組的 Hook
-│   │   │   └── useLocalHistory.ts          # 本機歷史紀錄 Hook
-│   │   ├── utils/
-│   │   │   ├── conversions.ts              # 單位換算、顏色對應等
-│   │   │   ├── coaching.ts                 # 球種教練提示文字
-│   │   │   └── pipelineStages.ts           # 分析階段進度對應
-│   │   └── types.ts                        # 共用 TypeScript 型別定義
-│   └── ios/                                # Xcode 專案（CocoaPods 管理）
-├── backend/                        # FastAPI 後端（Web 模式）
-│   ├── main.py                     # API 入口（/analyze, /overlays, /history）
-│   └── requirements.txt
-├── pitch_classifier/               # Python 球種辨識模組（後端 / 研究）
-│   ├── feature_extractor.py        # 從軌跡提取特徵（對應 Swift PitchClassifier）
-│   └── rule_classifier.py          # 規則分類器（對應 Swift RuleBasedPitchClassifier）
-├── src/                            # Python 電腦視覺核心（後端共用）
-│   ├── pipelines/yolov8_pipeline.py
-│   ├── get_pitch_frames_yolov8.py
-│   ├── ball_speed_calculator.py
-│   ├── generate_overlay.py
-│   └── release_point_detector.py
-├── yolov8/                         # YOLO 模型權重與訓練工具
-└── scripts/                        # 開發輔助腳本
-    ├── bootstrap_dev.sh            # 一鍵建立 venv + 安裝依賴
-    └── doctor.py                   # 環境健檢
+│   │   │   ├── useOfflineAnalysis.ts       # 呼叫原生分析模組
+│   │   │   └── useLocalHistory.ts          # 本機歷史紀錄
+│   │   └── types.ts                        # TypeScript 型別
+│   └── ios/                                # Xcode workspace / CocoaPods
+├── backend/                        # 可選 FastAPI 後端（開發 / 研究）
+├── pitch_classifier/               # Python 球種分類研究工具
+├── src/                            # Python CV / overlay 工具
+├── train_tool/                     # YOLO 訓練與模型資料
+├── scripts/                        # 開發輔助腳本
+└── dev_start.sh                    # 啟動可選後端
 ```
 
 ---
 
+## iOS App 開發
+
 ### 環境需求
 
-- **macOS** 13+
-- **Xcode** 15+
-- **Node.js** 20+（建議透過 nvm 管理）
-- **CocoaPods** (`gem install cocoapods`)
+- macOS 13+
+- Xcode 15+
+- Node.js 20+
+- CocoaPods
 
-### 安裝與 Build
+### 安裝與啟動
 
 ```bash
-# 1. 進入 mobile 目錄
 cd mobile
-
-# 2. 安裝 JS 依賴
 npm install
-
-# 3. 安裝 CocoaPods 依賴
 cd ios && pod install && cd ..
-
-# 4. 用 Xcode 開啟（第一次設定 Signing 需要）
 open ios/SpeedGun.xcworkspace
 ```
 
-> **Signing**：在 Xcode 的 `Signing & Capabilities` 設定你的 Apple ID 或 Team，選 `Automatically manage signing`。
+在 Xcode 內選擇 `SpeedGun` scheme，設定 Signing 後即可 build 到模擬器或實機。
 
-### 連線到 iOS 裝置（Wi-Fi）
-
-先在 Xcode → Windows → Devices and Simulators 配對裝置，之後可用指令 build：
+### 實機 Release Build
 
 ```bash
 xcodebuild \
@@ -124,12 +105,6 @@ xcodebuild \
   build
 ```
 
-查詢裝置 UDID：
-
-```bash
-xcrun devicectl list devices
-```
-
 安裝到裝置：
 
 ```bash
@@ -138,144 +113,213 @@ xcrun devicectl device install app \
   "$(find ~/Library/Developer/Xcode/DerivedData -name 'SpeedGun.app' -path '*Release-iphoneos*' -print -quit)"
 ```
 
-> **離線使用**：App 採用 Release 設定 Build，JS Bundle 已嵌入 App，不需要 Metro 伺服器，手機離線也能分析。
+> Release build 會嵌入 JS bundle，手機離線也能分析，不需要 Metro server。
 
 ---
 
-## Web 後端快速上手
+## 使用流程
 
-### 環境需求
+1. 在分析頁選擇投球影片。
+2. App 會讀取影片規格：FPS、解析度、原始幀數、分析 FPS 與補幀倍率。
+3. 輸入打者身高（公尺）。系統會依 MLB ABS 規則計算好球帶：
+   - 寬度：43.18 cm
+   - 高度：打者身高的 27% 到 53.5%
+4. 開始分析。
+5. 結果頁會顯示球速、球種、好球帶落點、軌跡、Break、overlay 影片與分析品質。
 
-- **Python** 3.10 或 3.11
-- YOLO 權重檔（見下方）
+---
 
-### 安裝與啟動
+## 分析管線
+
+### 1. 影片讀取與補幀
+
+- 讀取原始影片 FPS、解析度、duration 與 frame count。
+- 30fps / 60fps 影片會自動做影格插值，提高偵測密度。
+- 結果頁會顯示原始 FPS、分析 FPS、有效 capture FPS 與補幀倍率。
+
+### 2. 球體偵測與追蹤
+
+- 使用 CoreML YOLO 偵測棒球。
+- 使用 SORT 追蹤球體軌跡。
+- 追蹤關聯距離會依 frame 尺寸調整，改善偏斜拍攝時的掉追問題。
+- 對低 FPS 影片避免過度縮小球體搜尋半徑。
+
+### 3. 軌跡補點
+
+當 YOLO 在中途漏偵時，管線會利用既有軌跡補出缺失段落：
+
+- 保留真實偵測點與補出點數量。
+- overlay 與結果頁會使用連續軌跡，減少「中途斷掉」的視覺問題。
+- 分析品質會把「實測軌跡比例」納入評分，避免補點過多時看起來過度自信。
+
+### 4. 球速與距離估算
+
+- 可使用手動投手丘距離。
+- 未設定距離時，會從姿勢估計與相機 metadata 推估。
+- 結果會標示距離來源：`manual`、`pose_estimated` 或 `default`。
+- 飛行時間會綜合 release frame、catch/plate frame 與軌跡估計。
+
+### 5. 好球帶與落點
+
+- 分析前需輸入打者身高。
+- 好球帶以 MLB ABS 規則推算實際寬高。
+- plate/catcher 估計會把好球帶定位到本次影片的 plate plane。
+- 結果會回傳：
+  - `plate_x_norm`
+  - `plate_y_norm`
+  - `pitch_loc_x`
+  - `pitch_loc_y`
+  - `is_strike`
+  - `catch_point_confidence`
+  - `plate_fit_error_px`
+  - `plate_zone`
+
+### 6. 位移量 Break
+
+位移量會以好球帶寬度與高度做像素到公分校正，並輸出：
+
+- `horizontal_break_cm`
+- `vertical_break_cm`
+- `induced_vertical_break_cm`
+- `total_break_cm`
+- `break_angle_deg`
+- `break_confidence`
+- `break_actual_sample_ratio`
+- `break_endpoint_source`
+
+Break Chart 採用 MLB 風格 X/Y 顯示：
+
+- X 軸：水平位移，正值往右。
+- Y 軸：Induced Vertical Break，正值代表扣除重力後的上抬效果。
+
+### 7. 球種辨識
+
+`PitchClassifier` 會根據速度、位移、軌跡形狀與 late break 特徵進行規則分類，目前支援：
+
+- Fastball
+- Curveball
+- Slider
+- Changeup
+
+結果會包含 `pitch_type` 與 `pitch_confidence`。
+
+---
+
+## UI / UX 更新
+
+### 分析頁
+
+- 新增影片規格卡片。
+- 開始分析前必填打者身高。
+- 顯示 ABS 好球帶寬度、高度與比例。
+- 顯示原始 FPS、分析 FPS、補幀倍率、解析度與幀數。
+
+### 結果頁
+
+- 新增分析品質分數。
+- 顯示偵測覆蓋率、實測軌跡比例、落點信心、位移信心。
+- 分析詳情包含補幀設定、落點來源、plate error、距離來源。
+- 好球帶動畫改為 2D 平面，軌跡線保留 3D 厚度、陰影與高光。
+
+---
+
+## 可選 Python 後端
+
+Python 後端目前主要用於開發、研究、模型驗證與舊流程測試；一般 iOS 離線分析不需要啟動後端。
+
+### 安裝
 
 ```bash
-# 1. 初始化（建立 venv + 安裝依賴 + 建立 .env）
 ./scripts/bootstrap_dev.sh
+```
 
-# 2. 取得 YOLO 權重，放到：
-#    yolov8/runs/detect/baseball_yolo26n_v4/weights/best.pt
-#    或在 .env 設定：YOLO_WEIGHTS=/path/to/best.pt
+### 啟動
 
-# 3. 一鍵啟動後端
+```bash
 ./dev_start.sh
 ```
----
 
-## 主要分析功能
+預設設定在 `.env.example`：
 
-### 球速計算
+```bash
+BACKEND_PORT=8000
+YOLO_WEIGHTS=train_tool/runs/detect/baseball_yolo26n_v5/weights/best.pt
+```
 
-透過 YOLO 追蹤球的像素位移，結合投手丘距離與姿勢估計的相機距離，計算出手速度：
+啟動後：
 
-- **出手速度**（release speed）：距離估計 + 透視修正
-- **最大速度 / 平均速度**：整段飛行計算
-- **自動距離估算**：偵測投手雙肩寬度像素值，從焦距倒推相機距離（可在設定頁手動覆蓋）
-
-### 球種辨識
-
-1. **`PitchFeatureExtractor`**：從軌跡計算高階特徵
-   - 軌跡平滑（移動平均）
-   - 早期 / 晚期 break 方向與大小（`earlyBreakX/Y`、`lateBreakX/Y`、`lateBreakRatio`）
-   - 軌跡線性度（R²）、360° 方向變化量
-2. **`RuleBasedPitchClassifier`**：四種球種評分
-   - 四縫線速球（Fastball）、曲球（Curveball）、滑球（Slider）、變速球（Changeup）
-   - 以 Gaussian bump + Sigmoid rise，避免硬閾值邊界效應
-   - Margin-based confidence
-
-### 球路位移分析（Break Chart）
-
-以 **MLB Baseball-Savant** X/Y 位移圖顯示：
-
-- **X 軸（水平位移）**：+ = 往右、− = 往左（投手視角）
-- **Y 軸（Induced Vertical Break）**：扣除重力後的 Magnus 垂直位移，+ = 上抬（fastball），− = 下沉（curveball）
-- 以好球帶寬度（MLB 43.18 cm）做像素 → 公分校正
-- 可信度以光暈大小表示（可信度越低光暈越大）
-
-### 好球帶落點動畫
-
-- 每球從固定「投手出手點」沿 3D 曲線飛向落點，以 cubic Bezier 模擬真實棒球軌跡
-- 落點以球種顏色標記，落在好球帶內外顯示不同樣式
-- 支援多球循環播放、impact ring 動畫
+- API：http://localhost:8000
+- Docs：http://localhost:8000/docs
 
 ---
 
-## 設定參數說明
+## 常用檢查
 
-| 參數 | iOS key | 後端 key | 預設值 | 說明 |
-|------|---------|----------|--------|------|
-| 投手丘距離 | `moundDistanceM` | `mound_distance_m` | 0（自動） | 0 = 從姿勢自動估算 |
-| 跨步修正 | `strideCorrectionM` | `stride_correction_m` | 0 | 投手跨步縮短的飛行距離 |
-| YOLO 信心閾值 | `confThreshold` | `conf_threshold` | 0.03 | 偵測最低信心分數 |
-| 投手身高 | `pitcherHeightM` | — | 選填 | 協助改善自動距離估算精度 |
+### TypeScript
 
----
+```bash
+cd mobile
+npx tsc --noEmit
+```
 
-## 後端 API 
+### iOS Build
 
-| 用途 | 方法 | 路徑 |
-|------|------|------|
-| 上傳並分析 | POST | `/analyze` |
-| 取得 overlay | GET | `/overlays/<id>.mp4` |
-| 歷史紀錄 | GET | `/history` |
+```bash
+xcodebuild \
+  -workspace mobile/ios/SpeedGun.xcworkspace \
+  -scheme SpeedGun \
+  -configuration Debug \
+  -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' \
+  build
+```
 
-環境變數：
+### Shell Script 語法
 
-- `YOLO_WEIGHTS`：YOLO 權重路徑（必備）
-- `LOCAL_DATA_DIR`：overlay 與紀錄目錄（預設 `/tmp/speedgun_dev`）
-- `API_BASE_URL`：回傳給 mobile app 或測試工具的 base URL
-- `BACKEND_PORT`：後端服務 port（統一在 `.env` 管理）
+```bash
+bash -n dev_start.sh
+bash -n scripts/bootstrap_dev.sh
+```
 
 ---
 
 ## 常見問題
 
-**Q：分析跑完但偵測不到球？**
-- 確認 YOLO 權重路徑正確（`YOLO_WEIGHTS` 或 `yolov8/runs/detect/.../best.pt`）
-- 嘗試降低信心閾值（設定頁調整，預設 0.03）
-- 確認影片拍攝角度清楚、有足夠對比度
+**Q：為什麼 30/60fps 影片比較容易不準？**
 
-**Q：iOS App 顯示「No script URL provided」？**
-- 必須使用 **Release** 設定 Build（非 Debug），Release build 才會嵌入 JS bundle。
+低 FPS 代表球在相鄰幀之間位移更大，偵測器看到的樣本更少，因此 release/catch frame、軌跡連續性與球速都會更敏感。App 會自動補幀到接近 120fps 的分析密度，但原始影像若模糊或球太小，仍會影響結果。
 
-**Q：`mediapipe` 找不到 `solutions`？**
-```bash
-pip uninstall -y mediapipe
-pip install mediapipe==0.10.21
-```
+**Q：拍攝角度偏一點就會不準嗎？**
 
-**Q：環境建置有問題？**
-```bash
-python scripts/doctor.py
-```
+角度會影響球體大小、plate plane、catcher 位置與姿勢估距。管線已加入更寬容的追蹤與 plate/catcher 推估，但建議仍讓鏡頭靠近本壘後方、固定不晃動，並讓投手到捕手路徑清楚可見。
+
+**Q：分析品質分數低代表什麼？**
+
+通常代表偵測覆蓋不足、補點比例偏高、落點信心低、位移樣本不足或距離來源較不可靠。結果頁會列出主要原因與重拍建議。
+
+**Q：iOS App 顯示 `No script URL provided`？**
+
+請使用 Release 設定 build，Release build 才會嵌入 JS bundle。
+
+**Q：Signing 出現 bundle identifier 無法註冊？**
+
+在 Xcode 的 Signing & Capabilities 修改 bundle identifier，例如改成你 Apple Developer Team 底下唯一的 `com.yourname.speedgun`。
 
 ---
 
 ## 技術
 
-### iOS App
-- **React Native / Expo** — JS 層
-- **Swift** — 原生分析模組（Expo Module）
-- **CoreML** — YOLO 棒球偵測 + 姿勢估計（離線）
-- **Metal** — 影格插值加速
-- **react-native-svg** — 好球帶動畫 / Break Chart
-- **AVFoundation** — 影片讀取與 Overlay 輸出
-
-### Python 後端
-- **FastAPI + Uvicorn** — HTTP API
-- **Ultralytics YOLO** — 棒球偵測
-- **MediaPipe** — 姿勢估計
-- **OpenCV** — 影像處理
-- **SORT** — 物件追蹤
+- React Native / Expo
+- Swift Expo Module
+- CoreML
+- AVFoundation
+- Metal
+- react-native-svg
+- FastAPI / Python（可選開發工具）
+- YOLO / SORT
 
 ---
 
 ## 授權
 
-本專案採用 **MIT** 授權，詳見 [LICENSE](LICENSE)。
-
-- [Ultralytics](https://github.com/ultralytics/ultralytics) — YOLO
-- [MediaPipe](https://mediapipe.dev/) — 姿勢估計
-- [SORT](https://github.com/abewley/sort) — 物件追蹤
+本專案採用 MIT 授權，詳見 [LICENSE](LICENSE)。
