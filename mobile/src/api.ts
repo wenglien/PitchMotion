@@ -1,5 +1,11 @@
 import EventSource from 'react-native-sse';
-import { PitchResult, StrikeZoneCalibration } from './types';
+import {
+  PitchResult,
+  StrikeZoneCalibration,
+  isManualDistanceCalibrated,
+  MIN_MANUAL_MOUND_DISTANCE_M,
+  MAX_MANUAL_MOUND_DISTANCE_M,
+} from './types';
 import { UserCancelledError } from './utils/errors';
 
 /** Returned by analyzeVideo so the caller (UI) can cancel an in-flight job. */
@@ -38,13 +44,19 @@ export function uploadVideo(
     ));
   }
   const {
-    moundDistanceM = 18.44,
+    moundDistanceM,
     strideCorrectionM = 0,
     confThreshold = 0.03,
     batterHeightM,
     strikeZone = null,
     signal,
   } = opts;
+
+  if (!isManualDistanceCalibrated(moundDistanceM)) {
+    return Promise.reject(new Error(
+      `請先完成手動投打距離校正（${MIN_MANUAL_MOUND_DISTANCE_M}-${MAX_MANUAL_MOUND_DISTANCE_M} m），再開始分析。`,
+    ));
+  }
 
   const form = new FormData();
   form.append('video', {

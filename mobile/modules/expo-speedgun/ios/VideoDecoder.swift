@@ -1,6 +1,15 @@
 import AVFoundation
 import CoreVideo
 
+/// A decoded video sample and its original presentation timestamp. Holding the
+/// sample buffer keeps the underlying pixel buffer valid while interpolation is
+/// performed against the following decoded frame.
+struct DecodedVideoFrame {
+    let sampleBuffer: CMSampleBuffer
+    let pixelBuffer: CVPixelBuffer
+    let presentationTimeS: Double?
+}
+
 /// Extracts frames from a video file using AVAssetReader.
 /// Handles iPhone rotation metadata automatically via preferredTransform.
 final class VideoDecoder {
@@ -294,8 +303,8 @@ final class VideoDecoder {
         return reader?.status ?? .unknown
     }
 
-    /// Get next frame as CVPixelBuffer. Returns nil when done.
-    func nextFrame() -> CVPixelBuffer? {
+    /// Get the next decoded frame with its source PTS. Returns nil when done.
+    func nextFrame() -> DecodedVideoFrame? {
         guard let output = output, let reader = reader else { return nil }
         guard reader.status == .reading else { return nil }
 
@@ -303,7 +312,16 @@ final class VideoDecoder {
             // Retain the sample buffer for the lifetime of this frame so the
             // CVPixelBuffer it vends (unretained +0) remains valid.
             lastSampleBuffer = sampleBuffer
-            return CMSampleBufferGetImageBuffer(sampleBuffer)
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
+            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            let presentationTimeS: Double? = (pts.isValid && !pts.isIndefinite && pts.seconds.isFinite)
+                ? pts.seconds
+                : nil
+            return DecodedVideoFrame(
+                sampleBuffer: sampleBuffer,
+                pixelBuffer: pixelBuffer,
+                presentationTimeS: presentationTimeS
+            )
         }
         lastSampleBuffer = nil
         // Log why reading stopped
@@ -333,6 +351,7 @@ final class VideoDecoder {
 // MARK: - Errors
 
 enum SpeedgunError: LocalizedError {
+    case manualDistanceRequired
     case videoLoadFailed(String)
     case modelLoadFailed(String)
     case noFramesExtracted
@@ -342,6 +361,8 @@ enum SpeedgunError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .manualDistanceRequired:
+            return "Manual pitching-distance calibration is required (3.0–30.0 m)."
         case .videoLoadFailed(let msg): return "Video load failed: \(msg)"
         case .modelLoadFailed(let msg): return "Model load failed: \(msg)"
         case .noFramesExtracted: return "No frames could be extracted from video"

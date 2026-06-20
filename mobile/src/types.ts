@@ -49,9 +49,12 @@ export interface SpeedInfo {
   ttc_flight_time_s?: number;
   visual_flight_time_s?: number;
   release_frame_idx?: number;
-  release_frame_source?: 'pose' | 'fallback';
+  release_frame_source?: 'pose' | 'pose_refined' | 'fallback';
   first_ball_frame_idx?: number;
   catch_frame_idx?: number;
+  release_time_s?: number;
+  first_ball_time_s?: number;
+  catch_time_s?: number;
 }
 
 export interface StrikeZoneCalibration {
@@ -112,18 +115,32 @@ export interface Session {
 
 export type AnalysisMode = 'offline' | 'online';
 
+// A speed result is only meaningful when its physical flight distance is known.
+// These bounds cover short training lanes through a regulation mound while
+// rejecting accidental values such as centimetres entered as metres.
+export const MIN_MANUAL_MOUND_DISTANCE_M = 3;
+export const MAX_MANUAL_MOUND_DISTANCE_M = 30;
+
+export function isManualDistanceCalibrated(value: number | undefined | null): value is number {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= MIN_MANUAL_MOUND_DISTANCE_M
+    && value <= MAX_MANUAL_MOUND_DISTANCE_M;
+}
+
 export interface Settings {
-  moundDistanceM: number;          // 0 = 未設定（走自動估算）; >0 = 使用者手動量測
+  // 0 = not calibrated. A valid value is a manually measured rubber-to-plate distance.
+  moundDistanceM: number;
   strideCorrectionM: number;
   confThreshold: number;
   backendUrl: string;
   analysisMode: AnalysisMode;
-  pitcherHeightM?: number;         // 可選，提高 pose 自動估距精度
+  pitcherHeightM?: number;         // 保留舊版設定相容性；手動距離校正不使用此值
   strikeZone?: StrikeZoneCalibration | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  moundDistanceM: 0,               // 預設不填，強制使用者輸入實際距離
+  moundDistanceM: 0,
   strideCorrectionM: 0,
   confThreshold: 0.03,
   // Empty by default — offline mode (the default) doesn't need a backend, and

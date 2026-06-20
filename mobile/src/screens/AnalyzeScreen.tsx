@@ -15,6 +15,7 @@ import { parseLog } from '../utils/pipelineStages';
 import { useOfflineAnalysis } from '../hooks/useOfflineAnalysis';
 import AnalysisProgress from '../components/AnalysisProgress';
 import { friendlyError, isCancellation } from '../utils/errors';
+import { isManualDistanceCalibrated } from '../types';
 import type { StrikeZoneCalibration } from '../types';
 import { getVideoMetadata, type VideoMetadata } from '../../modules/expo-speedgun';
 
@@ -88,6 +89,7 @@ export default function AnalyzeScreen() {
 
   const batterHeightM = Number.parseFloat(batterHeightText);
   const hasValidBatterHeight = Number.isFinite(batterHeightM) && batterHeightM >= 1.0 && batterHeightM <= 2.4;
+  const hasDistanceCalibration = isManualDistanceCalibrated(settings.moundDistanceM);
   const batterHeightError = heightTouched && batterHeightText.trim() !== '' && !hasValidBatterHeight;
   const effectiveStrikeZone = hasValidBatterHeight
     ? applyAbsHeightToManualZone(settings.strikeZone, batterHeightM)
@@ -316,6 +318,19 @@ export default function AnalyzeScreen() {
 
   const onAnalyze = async () => {
     setHeightTouched(true);
+    if (!hasDistanceCalibration) {
+      setStatusMsg('請先在設定完成手動投打距離校正；未校正的距離不會產生正式球速。');
+      setStatusType('error');
+      Alert.alert(
+        '需要投打距離校正',
+        '請量測投手板前緣到本壘板後尖端的距離，並在設定中輸入 3–30 公尺的值。球速會以此距離扣除跨步補償計算。',
+        [
+          { text: '稍後', style: 'cancel' },
+          { text: '前往設定', onPress: () => navigation.navigate('Settings') },
+        ],
+      );
+      return;
+    }
     if (!hasValidBatterHeight) {
       setStatusMsg('請先輸入打者身高（公尺），系統會依 MLB ABS 規則計算好球帶。');
       setStatusType('error');
@@ -340,11 +355,11 @@ export default function AnalyzeScreen() {
   };
   const isOffline = settings.analysisMode === 'offline';
   const panelWidth = Math.min(width - 32, Layout.maxWidth);
-  const canAnalyze = !!videoUri && !analyzing && hasValidBatterHeight;
   const zoneHeightCm = hasValidBatterHeight
     ? batterHeightM * (ABS_ZONE_TOP_RATIO - ABS_ZONE_BOTTOM_RATIO) * 100
     : null;
   const actionDisabled = analyzing || !videoUri;
+  const needsDistance = !!videoUri && !hasDistanceCalibration;
   const needsHeight = !!videoUri && !hasValidBatterHeight;
   const videoFpsLabel = videoMeta?.fps
     ? `${videoMeta.fps}fps${videoMeta.captureFps && videoMeta.captureFps !== videoMeta.fps ? ` / capture ${videoMeta.captureFps}` : ''}`
@@ -367,6 +382,15 @@ export default function AnalyzeScreen() {
       label: videoUri ? '影片已選擇' : '等待影片',
       value: videoMeta ? `${videoMeta.durationS}s / ${videoMeta.sizeMB}MB` : `上限 ${MAX_MB}MB`,
       done: !!videoUri,
+      step: '選片',
+    },
+    {
+      key: 'distance',
+      icon: 'resize-outline' as const,
+      label: hasDistanceCalibration ? '投打距離已校正' : '投打距離必填',
+      value: hasDistanceCalibration ? `${settings.moundDistanceM.toFixed(2)}m（手動量測）` : '請至設定量測後輸入',
+      done: hasDistanceCalibration,
+      step: '校正',
     },
     {
       key: 'height',
@@ -374,22 +398,28 @@ export default function AnalyzeScreen() {
       label: hasValidBatterHeight ? '打者身高已設定' : '打者身高必填',
       value: hasValidBatterHeight ? `${batterHeightM.toFixed(2)}m / ABS ${zoneHeightCm?.toFixed(1)}cm` : '1.00-2.40m',
       done: hasValidBatterHeight,
+      step: '身高',
     },
     {
       key: 'mode',
       icon: isOffline ? 'phone-portrait-outline' as const : 'cloud-outline' as const,
       label: isOffline ? '裝置端分析' : '伺服器分析',
-      value: settings.moundDistanceM > 0 ? `距離 ${settings.moundDistanceM.toFixed(1)}m` : '距離自動估算',
+      value: isOffline ? '在此裝置處理' : '由伺服器處理',
       done: true,
+      step: '分析',
     },
   ];
   const actionLabel = !videoUri
     ? '請先選擇影片'
+    : !hasDistanceCalibration
+      ? '完成距離校正後開始'
     : !hasValidBatterHeight
       ? '輸入打者身高後開始'
       : isOffline ? '開始離線分析' : '開始線上分析';
   const actionIcon: keyof typeof Ionicons.glyphMap = !videoUri
     ? 'videocam-outline'
+    : !hasDistanceCalibration
+      ? 'resize-outline'
     : !hasValidBatterHeight
       ? 'body-outline'
       : isOffline ? 'phone-portrait-outline' : 'cloud-upload-outline';
@@ -433,7 +463,7 @@ export default function AnalyzeScreen() {
           <View
             style={styles.consoleHeader}
             accessible
-            accessibilityLabel={`投球分析。模式：${isOffline ? '裝置端離線分析' : '伺服器分析'}。距離 ${settings.moundDistanceM > 0 ? settings.moundDistanceM.toFixed(1) + ' 公尺' : '自動估算'}。`}
+            accessibilityLabel={`投球分析。模式：${isOffline ? '裝置端離線分析' : '伺服器分析'}。投打距離${hasDistanceCalibration ? `已手動校正為 ${settings.moundDistanceM.toFixed(2)} 公尺` : '尚未校正'}。`}
           >
             <View style={styles.headerTopRow}>
               <View>
@@ -446,7 +476,7 @@ export default function AnalyzeScreen() {
               </View>
             </View>
             <View style={styles.stepRail}>
-              {readinessItems.map((item, index) => (
+              {readinessItems.map((item) => (
                 <View key={item.key} style={styles.stepItem}>
                   <View style={[styles.stepNode, item.done && styles.stepNodeDone]}>
                     <Ionicons
@@ -456,7 +486,7 @@ export default function AnalyzeScreen() {
                     />
                   </View>
                   <Text style={[styles.stepText, item.done && styles.stepTextDone]}>
-                    {index === 0 ? '選片' : index === 1 ? '身高' : '開始'}
+                    {item.step}
                   </Text>
                 </View>
               ))}
@@ -637,6 +667,35 @@ export default function AnalyzeScreen() {
               </Text>
             </View>
 
+            <View style={[styles.distanceCalibrationCard, hasDistanceCalibration && styles.distanceCalibrationCardDone]}>
+              <View style={styles.distanceCalibrationIcon}>
+                <Ionicons
+                  name={hasDistanceCalibration ? 'checkmark-circle' : 'resize-outline'}
+                  size={21}
+                  color={hasDistanceCalibration ? Colors.green : Colors.accent}
+                />
+              </View>
+              <View style={styles.distanceCalibrationCopy}>
+                <Text style={styles.distanceCalibrationTitle}>
+                  {hasDistanceCalibration ? '投打距離已手動校正' : '投打距離校正必填'}
+                </Text>
+                <Text style={styles.distanceCalibrationText}>
+                  {hasDistanceCalibration
+                    ? `使用 ${settings.moundDistanceM.toFixed(2)}m；正式球速會以此值扣除跨步補償。`
+                    : '量測投手板前緣到本壘板後尖端，輸入後才會開始球速分析。'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.distanceCalibrationButton}
+                onPress={() => navigation.navigate('Settings')}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityLabel={hasDistanceCalibration ? '修改投打距離校正' : '前往設定投打距離校正'}
+              >
+                <Text style={styles.distanceCalibrationButtonText}>{hasDistanceCalibration ? '修改' : '校正'}</Text>
+              </TouchableOpacity>
+            </View>
+
             <View style={styles.capturePanel}>
               {[
                 ['scan-outline', '捕手後方', '鏡頭對齊本壘中心'],
@@ -685,15 +744,16 @@ export default function AnalyzeScreen() {
           style={[
             styles.analyzeBtn,
             actionDisabled && styles.analyzeBtnDisabled,
-            needsHeight && styles.analyzeBtnPending,
+            (needsHeight || needsDistance) && styles.analyzeBtnPending,
           ]}
           onPress={onAnalyze}
           disabled={actionDisabled}
           activeOpacity={0.8}
           accessibilityRole="button"
-          accessibilityState={{ disabled: !canAnalyze, busy: analyzing }}
+          accessibilityState={{ disabled: actionDisabled, busy: analyzing }}
           accessibilityLabel={
             !videoUri ? '請先選擇影片'
+              : !hasDistanceCalibration ? '請先完成投打距離校正'
               : !hasValidBatterHeight ? '請先輸入打者身高'
               : analyzing ? (isOffline ? '裝置分析進行中' : '伺服器分析進行中')
               : (isOffline ? '開始離線分析' : '開始線上分析')
@@ -1045,6 +1105,58 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     color: Colors.textMuted,
+  },
+  distanceCalibrationCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(14,165,233,0.28)',
+    backgroundColor: 'rgba(14,165,233,0.06)',
+  },
+  distanceCalibrationCardDone: {
+    borderColor: 'rgba(34,197,94,0.30)',
+    backgroundColor: 'rgba(34,197,94,0.06)',
+  },
+  distanceCalibrationIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+  },
+  distanceCalibrationCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  distanceCalibrationTitle: {
+    color: Colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  distanceCalibrationText: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  distanceCalibrationButton: {
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.accent,
+    paddingHorizontal: 10,
+  },
+  distanceCalibrationButtonText: {
+    color: Colors.accent,
+    fontSize: 12,
+    fontWeight: '900',
   },
   zonePreviewRow: {
     minHeight: 58,

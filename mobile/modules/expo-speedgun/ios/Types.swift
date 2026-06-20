@@ -6,6 +6,8 @@ import CoreGraphics
 let MS_TO_KMH: Double = 3.6
 let KMH_TO_MPH: Double = 0.621371
 let MLB_MOUND_DISTANCE_M: Double = 18.44
+let MIN_MANUAL_MOUND_DISTANCE_M: Double = 3.0
+let MAX_MANUAL_MOUND_DISTANCE_M: Double = 30.0
 
 // Strike-zone bounds in display-normalized coordinates for MLB-style umpire POV.
 // Keep these in sync with src/get_pitch_frames_yolov8.py and the React
@@ -167,15 +169,32 @@ struct FrameInfo {
     var ballColor: (UInt8, UInt8, UInt8) // RGB
     var ballLostTracking: Bool
     var frameIndex: Int
+    /// Physical capture-time seconds from the first video sample. For slow-motion
+    /// clips this differs from presentation/playback time.
+    var captureTimeS: Double
+    /// AVFoundation presentation timestamp seconds from the first video sample.
+    /// Kept separately so audio can be aligned on the playback timeline.
+    var presentationTimeS: Double
+    /// True only for an optical-flow frame inserted between two decoded samples.
+    /// These frames may help visual tracking but must never become timing evidence.
+    var isInterpolated: Bool
     var poseLandmarks: PoseLandmarks?
     var ballArea: Double     // bbox area in px² (0 if unknown)
 
-    init(frameIndex: Int) {
+    init(
+        frameIndex: Int,
+        captureTimeS: Double = 0,
+        presentationTimeS: Double = 0,
+        isInterpolated: Bool = false
+    ) {
         self.ballInFrame = false
         self.ballCenter = .zero
         self.ballColor = (255, 30, 30)
         self.ballLostTracking = false
         self.frameIndex = frameIndex
+        self.captureTimeS = captureTimeS
+        self.presentationTimeS = presentationTimeS
+        self.isInterpolated = isInterpolated
         self.poseLandmarks = nil
         self.ballArea = 0
     }
@@ -256,9 +275,12 @@ struct SpeedInfo {
     var ttcFlightTimeS: Double?
     var visualFlightTimeS: Double?
     var releaseFrameIdx: Int?
-    var releaseFrameSource: String?   // "pose" | "fallback"
+    var releaseFrameSource: String?   // "pose" | "pose_refined" | "fallback"
     var firstBallFrameIdx: Int?
     var catchFrameIdx: Int?
+    var releaseTimeS: Double?
+    var firstBallTimeS: Double?
+    var catchTimeS: Double?
 
     // Pre-detect gap (release → first YOLO detection) used in flight time
     var preDetectSec: Double?
@@ -331,6 +353,9 @@ struct SpeedInfo {
         if let v = releaseFrameSource { dict["release_frame_source"] = v }
         if let v = firstBallFrameIdx { dict["first_ball_frame_idx"] = v }
         if let v = catchFrameIdx { dict["catch_frame_idx"] = v }
+        if let v = releaseTimeS { dict["release_time_s"] = v }
+        if let v = firstBallTimeS { dict["first_ball_time_s"] = v }
+        if let v = catchTimeS { dict["catch_time_s"] = v }
         if let v = preDetectSec { dict["pre_detect_sec"] = v }
         if let v = preDetectSource { dict["pre_detect_source"] = v }
         if let v = catchPointSource { dict["catch_point_source"] = v }

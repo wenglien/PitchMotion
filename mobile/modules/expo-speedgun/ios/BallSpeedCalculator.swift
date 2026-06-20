@@ -51,32 +51,30 @@ final class BallSpeedCalculator {
 
     // MARK: - Flight Time Estimation
 
-    private func estimateFramesElapsed(
-        releaseFrameIdx: Int?,
-        firstBallFrameIdx: Int?,
-        ballSizePreFrames: Double? = nil
-    ) -> (frames: Double, source: String) {
-        let fixedFallback = max(1.0, (RELEASE_FALLBACK_SEC * Double(fps)).rounded())
-        let maxPreFrames = max(1.0, (MAX_PRE_DETECT_SEC * Double(fps)).rounded())
+    private func estimatePreDetectSeconds(
+        releaseTimeS: Double?,
+        firstBallTimeS: Double?,
+        ballSizePreSeconds: Double? = nil
+    ) -> (seconds: Double, source: String) {
 
         // Ball-size ranging (pinhole model on the ball's pixel diameter) gives a
         // physically-derived pre-detect estimate; prefer it over the fixed 0.25s
         // guess whenever the pipeline could compute one.
         let fallback: Double
         let fallbackSource: String
-        if let bs = ballSizePreFrames {
-            fallback = clamp(bs, min: 0.0, max: maxPreFrames)
+        if let bs = ballSizePreSeconds {
+            fallback = clamp(bs, min: 0.0, max: MAX_PRE_DETECT_SEC)
             fallbackSource = "ball_size"
         } else {
-            fallback = fixedFallback
+            fallback = RELEASE_FALLBACK_SEC
             fallbackSource = "fixed"
         }
 
-        if let release = releaseFrameIdx, let first = firstBallFrameIdx, first > release {
-            let raw = Double(max(1, first - release))
-            if raw > maxPreFrames {
-                NSLog("[BallSpeedCalculator] Pre-detect gap %.0f frames exceeds cap %.0f, using fallback %.0f (%@)",
-                      raw, maxPreFrames, fallback, fallbackSource)
+        if let release = releaseTimeS, let first = firstBallTimeS, first > release {
+            let raw = first - release
+            if raw > MAX_PRE_DETECT_SEC {
+                NSLog("[BallSpeedCalculator] Pre-detect gap %.3fs exceeds cap %.3fs, using fallback %.3fs (%@)",
+                      raw, MAX_PRE_DETECT_SEC, fallback, fallbackSource)
                 return (fallback, fallbackSource)
             }
             // A pose release that lands too close to the first ball detection makes
@@ -92,10 +90,10 @@ final class BallSpeedCalculator {
 
     private func estimateFlightTime(
         numTrajectoryPoints: Int,
-        releaseFrameIdx: Int?,
-        firstBallFrameIdx: Int?,
-        lastBallFrameIdx: Int?,
-        ballSizePreFrames: Double? = nil,
+        releaseTimeS: Double?,
+        firstBallTimeS: Double?,
+        lastBallTimeS: Double?,
+        ballSizePreSeconds: Double? = nil,
         preDetectInfo: inout (sec: Double, source: String)?
     ) -> (time: Double, source: String) {
         var rawTime: Double?
@@ -106,26 +104,25 @@ final class BallSpeedCalculator {
         // when scene changes or pose jitters, release can land only a few frames
         // before the first ball detection, which shortens flight time and causes
         // 100+ mph spikes. Audio catch can still be the endpoint via lastBallFrameIdx.
-        if let first = firstBallFrameIdx, let last = lastBallFrameIdx, last > first {
-            let detFrames = Double(last - first)
-            let (preFrames, preSource) = estimateFramesElapsed(
-                releaseFrameIdx: releaseFrameIdx,
-                firstBallFrameIdx: first,
-                ballSizePreFrames: ballSizePreFrames
+        if let first = firstBallTimeS, let last = lastBallTimeS, last > first {
+            let detectedSeconds = last - first
+            let (preSeconds, preSource) = estimatePreDetectSeconds(
+                releaseTimeS: releaseTimeS,
+                firstBallTimeS: first,
+                ballSizePreSeconds: ballSizePreSeconds
             )
-            preDetectInfo = (preFrames / Double(fps), preSource)
-            rawTime = max(1.0, detFrames + preFrames) / Double(fps)
+            preDetectInfo = (preSeconds, preSource)
+            rawTime = detectedSeconds + preSeconds
             source = "visual_endpoint"
-            NSLog("[BallSpeedCalculator] Flight time: first(%d)->last(%d)=%.0f + pre=%.0f frames (%@) -> %.3fs",
-                  first, last, detFrames, preFrames, preSource, rawTime ?? 0)
+            NSLog("[BallSpeedCalculator] Flight time: first→last=%.3fs + pre=%.3fs (%@) -> %.3fs",
+                  detectedSeconds, preSeconds, preSource, rawTime ?? 0)
         }
 
         // Priority 2: raw release → endpoint only when no first-ball anchor exists.
-        if rawTime == nil, let release = releaseFrameIdx, let last = lastBallFrameIdx, last > release {
-            rawTime = Double(last - release) / Double(fps)
+        if rawTime == nil, let release = releaseTimeS, let last = lastBallTimeS, last > release {
+            rawTime = last - release
             source = "release_endpoint"
-            NSLog("[BallSpeedCalculator] Flight time fallback: release(%d)->last(%d) -> %.3fs",
-                  release, last, rawTime ?? 0)
+            NSLog("[BallSpeedCalculator] Flight time fallback: release→last -> %.3fs", rawTime ?? 0)
         }
 
         // Last resort: trajectory point count
@@ -177,9 +174,12 @@ final class BallSpeedCalculator {
     /// Returns nil if area data is insufficient or the estimate is implausible.
     /// Status: "used" | "fallback_samples" | "fallback_growth" | "fallback_slope" | "fallback_range"
     func estimateTTCWithStatus(frameInfos: [FrameInfo]) -> (Double?, String) {
-        // Collect (frameIndex, area) pairs with valid area
-        let samples = frameInfos.filter { $0.ballInFrame && $0.ballArea > 4 }
-                                .map { (Double($0.frameIndex), $0.ballArea) }
+        // Only source frames can influence timing. Optical-flow inserts and
+        // track-gap fills are useful for a smooth overlay but invent no physical
+        // measurement, so including them here would make TTC look overconfident.
+        let samples = frameInfos
+            .filter { $0.ballInFrame && !$0.ballLostTracking && !$0.isInterpolated && $0.ballArea > 4 }
+            .map { ($0.captureTimeS, $0.ballArea) }
         // Lowered from ≥4 → ≥3 (short backyard clips at high fps have few growth samples)
         guard samples.count >= 3 else {
             NSLog("[BallSpeedCalculator] TTC fallback: insufficient area samples (%d<3)", samples.count)
@@ -224,15 +224,15 @@ final class BallSpeedCalculator {
         // Zero-crossing of y(t) = slope·t + intercept is the modeled contact instant.
         let tContact = -intercept / slope
         let tFirst   = ts.first!
-        let ttcFrames = tContact - tFirst
+        let ttcSeconds = tContact - tFirst
 
-        guard ttcFrames > 0 else {
-            NSLog("[BallSpeedCalculator] TTC fallback: non-positive ttcFrames=%.2f (tContact=%.2f, tFirst=%.2f)",
-                  ttcFrames, tContact, tFirst)
+        guard ttcSeconds > 0 else {
+            NSLog("[BallSpeedCalculator] TTC fallback: non-positive ttcSeconds=%.4f (tContact=%.4f, tFirst=%.4f)",
+                  ttcSeconds, tContact, tFirst)
             return (nil, "fallback_slope")
         }
 
-        let ttcSec = ttcFrames / Double(fps)
+        let ttcSec = ttcSeconds
 
         // Sanity: TTC should be 0.15s–2.0s for realistic pitching distances
         // (lowered lower bound from 0.2s to allow short backyard distances)
@@ -285,7 +285,10 @@ final class BallSpeedCalculator {
         releaseFrameIdx: Int? = nil,
         firstBallFrameIdx: Int? = nil,
         lastBallFrameIdx: Int? = nil,
-        ballSizePreFrames: Double? = nil
+        releaseTimeS: Double? = nil,
+        firstBallTimeS: Double? = nil,
+        lastBallTimeS: Double? = nil,
+        ballSizePreSeconds: Double? = nil
     ) -> SpeedInfo {
         guard trajectoryPoints.count >= 2 else {
             var info = SpeedInfo()
@@ -301,7 +304,10 @@ final class BallSpeedCalculator {
                 releaseFrameIdx: releaseFrameIdx,
                 firstBallFrameIdx: firstBallFrameIdx,
                 lastBallFrameIdx: lastBallFrameIdx,
-                ballSizePreFrames: ballSizePreFrames
+                releaseTimeS: releaseTimeS,
+                firstBallTimeS: firstBallTimeS,
+                lastBallTimeS: lastBallTimeS,
+                ballSizePreSeconds: ballSizePreSeconds
             )
         }
 
@@ -320,7 +326,10 @@ final class BallSpeedCalculator {
         releaseFrameIdx: Int?,
         firstBallFrameIdx: Int?,
         lastBallFrameIdx: Int?,
-        ballSizePreFrames: Double? = nil
+        releaseTimeS: Double?,
+        firstBallTimeS: Double?,
+        lastBallTimeS: Double?,
+        ballSizePreSeconds: Double? = nil
     ) -> SpeedInfo {
         let numFrames = trajectoryPoints.count
         guard let distance = effectiveDistance else {
@@ -340,10 +349,10 @@ final class BallSpeedCalculator {
         var endpointPreDetectInfo: (sec: Double, source: String)? = nil
         let endpointEstimate = estimateFlightTime(
             numTrajectoryPoints: numFrames,
-            releaseFrameIdx: releaseFrameIdx,
-            firstBallFrameIdx: firstBallFrameIdx,
-            lastBallFrameIdx: lastBallFrameIdx,
-            ballSizePreFrames: ballSizePreFrames,
+            releaseTimeS: releaseTimeS,
+            firstBallTimeS: firstBallTimeS,
+            lastBallTimeS: lastBallTimeS,
+            ballSizePreSeconds: ballSizePreSeconds,
             preDetectInfo: &endpointPreDetectInfo
         )
         let totalTime: Double
@@ -352,13 +361,13 @@ final class BallSpeedCalculator {
         var resolvedTtcStatus = ttcStatus
         if let ttc = ttcTime {
             // TTC gives time from first detection to contact.
-            // Add pre-detection offset (release to firstBallFrame).
-            let (preFrames, preSource) = estimateFramesElapsed(
-                releaseFrameIdx: releaseFrameIdx,
-                firstBallFrameIdx: firstBallFrameIdx,
-                ballSizePreFrames: ballSizePreFrames
+            // Add the real capture-time offset before the first ball detection.
+            let (preSeconds, preSource) = estimatePreDetectSeconds(
+                releaseTimeS: releaseTimeS,
+                firstBallTimeS: firstBallTimeS,
+                ballSizePreSeconds: ballSizePreSeconds
             )
-            let rawTime = ttc + preFrames / Double(fps)
+            let rawTime = ttc + preSeconds
             let clampedTtcTime = clampFlightTime(rawTime, distance: distance)
             ttcTotalTime = clampedTtcTime
 
@@ -373,9 +382,9 @@ final class BallSpeedCalculator {
             } else {
                 totalTime = clampedTtcTime
                 flightTimeSource = "ttc"
-                preDetectInfo = (preFrames / Double(fps), preSource)
+                preDetectInfo = (preSeconds, preSource)
                 NSLog("[BallSpeedCalculator] Using TTC: %.3fs + pre=%.3fs (%@) → total=%.3fs",
-                      ttc, preFrames / Double(fps), preSource, totalTime)
+                      ttc, preSeconds, preSource, totalTime)
             }
         } else {
             ttcTotalTime = nil

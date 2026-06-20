@@ -12,9 +12,9 @@ public final class ExpoSpeedgunModule: Module {
                 return ["error": "Module deallocated"]
             }
 
-            // Distance: 0 (or missing) → auto-estimate from pose; >0 → user manual.
-            // Do NOT silently fall back to MLB 18.44m here — SpeedgunPipeline.analyze()
-            // handles the auto-estimate → default fallback chain and surfaces a warning.
+            // A manually measured rubber-to-plate distance is mandatory.  We do
+            // not silently estimate or assume an MLB field: either would turn a
+            // plausible-looking number into an unreliable speed result.
             let moundDistance = options["moundDistance"] as? Double ?? 0
             let strideCorrection = options["strideCorrectionM"] as? Double
             let confThreshold = options["confThreshold"] as? Double ?? 0.05

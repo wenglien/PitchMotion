@@ -7,6 +7,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, FontSize, Radius, Shadows, Spacing, TouchTarget } from '../theme';
 import { useSettings } from '../context/SettingsContext';
 import { checkHealth } from '../api';
+import {
+  isManualDistanceCalibrated,
+  MAX_MANUAL_MOUND_DISTANCE_M,
+  MIN_MANUAL_MOUND_DISTANCE_M,
+} from '../types';
 import type { AnalysisMode } from '../types';
 import SegmentedTabs from '../components/SegmentedTabs';
 
@@ -28,17 +33,33 @@ export default function SettingsScreen() {
   const [moundText, setMoundText] = useState(
     settings.moundDistanceM > 0 ? String(settings.moundDistanceM) : '',
   );
+  const [moundTouched, setMoundTouched] = useState(false);
   const [strideText, setStrideText] = useState(String(settings.strideCorrectionM));
   const [confText, setConfText] = useState(String(settings.confThreshold));
-  const [pitcherHeightText, setPitcherHeightText] = useState(
-    settings.pitcherHeightM != null ? String(settings.pitcherHeightM) : '',
-  );
   const [zxMinText, setZxMinText] = useState(settings.strikeZone ? String(settings.strikeZone.xMin) : '');
   const [zxMaxText, setZxMaxText] = useState(settings.strikeZone ? String(settings.strikeZone.xMax) : '');
   const [zyMinText, setZyMinText] = useState(settings.strikeZone ? String(settings.strikeZone.yMin) : '');
   const [zyMaxText, setZyMaxText] = useState(settings.strikeZone ? String(settings.strikeZone.yMax) : '');
 
   const isOffline = settings.analysisMode === 'offline';
+  const hasDistanceCalibration = isManualDistanceCalibrated(settings.moundDistanceM);
+  const moundInputValue = Number.parseFloat(moundText);
+  const moundInputError = moundTouched
+    && moundText.trim() !== ''
+    && !isManualDistanceCalibrated(moundInputValue);
+
+  const commitMoundDistance = () => {
+    setMoundTouched(true);
+    const value = Number.parseFloat(moundText);
+    if (isManualDistanceCalibrated(value)) {
+      setMoundText(String(value));
+      updateSettings({ moundDistanceM: value });
+      return;
+    }
+    // Clearing or entering an invalid value explicitly invalidates the prior
+    // calibration. Keeping an old distance would be much more dangerous.
+    updateSettings({ moundDistanceM: 0 });
+  };
 
   const onTestConnection = async () => {
     const url = settings.backendUrl.trim();
@@ -240,30 +261,42 @@ export default function SettingsScreen() {
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <View>
-                  <Text style={styles.sectionTitle}>量測資料</Text>
-                  <Text style={styles.sectionSub}>影響球速與距離估算</Text>
+                  <Text style={styles.sectionTitle}>投打距離校正</Text>
+                  <Text style={styles.sectionSub}>正式球速分析前必填</Text>
                 </View>
-                <Ionicons name="analytics-outline" size={20} color={Colors.textMuted} />
+                <View style={styles.calibrationStatus}>
+                  <Ionicons
+                    name={hasDistanceCalibration ? 'checkmark-circle-outline' : 'alert-circle-outline'}
+                    size={17}
+                    color={hasDistanceCalibration ? Colors.green : Colors.accent}
+                  />
+                  <Text style={[styles.calibrationStatusText, hasDistanceCalibration && styles.calibrationStatusTextDone]}>
+                    {hasDistanceCalibration ? '已校正' : '待校正'}
+                  </Text>
+                </View>
               </View>
 
               <View style={styles.field}>
-                <Text style={styles.label}>投打距離</Text>
-                <View style={styles.inputWithUnit}>
+                <Text style={styles.label}>投手板前緣 → 本壘板後尖端</Text>
+                <View style={[styles.inputWithUnit, moundInputError && styles.inputWithUnitError]}>
                   <TextInput
                     style={styles.unitInput}
                     value={moundText}
-                    onChangeText={setMoundText}
-                    onBlur={() => {
-                      const n = parseFloat(moundText);
-                      const val = isNaN(n) || n < 0 ? 0 : n;
-                      setMoundText(val > 0 ? String(val) : '');
-                      updateSettings({ moundDistanceM: val });
+                    onChangeText={(value) => {
+                      setMoundText(value);
+                      setMoundTouched(true);
+                      // Do not let a previously saved calibration remain valid
+                      // while the user is replacing it with an incomplete value.
+                      if (!isManualDistanceCalibrated(Number.parseFloat(value))) {
+                        updateSettings({ moundDistanceM: 0 });
+                      }
                     }}
+                    onBlur={commitMoundDistance}
                     keyboardType="decimal-pad"
                     placeholder="例如 7.0"
                     placeholderTextColor={Colors.textMuted}
                     returnKeyType="done"
-                    accessibilityLabel="投打距離，公尺"
+                    accessibilityLabel={`手動投打距離校正，公尺，需介於 ${MIN_MANUAL_MOUND_DISTANCE_M} 到 ${MAX_MANUAL_MOUND_DISTANCE_M} 公尺`}
                   />
                   <Text style={styles.unitText}>m</Text>
                 </View>
@@ -276,6 +309,7 @@ export default function SettingsScreen() {
                         style={[styles.quickChip, selected && styles.quickChipActive]}
                         onPress={() => {
                           setMoundText(String(value));
+                          setMoundTouched(true);
                           updateSettings({ moundDistanceM: value });
                         }}
                         activeOpacity={0.75}
@@ -290,33 +324,16 @@ export default function SettingsScreen() {
                     );
                   })}
                 </View>
-                <Text style={styles.hint}>留空會自動估算；手動量測通常更穩。</Text>
-              </View>
-
-              <View style={styles.field}>
-                <Text style={styles.label}>投手身高</Text>
-                <View style={styles.inputWithUnit}>
-                  <TextInput
-                    style={styles.unitInput}
-                    value={pitcherHeightText}
-                    onChangeText={setPitcherHeightText}
-                    onBlur={() => {
-                      const n = parseFloat(pitcherHeightText);
-                      if (!isNaN(n) && n > 1 && n < 2.4) {
-                        setPitcherHeightText(String(n));
-                        updateSettings({ pitcherHeightM: n });
-                      } else {
-                        setPitcherHeightText('');
-                        updateSettings({ pitcherHeightM: undefined });
-                      }
-                    }}
-                    keyboardType="decimal-pad"
-                    placeholder="選填，例如 1.75"
-                    placeholderTextColor={Colors.textMuted}
-                    returnKeyType="done"
-                    accessibilityLabel="投手身高，公尺，可選"
-                  />
-                  <Text style={styles.unitText}>m</Text>
+                <Text style={[styles.hint, moundInputError && styles.hintError]}>
+                  {moundInputError
+                    ? `請輸入 ${MIN_MANUAL_MOUND_DISTANCE_M}–${MAX_MANUAL_MOUND_DISTANCE_M}m 的量測值。`
+                    : '請用捲尺量測固定場地距離；未填寫時 App 不會產生正式球速。'}
+                </Text>
+                <View style={styles.measurementGuide}>
+                  <Ionicons name="information-circle-outline" size={17} color={Colors.textMuted} />
+                  <Text style={styles.measurementGuideText}>
+                    請量投手板前緣至本壘板後尖端。若跨步補償大於 0，系統會以「量測距離 − 跨步補償」作為有效飛行距離。
+                  </Text>
                 </View>
               </View>
 
@@ -582,6 +599,25 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginTop: 2,
   },
+  calibrationStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    minHeight: 30,
+    borderRadius: 999,
+    backgroundColor: Colors.surface2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 9,
+  },
+  calibrationStatusText: {
+    color: Colors.accent,
+    fontSize: FontSize.xs,
+    fontWeight: '900',
+  },
+  calibrationStatusTextDone: {
+    color: Colors.green,
+  },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -686,6 +722,9 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     paddingHorizontal: Spacing.md,
   },
+  inputWithUnitError: {
+    borderColor: Colors.red,
+  },
   unitInput: {
     flex: 1,
     minWidth: 0,
@@ -735,6 +774,23 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginTop: Spacing.sm,
     lineHeight: 18,
+  },
+  hintError: {
+    color: Colors.red,
+  },
+  measurementGuide: {
+    flexDirection: 'row',
+    gap: Spacing.xs,
+    marginTop: Spacing.md,
+    padding: Spacing.sm,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface2,
+  },
+  measurementGuideText: {
+    flex: 1,
+    color: Colors.textMuted,
+    fontSize: FontSize.xs,
+    lineHeight: 17,
   },
   primaryBtn: {
     minHeight: TouchTarget.min,

@@ -44,6 +44,10 @@ final class SpeedgunPipeline {
         guard FileManager.default.fileExists(atPath: videoURL.path) else {
             throw SpeedgunError.videoLoadFailed("File not found: \(videoURL.path)")
         }
+        guard moundDistance >= MIN_MANUAL_MOUND_DISTANCE_M,
+              moundDistance <= MAX_MANUAL_MOUND_DISTANCE_M else {
+            throw SpeedgunError.manualDistanceRequired
+        }
         let manualStrikeZone = strikeZone != nil
         let absZoneHeightM = absStrikeZoneHeightM(batterHeightM)
         var resolvedStrikeZone = resolveStrikeZone(strikeZone, batterHeightM: batterHeightM)
@@ -139,6 +143,39 @@ final class SpeedgunPipeline {
         var frameInfos: [FrameInfo] = []
         var frameIndex = 0          // counts effective frames (incl. interpolated)
         var ballDetectedCount = 0        // total number of frames where ball was seen
+        // Keep the source presentation timeline and the physical capture timeline
+        // separately.  Slow-motion files play a 240fps capture at (for example)
+        // 30fps, so their PTS needs a capture-rate scale before it can be used for
+        // pitch physics. Normal / VFR clips have captureFps == fps and retain their
+        // original PTS intervals unchanged.
+        let presentationToCaptureScale = Double(fps) / Double(max(1, decoder.captureFps))
+        var firstPresentationTimeS: Double?
+        var lastRealPresentationTimeS: Double?
+        var lastRealCaptureTimeS: Double?
+
+        func resolveRealTimeline(_ sourcePTS: Double?) -> (capture: Double, presentation: Double) {
+            let fallbackPresentation = (lastRealPresentationTimeS ?? -1.0 / Double(max(1, fps)))
+                + 1.0 / Double(max(1, fps))
+            guard let sourcePTS, sourcePTS.isFinite else {
+                let capture = (lastRealCaptureTimeS ?? -1.0 / Double(max(1, decoder.captureFps)))
+                    + 1.0 / Double(max(1, decoder.captureFps))
+                lastRealPresentationTimeS = fallbackPresentation
+                lastRealCaptureTimeS = capture
+                return (capture, fallbackPresentation)
+            }
+
+            if firstPresentationTimeS == nil { firstPresentationTimeS = sourcePTS }
+            let presentation = max(0, sourcePTS - (firstPresentationTimeS ?? sourcePTS))
+            var capture = presentation * presentationToCaptureScale
+            // Broken/repeated PTS values should not collapse two frames to the
+            // same physical instant. Preserve a monotonic fallback in that case.
+            if let last = lastRealCaptureTimeS, capture <= last {
+                capture = last + 1.0 / Double(max(1, decoder.captureFps))
+            }
+            lastRealPresentationTimeS = presentation
+            lastRealCaptureTimeS = capture
+            return (capture, presentation)
+        }
         // Run pose ~30 times per second in REAL time (not playback time).
         // Release timing is sensitive to pose sampling: at 120fps, the old
         // 10/s cadence only checked every 12 frames, which could miss the
@@ -153,7 +190,7 @@ final class SpeedgunPipeline {
         // stride=1: every real frame goes through YOLO; interpolated frames always run YOLO too
         let yoloStride = 1
         var lastPose: PoseLandmarks? = nil
-        var prevPixelBuffer: CVPixelBuffer? = nil   // kept for interpolation
+        var previousDecodedFrame: (frame: DecodedVideoFrame, captureTimeS: Double, presentationTimeS: Double)?
 
         // Static FP tracking
         var staticDetections: [Int: [(cx: Double, cy: Double, area: Double, count: Int)]] = [:]
@@ -184,8 +221,18 @@ final class SpeedgunPipeline {
         }
 
         /// Process one CVPixelBuffer (real or interpolated) through pose + YOLO
-        func processFrame(_ pixelBuffer: CVPixelBuffer, isInterpolated: Bool) {
-            var fi = FrameInfo(frameIndex: frameIndex)
+        func processFrame(
+            _ pixelBuffer: CVPixelBuffer,
+            isInterpolated: Bool,
+            captureTimeS: Double,
+            presentationTimeS: Double
+        ) {
+            var fi = FrameInfo(
+                frameIndex: frameIndex,
+                captureTimeS: captureTimeS,
+                presentationTimeS: presentationTimeS,
+                isInterpolated: isInterpolated
+            )
 
             // Pose: skip on interpolated frames (pose doesn't change between adjacent frames)
             if !isInterpolated && frameIndex % poseEveryN == 0 {
@@ -259,27 +306,44 @@ final class SpeedgunPipeline {
         }
 
         // Always use 1280px high-res detection (full flight mode from frame 0)
-        while let pixelBuffer = decoder.nextFrame() {
+        while let decodedFrame = decoder.nextFrame() {
             autoreleasepool {
+                let currentTimeline = resolveRealTimeline(decodedFrame.presentationTimeS)
                 // If interpolation is on and we have a previous frame, insert
                 // synthetic frames first so the effective timeline is ordered:
                 // previous real → generated slots → current real.
-                if useInterpolation, let prev = prevPixelBuffer {
+                if useInterpolation, let previousDecodedFrame {
                     let generated = interpolator?.interpolate(
-                        frameA: prev,
-                        frameB: pixelBuffer,
+                        frameA: previousDecodedFrame.frame.pixelBuffer,
+                        frameB: decodedFrame.pixelBuffer,
                         times: interpolationTimes
                     ) ?? []
                     if generated.count == interpolationTimes.count {
-                        for midFrame in generated {
-                            processFrame(midFrame, isInterpolated: true)
+                        for (offset, midFrame) in generated.enumerated() {
+                            let t = Double(offset + 1) / Double(interpolationFactor)
+                            processFrame(
+                                midFrame,
+                                isInterpolated: true,
+                                captureTimeS: previousDecodedFrame.captureTimeS
+                                    + (currentTimeline.capture - previousDecodedFrame.captureTimeS) * t,
+                                presentationTimeS: previousDecodedFrame.presentationTimeS
+                                    + (currentTimeline.presentation - previousDecodedFrame.presentationTimeS) * t
+                            )
                         }
                     } else {
                         // Keep the effective timeline stable even if optical flow
                         // fails on a pair; timing remains correct and later gap-fill
                         // can bridge these blank slots.
-                        for _ in interpolationTimes {
-                            frameInfos.append(FrameInfo(frameIndex: frameIndex))
+                        for (offset, _) in interpolationTimes.enumerated() {
+                            let t = Double(offset + 1) / Double(interpolationFactor)
+                            frameInfos.append(FrameInfo(
+                                frameIndex: frameIndex,
+                                captureTimeS: previousDecodedFrame.captureTimeS
+                                    + (currentTimeline.capture - previousDecodedFrame.captureTimeS) * t,
+                                presentationTimeS: previousDecodedFrame.presentationTimeS
+                                    + (currentTimeline.presentation - previousDecodedFrame.presentationTimeS) * t,
+                                isInterpolated: true
+                            ))
                             rawDetections.append(RawDetection(frameIndex: frameIndex, detections: []))
                             frameIndex += 1
                         }
@@ -287,10 +351,19 @@ final class SpeedgunPipeline {
                 }
 
                 // Process the real frame
-                processFrame(pixelBuffer, isInterpolated: false)
+                processFrame(
+                    decodedFrame.pixelBuffer,
+                    isInterpolated: false,
+                    captureTimeS: currentTimeline.capture,
+                    presentationTimeS: currentTimeline.presentation
+                )
 
                 // Keep reference for next iteration's interpolation
-                prevPixelBuffer = pixelBuffer
+                previousDecodedFrame = (
+                    frame: decodedFrame,
+                    captureTimeS: currentTimeline.capture,
+                    presentationTimeS: currentTimeline.presentation
+                )
             }
 
             // Early stop disabled: always scan the full video to avoid missing the ball.
@@ -407,35 +480,12 @@ final class SpeedgunPipeline {
         // Stage 5: Speed Calculation + Classification
         reportProgress("calculating", 0.65, "Calculating speed...")
 
-        // Resolve actual pitching distance with explicit priority:
-        //   1. User-entered moundDistance (> 0)          → "manual"
-        //   2. Pose-based estimate from shoulder/body    → "pose_estimated"
-        //   3. MLB default 18.44m (WARNING — inaccurate) → "default"
-        // For backyard / short-distance scenes (5–10m) the default is WILDLY wrong
-        // (~2× speed overestimate), so we surface a user-facing warning in SpeedInfo.
-        var resolvedDistance: Double
-        var distanceSource: String
-        var distanceWarning: String? = nil
-        if moundDistance > 0 {
-            resolvedDistance = moundDistance
-            distanceSource = "manual"
-        } else if let est = estimatePitchingDistance(
-            frameInfos: frameInfos,
-            displayWidth: displayWidth,
-            displayHeight: displayHeight,
-            focalLengthPx: cameraFocalLengthPx,
-            pitcherHeightM: pitcherHeightM
-        ) {
-            resolvedDistance = est
-            distanceSource = "pose_estimated"
-            distanceWarning = "距離自動估算為 \(String(format: "%.1f", est))m；建議於設定中自行量測輸入以提高準確度"
-            NSLog("[SpeedgunPipeline] Distance auto-estimated from pose: %.2f m", est)
-        } else {
-            resolvedDistance = MLB_MOUND_DISTANCE_M
-            distanceSource = "default"
-            distanceWarning = "未設定投打距離，預設為 MLB 18.44m。球速可能嚴重失真，請於設定輸入實際距離"
-            NSLog("[SpeedgunPipeline] ⚠️ No manual distance & pose estimate failed — falling back to MLB 18.44m")
-        }
+        // Distance is an explicit manual calibration, never an estimate or an
+        // MLB fallback.  This is the largest controllable source of systematic
+        // speed error across different fields and camera positions.
+        let resolvedDistance = moundDistance
+        let distanceSource = "manual"
+        let distanceWarning: String? = nil
 
         // Use effectiveCaptureFps (true capture rate × 2) for correct real-world time.
         // For normal video effectiveCaptureFps == effectiveFps.
@@ -443,12 +493,9 @@ final class SpeedgunPipeline {
         // while effectiveFps = 60 — using effectiveFps here would make speed 8× too slow.
         // Stride correction (1.7m default) models the ball leaving the pitcher's hand
         // ~1.7m closer to the plate than the rubber, *given a real pitching stride*.
-        // It only makes sense for the "manual" source (user measured rubber-to-plate).
-        // For "pose_estimated" the value is already cam-to-pitcher direct geometry
-        // (no rubber → second subtraction would double-count). For "default" 18.44m
-        // the user hasn't even confirmed they're at MLB distance, so we shouldn't
-        // bake in a stride that may not exist.
-        let applyStride = (distanceSource == "manual")
+        // The calibration is the rubber-to-plate distance, so an optional stride
+        // correction converts it to the ball's effective release-to-plate path.
+        let applyStride = true
         let speedCalculatorResolved = BallSpeedCalculator(
             fps: effectiveCaptureFps,
             videoWidth: displayWidth,
@@ -464,6 +511,26 @@ final class SpeedgunPipeline {
                 .map { $0.ballCenter }
         }
 
+        /// Timing must be anchored to decoded camera samples only. Interpolated
+        /// frames and polynomial gap fills may improve the drawn trajectory, but
+        /// neither represents a new observation of the ball in the real world.
+        func isTimingObservation(_ frame: FrameInfo) -> Bool {
+            frame.ballInFrame && !frame.ballLostTracking && !frame.isInterpolated
+        }
+
+        func currentTimingTrajectoryPoints() -> [CGPoint] {
+            frameInfos
+                .filter(isTimingObservation)
+                .map { $0.ballCenter }
+        }
+
+        func captureTime(for frameIndex: Int?) -> Double? {
+            guard let frameIndex,
+                  frameIndex >= 0,
+                  frameIndex < frameInfos.count else { return nil }
+            return frameInfos[frameIndex].captureTimeS
+        }
+
         func currentTrajectorySamples() -> [BallTrajectorySample] {
             frameInfos
                 .filter { $0.ballInFrame }
@@ -471,15 +538,18 @@ final class SpeedgunPipeline {
                     BallTrajectorySample(
                         frameIndex: $0.frameIndex,
                         point: $0.ballCenter,
-                        isSynthetic: $0.ballLostTracking
+                        isSynthetic: $0.ballLostTracking || $0.isInterpolated
                     )
                 }
         }
 
-        // Build trajectory points
-        let firstBallFrame = frameInfos.firstIndex(where: { $0.ballInFrame })
-        var lastBallFrame  = frameInfos.lastIndex(where: { $0.ballInFrame })
+        // The visual overlay can use a continuous trajectory, but all timing
+        // anchors use only real, non-gap-filled camera observations.
+        let firstBallFrame = frameInfos.firstIndex(where: isTimingObservation)
+        let timingLastBallFrame = frameInfos.lastIndex(where: isTimingObservation)
+        var lastBallFrame = timingLastBallFrame
         var trajectoryPoints = currentTrajectoryPoints()
+        var timingTrajectoryPoints = currentTimingTrajectoryPoints()
         var trajectorySamples = currentTrajectorySamples()
 
         // Detect release point from pose signals, constrained by the first
@@ -500,7 +570,8 @@ final class SpeedgunPipeline {
             guard let result = releaseResult,
                   result.confidence >= POSE_RELEASE_MIN_CONFIDENCE,
                   let first = firstBallFrame else { return nil }
-            let gapSec = Double(first - result.frameIndex) / Double(effectiveCaptureFps)
+            guard result.frameIndex >= 0, result.frameIndex < frameInfos.count else { return nil }
+            let gapSec = frameInfos[first].captureTimeS - frameInfos[result.frameIndex].captureTimeS
             guard gapSec >= 0 && gapSec <= MAX_PRE_DETECT_SEC else {
                 NSLog("[SpeedgunPipeline] Pose release REJECTED: frame=%d conf=%.2f gap=%.3fs (max=%.2fs)",
                       result.frameIndex, result.confidence, gapSec, MAX_PRE_DETECT_SEC)
@@ -521,7 +592,7 @@ final class SpeedgunPipeline {
         let audioSearchAnchorFrame = validatedReleaseFrame ?? firstBallFrame ?? lastBallFrame ?? 0
         let rawCatchFrame = detectCatchImpact(
             asset: AVAsset(url: effectiveURL),
-            fps: effectiveCaptureFps,
+            frameInfos: frameInfos,
             searchAfterFrame: audioSearchAnchorFrame,
             visualReferenceFrame: lastBallFrame
         )
@@ -529,9 +600,13 @@ final class SpeedgunPipeline {
         // wrong when tracking survives on blur/hand/mitt artifacts, so it must not
         // be required to occur before the audio catch.
         let validatedCatchFrame: Int? = {
-            guard let cf = rawCatchFrame else { return nil }
+            guard let cf = rawCatchFrame,
+                  cf >= 0,
+                  cf < frameInfos.count else { return nil }
             if let first = firstBallFrame, cf <= first { return nil }
-            let sinceAnchorSec = Double(cf - audioSearchAnchorFrame) / Double(effectiveCaptureFps)
+            let anchorTime = captureTime(for: audioSearchAnchorFrame)
+                ?? Double(audioSearchAnchorFrame) / Double(effectiveCaptureFps)
+            let sinceAnchorSec = frameInfos[cf].captureTimeS - anchorTime
             guard sinceAnchorSec >= AUDIO_CATCH_MIN_OFFSET_SEC,
                   sinceAnchorSec <= AUDIO_CATCH_MAX_OFFSET_SEC else { return nil }
             return cf
@@ -539,11 +614,11 @@ final class SpeedgunPipeline {
 
         if let rel = validatedReleaseFrame {
             NSLog("[SpeedgunPipeline] Validated release frame: %d (%.3fs real)",
-                  rel, Double(rel)/Double(effectiveCaptureFps))
+                  rel, captureTime(for: rel) ?? Double(rel) / Double(effectiveCaptureFps))
         }
         if let cf = validatedCatchFrame {
             NSLog("[SpeedgunPipeline] Validated audio catch frame: %d (%.3fs real, anchor=%d)",
-                  cf, Double(cf)/Double(effectiveCaptureFps), audioSearchAnchorFrame)
+                  cf, captureTime(for: cf) ?? Double(cf) / Double(effectiveCaptureFps), audioSearchAnchorFrame)
         } else {
             NSLog("[SpeedgunPipeline] No valid audio catch frame — using YOLO lastFrame endpoint")
         }
@@ -551,37 +626,52 @@ final class SpeedgunPipeline {
         let fallbackReleaseFrame: Int? = firstBallFrame.map {
             max(0, $0 - Int(round(RELEASE_FALLBACK_SEC * Double(effectiveCaptureFps))))
         }
-        let releaseMarkerFrame = validatedReleaseFrame ?? fallbackReleaseFrame
-        let releaseMarkerSource = validatedReleaseFrame != nil ? "pose" : (fallbackReleaseFrame != nil ? "fallback" : nil)
-        let releaseMarkerPoint = estimateReleaseMarkerPoint(
+        let initialReleaseFrame = validatedReleaseFrame ?? fallbackReleaseFrame
+        let initialReleasePoint = estimateReleaseMarkerPoint(
             frameInfos: frameInfos,
-            releaseFrame: releaseMarkerFrame,
+            releaseFrame: initialReleaseFrame,
             firstBallFrame: firstBallFrame
         )
+        let refinedRelease = refineReleaseTiming(
+            frameInfos: frameInfos,
+            poseReleaseFrame: validatedReleaseFrame,
+            firstBallFrame: firstBallFrame,
+            releasePoint: initialReleasePoint
+        )
+        let releaseMarkerFrame = refinedRelease.frameIndex ?? initialReleaseFrame
+        let releaseMarkerSource = refinedRelease.source
+            ?? (validatedReleaseFrame != nil ? "pose" : (fallbackReleaseFrame != nil ? "fallback" : nil))
+        let releaseMarkerPoint = refinedRelease.point ?? initialReleasePoint
+        // A fallback marker is only for visualisation. Do not pass its frame
+        // timestamp into physics as if it were a measured release event; that
+        // would turn VFR spacing into a false "pose" pre-detect interval.
+        let measuredReleaseTimeS = refinedRelease.timeS ?? captureTime(for: validatedReleaseFrame)
 
         // Ball-size ranging for the pre-detect gap: physically-derived estimate of
         // the release → first-detection time, replacing the fixed 0.25s guess.
-        let ballSizePreFrames = estimateBallSizePreDetectFrames(
+        let ballSizePreSeconds = estimateBallSizePreDetectSeconds(
             rawDetections: rawDetections,
             frameInfos: frameInfos,
             firstBallFrame: firstBallFrame,
-            endpointFrame: validatedCatchFrame ?? lastBallFrame,
+            endpointFrame: validatedCatchFrame ?? timingLastBallFrame,
             focalLengthPx: cameraFocalLengthPx,
             flightDistanceM: speedCalculatorResolved.effectiveDistance ?? resolvedDistance,
-            fps: effectiveCaptureFps,
             displayWidth: displayWidth
         )
 
         var speedInfo: SpeedInfo
-        if trajectoryPoints.count >= 2 {
+        if timingTrajectoryPoints.count >= 2 {
             speedInfo = speedCalculatorResolved.calculateSpeedDetailed(
-                trajectoryPoints: trajectoryPoints,
+                trajectoryPoints: timingTrajectoryPoints,
                 frameInfos: frameInfos,
                 releasePoint: releaseMarkerPoint,
                 releaseFrameIdx: validatedReleaseFrame,
                 firstBallFrameIdx: firstBallFrame,
-                lastBallFrameIdx: validatedCatchFrame ?? lastBallFrame,
-                ballSizePreFrames: ballSizePreFrames
+                lastBallFrameIdx: validatedCatchFrame ?? timingLastBallFrame,
+                releaseTimeS: measuredReleaseTimeS,
+                firstBallTimeS: captureTime(for: firstBallFrame),
+                lastBallTimeS: captureTime(for: validatedCatchFrame ?? timingLastBallFrame),
+                ballSizePreSeconds: ballSizePreSeconds
             )
 
             if !manualStrikeZone {
@@ -807,7 +897,10 @@ final class SpeedgunPipeline {
             speedInfo.releaseFrameSource = releaseMarkerSource
             speedInfo.releasePoint = releaseMarkerPoint
             speedInfo.firstBallFrameIdx = firstBallFrame
-            speedInfo.catchFrameIdx = validatedCatchFrame ?? lastBallFrame
+            speedInfo.catchFrameIdx = validatedCatchFrame ?? timingLastBallFrame
+            speedInfo.releaseTimeS = measuredReleaseTimeS
+            speedInfo.firstBallTimeS = captureTime(for: firstBallFrame)
+            speedInfo.catchTimeS = captureTime(for: validatedCatchFrame ?? timingLastBallFrame)
             if distanceSource == "pose_estimated" {
                 speedInfo.estimatedDistanceM = resolvedDistance
             }
@@ -1036,6 +1129,77 @@ final class SpeedgunPipeline {
             "y_min": yMin,
             "y_max": yMax,
         ]
+    }
+
+    /// Refine a pose-derived release moment using only the first real ball
+    /// observations. The first few ball centres define a short-time image-plane
+    /// velocity; projecting that line backwards to the throwing wrist removes
+    /// the ~30 Hz quantisation of pose sampling without treating interpolated
+    /// frames as camera evidence.
+    private func refineReleaseTiming(
+        frameInfos: [FrameInfo],
+        poseReleaseFrame: Int?,
+        firstBallFrame: Int?,
+        releasePoint: CGPoint?
+    ) -> (frameIndex: Int?, timeS: Double?, point: CGPoint?, source: String?) {
+        guard let poseFrame = poseReleaseFrame,
+              let firstBallFrame,
+              poseFrame >= 0, poseFrame < frameInfos.count,
+              firstBallFrame >= 0, firstBallFrame < frameInfos.count,
+              let wrist = releasePoint else {
+            return (nil, nil, nil, nil)
+        }
+
+        let poseTime = frameInfos[poseFrame].captureTimeS
+        let samples = frameInfos
+            .filter {
+                $0.frameIndex >= firstBallFrame
+                    && $0.ballInFrame
+                    && !$0.ballLostTracking
+                    && !$0.isInterpolated
+            }
+            .prefix(5)
+        guard samples.count >= 3,
+              let first = samples.first,
+              let last = samples.last,
+              last.captureTimeS > first.captureTimeS else {
+            return (poseFrame, poseTime, wrist, "pose")
+        }
+
+        let timeOffsets = samples.map { $0.captureTimeS - first.captureTimeS }
+        let xs = samples.map { Double($0.ballCenter.x) }
+        let ys = samples.map { Double($0.ballCenter.y) }
+        let xFit = polyfit(timeOffsets, xs, degree: 1)
+        let yFit = polyfit(timeOffsets, ys, degree: 1)
+        guard xFit.count == 2, yFit.count == 2 else {
+            return (poseFrame, poseTime, wrist, "pose")
+        }
+
+        let vx = xFit[0]
+        let vy = yFit[0]
+        let speedSq = vx * vx + vy * vy
+        guard speedSq > 25.0 else { return (poseFrame, poseTime, wrist, "pose") }
+
+        let firstPoint = CGPoint(x: CGFloat(polyval(xFit, 0)), y: CGFloat(polyval(yFit, 0)))
+        let dx = Double(wrist.x - firstPoint.x)
+        let dy = Double(wrist.y - firstPoint.y)
+        let projectedTime = first.captureTimeS + (dx * vx + dy * vy) / speedSq
+
+        // A useful refinement stays close to the pose candidate and occurs no
+        // later than the first observed ball. Larger disagreement means the
+        // 2-D path/wrist association is unreliable, so retain pose timing.
+        let maxPoseAdjustmentS = 0.085
+        guard projectedTime <= first.captureTimeS,
+              abs(projectedTime - poseTime) <= maxPoseAdjustmentS else {
+            return (poseFrame, poseTime, wrist, "pose")
+        }
+
+        let nearestFrame = frameInfos.min(by: {
+            abs($0.captureTimeS - projectedTime) < abs($1.captureTimeS - projectedTime)
+        })?.frameIndex
+        NSLog("[SpeedgunPipeline] Release refined: pose=%.4fs projected=%.4fs delta=%+.4fs using %d real ball samples",
+              poseTime, projectedTime, projectedTime - poseTime, samples.count)
+        return (nearestFrame, projectedTime, wrist, "pose_refined")
     }
 
     private func estimateReleaseMarkerPoint(
@@ -1533,10 +1697,11 @@ final class SpeedgunPipeline {
     /// transient is found (video has no audio, or the catch is inaudible).
     private func detectCatchImpact(
         asset: AVAsset,
-        fps: Int,
+        frameInfos: [FrameInfo],
         searchAfterFrame: Int,
         visualReferenceFrame: Int? = nil
     ) -> Int? {
+        guard !frameInfos.isEmpty else { return nil }
         guard let audioTrack = asset.tracks(withMediaType: .audio).first else {
             NSLog("[SpeedgunPipeline] No audio track — skipping catch detection")
             return nil
@@ -1578,11 +1743,32 @@ final class SpeedgunPipeline {
             return asbd.pointee.mSampleRate
         }()
 
-        // Collect audio energy into video-frame buckets.  Use each audio
-        // sample's time inside the buffer instead of the buffer start PTS; iOS
-        // audio buffers can span multiple video frames, and assigning the whole
-        // buffer to its first timestamp makes sharp impacts appear too early.
-        let frameDuration = 1.0 / Double(max(1, fps))
+        // Collect audio energy into the *actual decoded video timeline*. This
+        // uses the source PTS carried by FrameInfo instead of `time × fps`, so
+        // VFR clips and optical-flow inserts cannot shift a glove impact to an
+        // unrelated frame.
+        let presentationTimes = frameInfos.map(\.presentationTimeS)
+        func nearestFrameIndex(to presentationTimeS: Double) -> Int? {
+            guard let first = presentationTimes.first, let last = presentationTimes.last,
+                  presentationTimeS >= first - 0.5, presentationTimeS <= last + 0.5 else {
+                return nil
+            }
+            var low = 0
+            var high = presentationTimes.count
+            while low < high {
+                let mid = (low + high) / 2
+                if presentationTimes[mid] < presentationTimeS {
+                    low = mid + 1
+                } else {
+                    high = mid
+                }
+            }
+            if low == 0 { return 0 }
+            if low >= presentationTimes.count { return presentationTimes.count - 1 }
+            let before = low - 1
+            return abs(presentationTimes[low] - presentationTimeS) < abs(presentationTimes[before] - presentationTimeS)
+                ? low : before
+        }
         var frameRMS: [Int: (sumSq: Double, count: Int)] = [:]
 
         while let sampleBuffer = audioOutput.copyNextSampleBuffer() {
@@ -1590,8 +1776,6 @@ final class SpeedgunPipeline {
                 guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
                 let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                 let ptsSeconds = CMTimeGetSeconds(pts)
-                let videoFrameIdx = Int(ptsSeconds / frameDuration)
-
                 var dataLength = 0
                 var dataPointer: UnsafeMutablePointer<CChar>?
                 CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil,
@@ -1611,7 +1795,7 @@ final class SpeedgunPipeline {
                 for audioFrame in 0..<audioFrameCount {
                     let relativeSeconds = (ptsSeconds - videoStartSeconds) + Double(audioFrame) * sampleStep
                     guard relativeSeconds >= 0 else { continue }
-                    let videoFrameIdx = Int(floor(relativeSeconds / frameDuration))
+                    guard let videoFrameIdx = nearestFrameIndex(to: relativeSeconds) else { continue }
 
                     var frameSumSq = 0.0
                     let base = audioFrame * channelCount
@@ -1640,11 +1824,16 @@ final class SpeedgunPipeline {
 
         guard rmsValues.count >= 5 else { return nil }
 
-        // Search from shortly after release/first-ball anchor. This makes audio
-        // the primary endpoint while still skipping delivery/foot-plant sounds.
-        let searchStart = searchAfterFrame + Int(round(AUDIO_CATCH_MIN_OFFSET_SEC * Double(fps)))
-        let searchEnd = searchAfterFrame + Int(round(AUDIO_CATCH_MAX_OFFSET_SEC * Double(fps)))
-        let candidates = rmsValues.filter { $0.frameIdx >= searchStart && $0.frameIdx <= searchEnd }
+        // Search from shortly after release/first-ball anchor. Compare in
+        // physical capture time, not frame offsets, so variable frame spacing
+        // cannot move the admissible audio window.
+        let anchorIndex = min(max(0, searchAfterFrame), frameInfos.count - 1)
+        let anchorTime = frameInfos[anchorIndex].captureTimeS
+        let candidates = rmsValues.filter {
+            guard $0.frameIdx >= 0, $0.frameIdx < frameInfos.count else { return false }
+            let delta = frameInfos[$0.frameIdx].captureTimeS - anchorTime
+            return delta >= AUDIO_CATCH_MIN_OFFSET_SEC && delta <= AUDIO_CATCH_MAX_OFFSET_SEC
+        }
         guard candidates.count >= 3 else { return nil }
 
         // Build rolling baseline using a ±10 frame window median
@@ -1684,9 +1873,11 @@ final class SpeedgunPipeline {
             }
 
             if let visual = visualReferenceFrame {
-                let earlyToleranceFrames = Int(round(0.08 * Double(fps)))
-                guard candidate.frameIdx >= visual - earlyToleranceFrames else { continue }
-                let diffSec = abs(Double(candidate.frameIdx - visual)) / Double(fps)
+                guard visual >= 0, visual < frameInfos.count else { continue }
+                let candidateTime = frameInfos[candidate.frameIdx].captureTimeS
+                let visualTime = frameInfos[visual].captureTimeS
+                guard candidateTime >= visualTime - 0.08 else { continue }
+                let diffSec = abs(candidateTime - visualTime)
                 guard diffSec <= AUDIO_CATCH_VISUAL_MAX_DIVERGENCE_SEC else { continue }
             }
 
@@ -1705,7 +1896,7 @@ final class SpeedgunPipeline {
 
     // MARK: - Ball-size Ranging (pre-detect gap)
 
-    /// Estimate the pre-detect gap (release → first YOLO detection) in frames
+    /// Estimate the pre-detect gap (release → first YOLO detection) in seconds
     /// using the ball's pixel size at first detection.
     ///
     /// Pinhole model on the known baseball diameter (74mm):
@@ -1719,17 +1910,17 @@ final class SpeedgunPipeline {
     ///
     /// Returns nil when the ranging is unreliable (too few clean detections,
     /// sub-3px ball, or an implied distance outside the plausible flight range).
-    private func estimateBallSizePreDetectFrames(
+    private func estimateBallSizePreDetectSeconds(
         rawDetections: [RawDetection],
         frameInfos: [FrameInfo],
         firstBallFrame: Int?,
         endpointFrame: Int?,
         focalLengthPx: Double,
         flightDistanceM: Double,
-        fps: Int,
         displayWidth: Int
     ) -> Double? {
         guard let first = firstBallFrame, let last = endpointFrame, last > first,
+              first >= 0, last < frameInfos.count,
               flightDistanceM > 1.0, focalLengthPx > 1.0 else { return nil }
 
         // Median min-side bbox diameter over the first few REAL detections.
@@ -1742,7 +1933,7 @@ final class SpeedgunPipeline {
         while fid < min(rawDetections.count, frameInfos.count, first + 20), diameters.count < 5 {
             defer { fid += 1 }
             let fi = frameInfos[fid]
-            guard fi.ballInFrame, !fi.ballLostTracking else { continue }
+            guard fi.ballInFrame, !fi.ballLostTracking, !fi.isInterpolated else { continue }
             let cx = Double(fi.ballCenter.x)
             let cy = Double(fi.ballCenter.y)
             guard let det = rawDetections[fid].detections.min(by: {
@@ -1771,7 +1962,8 @@ final class SpeedgunPipeline {
         }
 
         let flownPreM = max(0.0, flightDistanceM - camToBall)
-        let detectSec = Double(last - first) / Double(max(1, fps))
+        let detectSec = frameInfos[last].captureTimeS - frameInfos[first].captureTimeS
+        guard detectSec > 0 else { return nil }
         let preSec = detectSec * flownPreM / camToBall
         guard preSec <= MAX_PRE_DETECT_SEC else {
             NSLog("[SpeedgunPipeline] Ball-size ranging: preSec=%.2fs exceeds cap %.2fs",
@@ -1781,7 +1973,7 @@ final class SpeedgunPipeline {
 
         NSLog("[SpeedgunPipeline] Ball-size ranging: ballPx=%.1f camToBall=%.1fm flownPre=%.1fm → pre=%.3fs",
               pxDiameter, camToBall, flownPreM, preSec)
-        return preSec * Double(max(1, fps))
+        return preSec
     }
 
     // MARK: - Pose-based Distance Estimation
