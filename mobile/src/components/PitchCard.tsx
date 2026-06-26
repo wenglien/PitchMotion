@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Colors, Radius, Shadows, Spacing } from '../theme';
 import { PitchResult } from '../types';
 import { kmhToMph, pitchColor, formatTime, formatDate, shortMethod } from '../utils/conversions';
@@ -8,9 +8,10 @@ import { generateCoachingComment } from '../utils/coaching';
 interface Props {
   pitch: PitchResult;
   index: number;
+  onViewTrajectory?: () => void;
 }
 
-export default function PitchCard({ pitch, index }: Props) {
+export default function PitchCard({ pitch, index, onViewTrajectory }: Props) {
   const si = pitch?.speed_info || {};
 
   const vMph = si.release_speed_kmh
@@ -99,6 +100,17 @@ export default function PitchCard({ pitch, index }: Props) {
         <Text style={styles.commentLabel}>COMMENT</Text>
         <Text style={styles.commentBody}>{comment}</Text>
       </View>
+      {onViewTrajectory && (
+        <TouchableOpacity
+          style={styles.trajectoryBtn}
+          onPress={onViewTrajectory}
+          accessibilityRole="button"
+          accessibilityLabel={`查看第 ${index} 球的 3D 軌跡模擬`}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.trajectoryBtnText}>查看 3D 軌跡</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -201,5 +213,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.text,
     lineHeight: 19.5,
+  },
+  trajectoryBtn: {
+    marginTop: 12,
+    minHeight: 42,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.panel,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trajectoryBtnText: {
+    color: Colors.textInverse,
+    fontSize: 13,
+    fontWeight: '800',
   },
 });

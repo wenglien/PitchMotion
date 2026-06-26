@@ -10,6 +10,9 @@ import Svg, {
   G,
   Defs,
   ClipPath,
+  LinearGradient,
+  Stop,
+  Path,
 } from 'react-native-svg';
 import { Colors } from '../theme';
 import { pitchDotColor, kmhToMph } from '../utils/conversions';
@@ -18,26 +21,27 @@ import { SessionPitch } from '../types';
 // ── Strike-zone bounds in raw frame-normalised coords ────────────────────
 // Must match STRIKE_ZONE_* in Swift/Python and OverlayGenerator.
 const DEFAULT_ZONE = { xMin: 0.33, xMax: 0.67, yMin: 0.59, yMax: 0.83 };
-const COL_LABELS = ['In', 'Mid', 'Out'];
-const ROW_LABELS = ['High', 'Mid', 'Low'];
 
 // ── Canvas geometry ──────────────────────────────────────────────────────
-const W = 230;
-const H = 270;
-const PAD_L = 32;
-const PAD_T = 24;
-const PAD_R = 16;
-const PAD_B = 36;
-const ZW = W - PAD_L - PAD_R;
-const ZH = H - PAD_T - PAD_B;
+const W = 270;
+const H = 310;
+// The landing plane sits at the back of the volume. The larger foreground
+// frame creates a quiet, room-like perspective without adding visual clutter.
+const PAD_L = 68;
+const PAD_T = 62;
+const ZW = 134;
+const ZH = 168;
+const FRONT_X = 24;
+const FRONT_Y = 28;
+const FRONT_W = 222;
+const FRONT_H = 238;
 
 const SAFE_U = 0.055;
 const SAFE_V = 0.055;
 
-// Pitcher release point on the flat strike-zone plane. z is kept only for
-// trajectory thickness/lighting so the line can feel 3D without moving the UI
-// back into a perspective tunnel.
-const RELEASE_3D = { u: 0.5, v: SAFE_V, z: 1.0 } as const;
+// Pitcher release starts at the foreground opening and travels toward the
+// smaller landing plane at the back of the volume.
+const RELEASE_3D = { u: 0.5, v: SAFE_V, z: 0.92 } as const;
 
 // Animation timing
 const ANIM_DURATION_MS = 1400;  // flight
@@ -71,12 +75,18 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
   const clipIdRef = useRef(`strikeZoneClip${Math.random().toString(36).slice(2)}`);
   const clipId = clipIdRef.current;
 
-  // Flat 2D strike-zone projection. The z value is still sampled separately
-  // and used by buildTube for taper, opacity, highlight, and shadow.
-  const project = (u: number, v: number, _z: number): Pt2 => ({
-    x: PAD_L + u * ZW,
-    y: PAD_T + v * ZH,
-  });
+  // Linear perspective: z=1 is the large foreground opening, z=0 is the
+  // compact landing plane. This keeps the actual landing coordinates exact.
+  const project = (u: number, v: number, z: number): Pt2 => {
+    const backX = PAD_L + u * ZW;
+    const backY = PAD_T + v * ZH;
+    const frontX = FRONT_X + u * FRONT_W;
+    const frontY = FRONT_Y + v * FRONT_H;
+    return {
+      x: backX + (frontX - backX) * z,
+      y: backY + (frontY - backY) * z,
+    };
+  };
 
   const plateToUV = (xNorm: number, yNorm: number) => ({
     u: (xNorm - zone.xMin) / (zone.xMax - zone.xMin),
@@ -225,6 +235,15 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
 
   const thirds = [1 / 3, 2 / 3];
 
+  const backTL = project(0, 0, 0);
+  const backTR = project(1, 0, 0);
+  const backBR = project(1, 1, 0);
+  const backBL = project(0, 1, 0);
+  const frontTL = project(0, 0, 1);
+  const frontTR = project(1, 0, 1);
+  const frontBR = project(1, 1, 1);
+  const frontBL = project(0, 1, 1);
+
   const bx = PAD_L;
   const by = PAD_T + ZH + 8;
   const bw = ZW;
@@ -253,110 +272,148 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
       <TouchableWithoutFeedback onPress={cycleNext}>
       <Svg width={W} height={H} style={{ overflow: 'hidden' }}>
         <Defs>
+          <LinearGradient id={`${clipId}-bg`} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#f8fbff" />
+            <Stop offset="0.58" stopColor="#eff7fc" />
+            <Stop offset="1" stopColor="#e5f0f8" />
+          </LinearGradient>
+          <LinearGradient id={`${clipId}-left-wall`} x1="0" y1="0" x2="1" y2="0">
+            <Stop offset="0" stopColor="#dbeafe" stopOpacity={0.05} />
+            <Stop offset="1" stopColor="#38bdf8" stopOpacity={0.2} />
+          </LinearGradient>
+          <LinearGradient id={`${clipId}-right-wall`} x1="1" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#0284c7" stopOpacity={0.2} />
+            <Stop offset="1" stopColor="#e0f2fe" stopOpacity={0.04} />
+          </LinearGradient>
+          <LinearGradient id={`${clipId}-landing`} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#e0f2fe" stopOpacity={0.7} />
+            <Stop offset="1" stopColor="#bae6fd" stopOpacity={0.35} />
+          </LinearGradient>
           <ClipPath id={clipId}>
-            <Rect x={PAD_L} y={PAD_T} width={ZW} height={ZH} rx={3} />
+            <Rect x={10} y={16} width={W - 20} height={H - 46} rx={16} />
           </ClipPath>
         </Defs>
 
         {/* Background */}
-        <Rect x={0} y={0} width={W} height={H} fill={Colors.surface2} rx={12} />
+        <Rect x={0} y={0} width={W} height={H} fill={`url(#${clipId}-bg)`} rx={16} />
+        <Circle cx={W / 2} cy={H * 0.42} r={118} fill="rgba(255,255,255,0.44)" />
 
-        {/* Strike zone */}
+        {/* 3D volume: restrained glass walls, so the ball flight stays primary. */}
+        <Polygon
+          points={`${frontTL.x},${frontTL.y} ${frontBL.x},${frontBL.y} ${backBL.x},${backBL.y} ${backTL.x},${backTL.y}`}
+          fill={`url(#${clipId}-left-wall)`}
+        />
+        <Polygon
+          points={`${frontTR.x},${frontTR.y} ${frontBR.x},${frontBR.y} ${backBR.x},${backBR.y} ${backTR.x},${backTR.y}`}
+          fill={`url(#${clipId}-right-wall)`}
+        />
+        <Polygon
+          points={`${frontTL.x},${frontTL.y} ${frontTR.x},${frontTR.y} ${backTR.x},${backTR.y} ${backTL.x},${backTL.y}`}
+          fill="rgba(125,211,252,0.08)"
+        />
+        {[ [frontTL, backTL], [frontTR, backTR], [frontBR, backBR], [frontBL, backBL] ].map(([front, back], i) => (
+          <Line
+            key={`depth-edge-${i}`}
+            x1={front.x}
+            y1={front.y}
+            x2={back.x}
+            y2={back.y}
+            stroke="rgba(14,165,233,0.15)"
+            strokeWidth={1}
+          />
+        ))}
+
+        {/* Corner brackets imply the foreground opening without a heavy box. */}
+        <Path d={`M ${frontTL.x + 20} ${frontTL.y} H ${frontTL.x} V ${frontTL.y + 20}`} fill="none" stroke="rgba(15,23,42,0.42)" strokeWidth={1.6} strokeLinecap="round" />
+        <Path d={`M ${frontTR.x - 20} ${frontTR.y} H ${frontTR.x} V ${frontTR.y + 20}`} fill="none" stroke="rgba(15,23,42,0.42)" strokeWidth={1.6} strokeLinecap="round" />
+        <Path d={`M ${frontBR.x - 20} ${frontBR.y} H ${frontBR.x} V ${frontBR.y - 20}`} fill="none" stroke="rgba(15,23,42,0.34)" strokeWidth={1.6} strokeLinecap="round" />
+        <Path d={`M ${frontBL.x + 20} ${frontBL.y} H ${frontBL.x} V ${frontBL.y - 20}`} fill="none" stroke="rgba(15,23,42,0.34)" strokeWidth={1.6} strokeLinecap="round" />
+
+        {/* The only grid: the far landing plane, where pitches are recorded. */}
+        <Rect
+          x={PAD_L - 5}
+          y={PAD_T - 5}
+          width={ZW + 10}
+          height={ZH + 10}
+          fill="none"
+          stroke="rgba(14,165,233,0.12)"
+          strokeWidth={7}
+          rx={6}
+        />
         <Rect
           x={PAD_L}
           y={PAD_T}
           width={ZW}
           height={ZH}
-          fill="rgba(79,142,247,0.06)"
-          stroke="rgba(79,142,247,0.5)"
-          strokeWidth={2}
-          rx={3}
+          fill={`url(#${clipId}-landing)`}
+          stroke="rgba(2,132,199,0.76)"
+          strokeWidth={1.5}
+          rx={4}
         />
-
-        {/* Grid lines */}
         {thirds.map((t, i) => (
-          <G key={`grid-${i}`}>
+          <G key={`landing-grid-${i}`}>
             <Line
               x1={PAD_L + ZW * t}
               y1={PAD_T}
               x2={PAD_L + ZW * t}
               y2={PAD_T + ZH}
-              stroke="rgba(150,150,150,0.2)"
-              strokeWidth={1}
-              strokeDasharray="3 3"
+              stroke="rgba(14,165,233,0.13)"
+              strokeWidth={0.8}
             />
             <Line
               x1={PAD_L}
               y1={PAD_T + ZH * t}
               x2={PAD_L + ZW}
               y2={PAD_T + ZH * t}
-              stroke="rgba(150,150,150,0.2)"
-              strokeWidth={1}
-              strokeDasharray="3 3"
+              stroke="rgba(14,165,233,0.13)"
+              strokeWidth={0.8}
             />
           </G>
-        ))}
-
-        {/* Column labels */}
-        {COL_LABELS.map((lbl, i) => (
-          <SvgText
-            key={`col-${lbl}`}
-            x={PAD_L + (ZW / 3) * i + ZW / 6}
-            y={PAD_T - 8}
-            textAnchor="middle"
-            fontSize={9}
-            fill={Colors.textMuted}
-            fontFamily="System"
-          >
-            {lbl}
-          </SvgText>
-        ))}
-        {ROW_LABELS.map((lbl, i) => (
-          <SvgText
-            key={`row-${lbl}`}
-            x={PAD_L - 4}
-            y={PAD_T + (ZH / 3) * i + ZH / 6 + 4}
-            textAnchor="end"
-            fontSize={9}
-            fill={Colors.textMuted}
-            fontFamily="System"
-          >
-            {lbl}
-          </SvgText>
         ))}
 
         {/* Title */}
         <SvgText
           x={W / 2}
-          y={12}
+          y={15}
           textAnchor="middle"
-          fontSize={10}
-          fill={Colors.textMuted}
+          fontSize={8}
+          fill="rgba(71,85,105,0.74)"
           fontFamily="System"
           letterSpacing={1}
         >
-          STRIKE ZONE
+          PITCH SPACE
+        </SvgText>
+        <SvgText
+          x={W / 2}
+          y={PAD_T - 9}
+          textAnchor="middle"
+          fontSize={7.5}
+          fill="rgba(2,132,199,0.72)"
+          fontFamily="System"
+          letterSpacing={0.6}
+        >
+          IMPACT PLANE
         </SvgText>
 
         {/* Home plate */}
         <Polygon
           points={`${bx},${by} ${bx + bw},${by} ${bx + bw},${by + bh - tip} ${bx + bw / 2},${by + bh} ${bx},${by + bh - tip}`}
-          fill="rgba(150,150,150,0.08)"
-          stroke="rgba(150,150,150,0.3)"
-          strokeWidth={1.5}
+          fill="rgba(255,255,255,0.72)"
+          stroke="rgba(2,132,199,0.30)"
+          strokeWidth={1.2}
         />
 
         {/* ── Release-point marker ── */}
         {pitchData.length > 0 && (
           <G opacity={0.8}>
-            <Circle cx={releaseProj.x} cy={releaseProj.y} r={7} fill="rgba(255,255,255,0.08)" />
+            <Circle cx={releaseProj.x} cy={releaseProj.y} r={9} fill="rgba(14,165,233,0.12)" />
             <Circle
               cx={releaseProj.x}
               cy={releaseProj.y}
               r={3.5}
               fill="rgba(255,255,255,0.9)"
-              stroke="rgba(51,65,85,0.9)"
-              strokeWidth={1}
+              stroke="rgba(2,132,199,0.85)"
+              strokeWidth={1.2}
             />
             <Circle cx={releaseProj.x - 0.9} cy={releaseProj.y - 0.9} r={1} fill="#ffffff" />
           </G>

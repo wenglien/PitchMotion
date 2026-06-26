@@ -25,7 +25,13 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
-          setSettings({ ...DEFAULT_SETTINGS, ...parsed });
+          // Drop retired remote-analysis settings from existing installations.
+          const { backendUrl: _backendUrl, analysisMode: _analysisMode, ...localSettings } = parsed;
+          const next = { ...DEFAULT_SETTINGS, ...localSettings };
+          setSettings(next);
+          if ('backendUrl' in parsed || 'analysisMode' in parsed) {
+            AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+          }
         } catch {}
       }
       setLoaded(true);

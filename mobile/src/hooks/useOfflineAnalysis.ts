@@ -1,6 +1,6 @@
 import { useRef, useCallback } from 'react';
 import { analyzeVideoOffline, addProgressListener } from '../../modules/expo-speedgun';
-import { PitchResult, StrikeZoneCalibration } from '../types';
+import { PitchResult, StrikeZoneCalibration, TrajectoryMetadata, TrajectorySample } from '../types';
 
 /** Maps native stage names → pipeline stage IDs used by AnalysisProgress */
 const STAGE_MAP: Record<string, string> = {
@@ -145,6 +145,9 @@ export function useOfflineAnalysis() {
             calculation_method: speedInfo.calculation_method,
             physics_clamped: speedInfo.physics_clamped,
             trajectory_quality_warning: speedInfo.trajectory_quality_warning,
+            release_point: speedInfo.release_point,
+            catch_point: speedInfo.catch_point,
+            glove_point: speedInfo.glove_point,
             plate_x_norm: speedInfo.plate_x_norm,
             plate_y_norm: speedInfo.plate_y_norm,
             catch_point_confidence: speedInfo.catch_point_confidence,
@@ -195,6 +198,8 @@ export function useOfflineAnalysis() {
           effective_capture_fps: raw.effective_capture_fps as number | undefined,
           interpolation_factor: raw.interpolation_factor as number | undefined,
           trajectory_points_norm: raw.trajectory_points_norm as import('../types').TrajectoryPoint[] | undefined,
+          trajectory_samples: raw.trajectory_samples as TrajectorySample[] | undefined,
+          trajectory_metadata: raw.trajectory_metadata as TrajectoryMetadata | undefined,
         };
 
         return result;

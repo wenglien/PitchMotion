@@ -4,6 +4,8 @@ export interface SpeedInfo {
   max_speed_kmh?: number;
   total_distance_m?: number;
   effective_distance_m?: number;
+  mound_distance_m?: number;
+  stride_correction_m?: number;
   flight_time_s?: number;
   // Ball displacement (break) in centimetres at the plate plane.
   // Horizontal: +right / −left.  Vertical: +down / −up (image coords).
@@ -26,6 +28,9 @@ export interface SpeedInfo {
   calculation_method?: string;
   physics_clamped?: boolean;
   trajectory_quality_warning?: string | boolean;
+  release_point?: ImagePoint;
+  catch_point?: ImagePoint;
+  glove_point?: ImagePoint;
   plate_x_norm?: number;
   plate_y_norm?: number;
   pitch_loc_x?: number;
@@ -69,6 +74,53 @@ export interface TrajectoryPoint {
   y: number;   // normalised 0-1 (top  → bottom in video frame)
 }
 
+export interface ImagePoint {
+  x: number;
+  y: number;
+}
+
+export interface TrajectorySample {
+  frame_index: number;
+  t_s: number;
+  x_norm: number;
+  y_norm: number;
+  is_synthetic?: boolean;
+  confidence?: number;
+}
+
+export interface TrajectoryMetadata {
+  source?: string;
+  mound_distance_m?: number;
+  total_distance_m?: number;
+  release_time_s?: number;
+  catch_time_s?: number;
+  plate_x_norm?: number;
+  plate_y_norm?: number;
+  plate_crossing_x_m?: number;
+  plate_crossing_y_m?: number;
+  release_point_x_m?: number;
+  release_point_y_m?: number;
+  release_point_z_m?: number;
+  is_strike?: boolean;
+  horizontal_break_cm?: number;
+  induced_vertical_break_cm?: number;
+  strike_zone_width_cm?: number;
+  strike_zone_height_cm?: number;
+  video_width?: number;
+  video_height?: number;
+}
+
+export interface TrajectoryWorldPoint {
+  x: number;        // metres, catcher view: +right
+  y: number;        // metres above the plate plane reference
+  z: number;        // metres from plate toward mound
+  t: number;        // normalised 0-1 flight progress
+  time_s?: number;
+  frame_index?: number;
+  is_synthetic?: boolean;
+  confidence?: number;
+}
+
 export interface PitchResult {
   job_id: string;
   speed_info: SpeedInfo;
@@ -85,6 +137,8 @@ export interface PitchResult {
   trajectory_actual_count?: number;
   trajectory_synthetic_count?: number;
   trajectory_points_norm?: TrajectoryPoint[];   // sampled, normalised to video frame
+  trajectory_samples?: TrajectorySample[];      // sampled with timing, normalised to video frame
+  trajectory_metadata?: TrajectoryMetadata;
   yolo_frames_processed?: number;
   yolo_raw_detection_frames?: number;
   yolo_total_detections?: number;
@@ -113,8 +167,6 @@ export interface Session {
   records: PitchResult[];
 }
 
-export type AnalysisMode = 'offline' | 'online';
-
 // A speed result is only meaningful when its physical flight distance is known.
 // These bounds cover short training lanes through a regulation mound while
 // rejecting accidental values such as centimetres entered as metres.
@@ -133,8 +185,6 @@ export interface Settings {
   moundDistanceM: number;
   strideCorrectionM: number;
   confThreshold: number;
-  backendUrl: string;
-  analysisMode: AnalysisMode;
   pitcherHeightM?: number;         // 保留舊版設定相容性；手動距離校正不使用此值
   strikeZone?: StrikeZoneCalibration | null;
 }
@@ -143,12 +193,6 @@ export const DEFAULT_SETTINGS: Settings = {
   moundDistanceM: 0,
   strideCorrectionM: 0,
   confThreshold: 0.03,
-  // Empty by default — offline mode (the default) doesn't need a backend, and
-  // a real localhost default would silently 'work' in the simulator while being
-  // permanently broken on every shipped device. Force users who switch to
-  // online mode to enter a real URL via Settings.
-  backendUrl: '',
-  analysisMode: 'offline',
   pitcherHeightM: undefined,
   strikeZone: null,
 };

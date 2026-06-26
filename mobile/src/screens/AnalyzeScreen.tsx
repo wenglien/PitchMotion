@@ -6,12 +6,10 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { Colors, Layout, Radius, Shadows, Spacing } from '../theme';
+import { Colors, Layout, Radius, Spacing } from '../theme';
 import VideoPlayer from '../components/VideoPlayer';
 import { useSettings } from '../context/SettingsContext';
 import { useResult } from '../context/ResultContext';
-import { analyzeVideo, checkFileSize, checkHealth } from '../api';
-import { parseLog } from '../utils/pipelineStages';
 import { useOfflineAnalysis } from '../hooks/useOfflineAnalysis';
 import AnalysisProgress from '../components/AnalysisProgress';
 import { friendlyError, isCancellation } from '../utils/errors';
@@ -24,6 +22,12 @@ const ABS_ZONE_TOP_RATIO = 0.535;
 const ABS_ZONE_BOTTOM_RATIO = 0.27;
 const LEGACY_ZONE_HEIGHT_M = 0.58;
 const BATTER_HEIGHT_PRESETS = ['1.65', '1.75', '1.85'];
+
+function checkFileSize(fileSize: number, maxMB = MAX_MB) {
+  if (fileSize > maxMB * 1024 * 1024) {
+    throw new Error(`影片檔案過大（${(fileSize / 1024 / 1024).toFixed(1)} MB）。請先壓縮至 ${maxMB} MB 以內。`);
+  }
+}
 
 type SelectedVideoMeta = {
   sizeMB: string;
@@ -81,11 +85,6 @@ export default function AnalyzeScreen() {
   const [showRaw, setShowRaw] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [statusType, setStatusType] = useState<'' | 'error' | 'success'>('');
-  const abortRef = useRef<AbortController | null>(null);
-
-  const cancelAnalysis = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
 
   const batterHeightM = Number.parseFloat(batterHeightText);
   const hasValidBatterHeight = Number.isFinite(batterHeightM) && batterHeightM >= 1.0 && batterHeightM <= 2.4;
@@ -180,10 +179,10 @@ export default function AnalyzeScreen() {
     if (!videoUri || analyzing || !hasValidBatterHeight) return;
     setAnalyzing(true);
     resetAnalysis();
-    const initEntry = { msg: '[DEBUG] mode=offline', isError: false };
+    const initEntry = { msg: '本機分析已開始', isError: false };
     rawLogsRef.current = [...rawLogsRef.current.slice(-200), initEntry];
     setRawLogs(rawLogsRef.current);
-    setUploadPct(100); // No upload needed for offline
+    setUploadPct(100);
     setCurrentStage('init');
     setStatusMsg('');
     setStatusType('');
@@ -231,87 +230,10 @@ export default function AnalyzeScreen() {
         setStatusMsg('已取消分析。');
         setStatusType('');
       } else {
-        setStatusMsg(friendlyError(err, { action: '離線分析' }) ?? '離線分析失敗。');
+        setStatusMsg(friendlyError(err, { action: '本機分析' }) ?? '本機分析失敗。');
         setStatusType('error');
       }
     } finally {
-      setAnalyzing(false);
-    }
-  };
-
-  const onAnalyzeOnline = async () => {
-    if (!videoUri || analyzing || !hasValidBatterHeight) return;
-    setAnalyzing(true);
-    resetAnalysis();
-    const initEntry2 = { msg: '[DEBUG] mode=online', isError: false };
-    rawLogsRef.current = [...rawLogsRef.current.slice(-200), initEntry2];
-    setRawLogs(rawLogsRef.current);
-    setStatusMsg('');
-    setStatusType('');
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    try {
-      const result = await analyzeVideo(
-        settings.backendUrl,
-        videoUri,
-        videoName,
-        {
-          moundDistanceM: settings.moundDistanceM,
-          strideCorrectionM: settings.strideCorrectionM,
-          confThreshold: settings.confThreshold,
-          batterHeightM,
-          strikeZone: effectiveStrikeZone,
-          signal: controller.signal,
-        },
-        (pct) => {
-          setUploadPct(pct);
-          if (pct >= 100) setCurrentStage('init');
-        },
-        (entry) => {
-          if (entry.level === 'DONE') return;
-
-          const raw = entry.message || '';
-          const parsed = parseLog(raw);
-          if (parsed) {
-            if (parsed.stageId) {
-              setCurrentStage(parsed.stageId);
-            }
-            if (!parsed.isError) {
-              setStageMessages((prev) => {
-                const last = prev[prev.length - 1];
-                if (last === parsed.userMsg) return prev;
-                return [...prev.slice(-20), parsed.userMsg];
-              });
-            }
-          }
-
-          if (raw && !/NORM_RECT|XNNPACK|inference_feedback|gl_context/.test(raw)) {
-            const cleanMsg = raw.replace(/^[\w.]+\s*[–-]\s*/, '').trim();
-            const newEntry2 = { msg: cleanMsg, isError: entry.level === 'ERROR' };
-            rawLogsRef.current = [...rawLogsRef.current.slice(-200), newEntry2];
-            setRawLogs(rawLogsRef.current);
-          }
-        },
-      );
-
-      setCurrentStage('done');
-      setStatusMsg('分析完成！');
-      setStatusType('success');
-      setAnalysisLogs(rawLogsRef.current);
-      setResult(result);
-      addPitch(result);
-      navigation.navigate('Result');
-    } catch (err: any) {
-      if (isCancellation(err)) {
-        setStatusMsg('已取消分析。');
-        setStatusType('');
-      } else {
-        setStatusMsg(friendlyError(err, { action: '分析' }) ?? '分析失敗。');
-        setStatusType('error');
-      }
-    } finally {
-      abortRef.current = null;
       setAnalyzing(false);
     }
   };
@@ -337,23 +259,8 @@ export default function AnalyzeScreen() {
       return;
     }
 
-    if (settings.analysisMode === 'offline') {
-      await onAnalyzeOffline();
-      return;
-    }
-
-    // For simulator/dev setups, backend may be unavailable; fall back to offline
-    // so users can still get overlay output instead of a stalled online flow.
-    const healthy = await checkHealth(settings.backendUrl);
-    if (!healthy) {
-      setRawLogs((prev) => [...prev.slice(-200), { msg: `ℹ️ 後端無法連線，自動改用裝置端離線分析`, isError: false }]);
-      await onAnalyzeOffline();
-      return;
-    }
-
-    await onAnalyzeOnline();
+    await onAnalyzeOffline();
   };
-  const isOffline = settings.analysisMode === 'offline';
   const panelWidth = Math.min(width - 32, Layout.maxWidth);
   const zoneHeightCm = hasValidBatterHeight
     ? batterHeightM * (ABS_ZONE_TOP_RATIO - ABS_ZONE_BOTTOM_RATIO) * 100
@@ -361,75 +268,30 @@ export default function AnalyzeScreen() {
   const actionDisabled = analyzing || !videoUri;
   const needsDistance = !!videoUri && !hasDistanceCalibration;
   const needsHeight = !!videoUri && !hasValidBatterHeight;
-  const videoFpsLabel = videoMeta?.fps
-    ? `${videoMeta.fps}fps${videoMeta.captureFps && videoMeta.captureFps !== videoMeta.fps ? ` / capture ${videoMeta.captureFps}` : ''}`
-    : videoMeta?.metadataPending ? '讀取中' : '待分析確認';
-  const effectiveFpsLabel = videoMeta?.effectiveCaptureFps
-    ? `${videoMeta.effectiveCaptureFps}fps`
-    : videoMeta?.metadataPending ? '讀取中' : '分析時確認';
-  const interpolationLabel = videoMeta?.interpolationFactor && videoMeta.interpolationFactor > 1
-    ? `${videoMeta.interpolationFactor}x 補幀`
-    : videoMeta?.interpolationFactor === 1
-      ? '不補幀'
-      : videoMeta?.metadataPending ? '讀取中' : '自動判斷';
   const resolutionLabel = videoMeta?.width && videoMeta?.height
     ? `${videoMeta.width} × ${videoMeta.height}`
     : '—';
-  const readinessItems = [
-    {
-      key: 'video',
-      icon: 'videocam-outline' as const,
-      label: videoUri ? '影片已選擇' : '等待影片',
-      value: videoMeta ? `${videoMeta.durationS}s / ${videoMeta.sizeMB}MB` : `上限 ${MAX_MB}MB`,
-      done: !!videoUri,
-      step: '選片',
-    },
-    {
-      key: 'distance',
-      icon: 'resize-outline' as const,
-      label: hasDistanceCalibration ? '投打距離已校正' : '投打距離必填',
-      value: hasDistanceCalibration ? `${settings.moundDistanceM.toFixed(2)}m（手動量測）` : '請至設定量測後輸入',
-      done: hasDistanceCalibration,
-      step: '校正',
-    },
-    {
-      key: 'height',
-      icon: 'body-outline' as const,
-      label: hasValidBatterHeight ? '打者身高已設定' : '打者身高必填',
-      value: hasValidBatterHeight ? `${batterHeightM.toFixed(2)}m / ABS ${zoneHeightCm?.toFixed(1)}cm` : '1.00-2.40m',
-      done: hasValidBatterHeight,
-      step: '身高',
-    },
-    {
-      key: 'mode',
-      icon: isOffline ? 'phone-portrait-outline' as const : 'cloud-outline' as const,
-      label: isOffline ? '裝置端分析' : '伺服器分析',
-      value: isOffline ? '在此裝置處理' : '由伺服器處理',
-      done: true,
-      step: '分析',
-    },
-  ];
   const actionLabel = !videoUri
     ? '請先選擇影片'
     : !hasDistanceCalibration
       ? '完成距離校正後開始'
     : !hasValidBatterHeight
       ? '輸入打者身高後開始'
-      : isOffline ? '開始離線分析' : '開始線上分析';
+      : '開始分析';
   const actionIcon: keyof typeof Ionicons.glyphMap = !videoUri
     ? 'videocam-outline'
     : !hasDistanceCalibration
       ? 'resize-outline'
     : !hasValidBatterHeight
       ? 'body-outline'
-      : isOffline ? 'phone-portrait-outline' : 'cloud-upload-outline';
+      : 'phone-portrait-outline';
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
       {analyzing ? (
         <View style={[styles.responsivePane, { width: panelWidth, marginTop: 16 }]}>
           <AnalysisProgress
-            uploadPct={uploadPct}
+            progressPct={uploadPct}
             stageId={currentStage}
             stageMessages={stageMessages}
             rawLogs={rawLogs}
@@ -446,75 +308,31 @@ export default function AnalyzeScreen() {
               {showRaw ? '▲ 隱藏技術詳情' : '▼ 查看技術詳情'}
             </Text>
           </TouchableOpacity>
-          {!isOffline && (
-            <TouchableOpacity
-              style={styles.cancelBtn}
-              onPress={cancelAnalysis}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel="取消目前的上傳與分析"
-            >
-              <Text style={styles.cancelBtnText}>取消上傳 / 分析</Text>
-            </TouchableOpacity>
-          )}
         </View>
       ) : (
         <View style={[styles.responsivePane, { width: panelWidth }]}>
           <View
-            style={styles.consoleHeader}
+            style={styles.pageHeader}
             accessible
-            accessibilityLabel={`投球分析。模式：${isOffline ? '裝置端離線分析' : '伺服器分析'}。投打距離${hasDistanceCalibration ? `已手動校正為 ${settings.moundDistanceM.toFixed(2)} 公尺` : '尚未校正'}。`}
+            accessibilityLabel={`投球分析會在此裝置完成。投打距離${hasDistanceCalibration ? `已手動校正為 ${settings.moundDistanceM.toFixed(2)} 公尺` : '尚未校正'}。`}
           >
             <View style={styles.headerTopRow}>
               <View>
-                <Text style={styles.eyebrow}>ANALYZE</Text>
-                <Text style={styles.headerTitle}>投球分析控制台</Text>
+                <Text style={styles.headerTitle}>分析一球</Text>
+                <Text style={styles.headerSub}>選擇影片，確認設定後開始。</Text>
               </View>
               <View style={styles.modePill}>
-                <View style={[styles.modeDot, { backgroundColor: isOffline ? Colors.green : Colors.accent }]} />
-                <Text style={styles.modePillText}>{isOffline ? '離線' : '雲端'}</Text>
+                <View style={[styles.modeDot, { backgroundColor: Colors.green }]} />
+                <Text style={styles.modePillText}>本機運算</Text>
               </View>
-            </View>
-            <View style={styles.stepRail}>
-              {readinessItems.map((item) => (
-                <View key={item.key} style={styles.stepItem}>
-                  <View style={[styles.stepNode, item.done && styles.stepNodeDone]}>
-                    <Ionicons
-                      name={item.done ? 'checkmark' : item.icon}
-                      size={15}
-                      color={item.done ? '#fff' : Colors.textMuted}
-                    />
-                  </View>
-                  <Text style={[styles.stepText, item.done && styles.stepTextDone]}>
-                    {item.step}
-                  </Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.readinessGrid}>
-              {readinessItems.map((item) => (
-                <View key={item.key} style={styles.readinessItem}>
-                  <View style={[styles.readinessIcon, item.done && styles.readinessIconDone]}>
-                    <Ionicons
-                      name={item.done ? 'checkmark' : item.icon}
-                      size={16}
-                      color={item.done ? '#fff' : Colors.textMuted}
-                    />
-                  </View>
-                  <View style={styles.readinessTextWrap}>
-                    <Text style={styles.readinessLabel} numberOfLines={1}>{item.label}</Text>
-                    <Text style={styles.readinessValue} numberOfLines={1}>{item.value}</Text>
-                  </View>
-                </View>
-              ))}
             </View>
           </View>
 
           <View style={styles.workflowPanel}>
             <View style={styles.sectionHeader}>
               <View style={styles.sectionTitleWrap}>
-                <Text style={styles.sectionTitle}>本次分析</Text>
-                <Text style={styles.sectionSub} numberOfLines={1}>{videoUri ? videoName : '尚未選擇影片'}</Text>
+                <Text style={styles.sectionTitle}>影片</Text>
+                <Text style={styles.sectionSub} numberOfLines={1}>{videoUri ? videoName : `MP4 或 MOV，最多 ${MAX_MB}MB`}</Text>
               </View>
               <TouchableOpacity
                 style={styles.secondaryButton}
@@ -524,7 +342,7 @@ export default function AnalyzeScreen() {
                 accessibilityLabel={videoUri ? '更換投球影片' : '從相簿選擇投球影片'}
               >
                 <Ionicons name={videoUri ? 'swap-horizontal-outline' : 'add-outline'} size={18} color={Colors.accent} />
-                <Text style={styles.secondaryButtonText}>{videoUri ? '更換' : '選片'}</Text>
+                <Text style={styles.secondaryButtonText}>{videoUri ? '更換' : '選擇'}</Text>
               </TouchableOpacity>
             </View>
 
@@ -538,35 +356,16 @@ export default function AnalyzeScreen() {
                       <Text style={styles.metaChipText}>{videoMeta.durationS}s</Text>
                     </View>
                     <View style={styles.metaChip} accessibilityLabel={`影片大小 ${videoMeta.sizeMB} MB`}>
-                      <Ionicons name="server-outline" size={14} color={Colors.textMuted} />
+                      <Ionicons name="folder-outline" size={14} color={Colors.textMuted} />
                       <Text style={styles.metaChipText}>{videoMeta.sizeMB}MB</Text>
                     </View>
                   </View>
                 )}
                 {videoMeta && (
-                  <View style={styles.specPanel}>
-                    <View style={styles.specHeaderRow}>
-                      <Text style={styles.specTitle}>影片規格</Text>
-                      <Text style={styles.specBadge}>{interpolationLabel}</Text>
-                    </View>
-                    <View style={styles.specGrid}>
-                      <View style={styles.specItem}>
-                        <Text style={styles.specValue}>{videoFpsLabel}</Text>
-                        <Text style={styles.specLabel}>原始 FPS</Text>
-                      </View>
-                      <View style={styles.specItem}>
-                        <Text style={styles.specValue}>{effectiveFpsLabel}</Text>
-                        <Text style={styles.specLabel}>分析 FPS</Text>
-                      </View>
-                      <View style={styles.specItem}>
-                        <Text style={styles.specValue}>{resolutionLabel}</Text>
-                        <Text style={styles.specLabel}>解析度</Text>
-                      </View>
-                      <View style={styles.specItem}>
-                        <Text style={styles.specValue}>{videoMeta.totalFrames ?? '—'}</Text>
-                        <Text style={styles.specLabel}>原始幀數</Text>
-                      </View>
-                    </View>
+                  <View style={styles.videoDetails}>
+                    <Text style={styles.videoDetailsText}>
+                      {resolutionLabel} · {videoMeta.fps ? `${videoMeta.fps} fps` : '讀取影片資訊中'}
+                    </Text>
                   </View>
                 )}
               </View>
@@ -582,8 +381,8 @@ export default function AnalyzeScreen() {
                 <View style={styles.emptyPickerIcon}>
                   <Ionicons name="videocam-outline" size={30} color={Colors.accent} />
                 </View>
-                <Text style={styles.emptyPickerTitle}>選擇投球影片</Text>
-                <Text style={styles.emptyPickerSub}>MP4 / MOV, {MAX_MB}MB 以下</Text>
+                <Text style={styles.emptyPickerTitle}>選擇影片</Text>
+                <Text style={styles.emptyPickerSub}>從相簿加入一段投球影片</Text>
               </TouchableOpacity>
             )}
 
@@ -591,10 +390,7 @@ export default function AnalyzeScreen() {
               <View style={styles.inputHeader}>
                 <View>
                   <Text style={styles.inputTitle}>打者身高</Text>
-                  <Text style={styles.inputSub}>MLB ABS 好球帶高度</Text>
-                </View>
-                <View style={styles.absBadge}>
-                  <Text style={styles.absBadgeText}>ABS</Text>
+                  <Text style={styles.inputSub}>用來計算本次好球帶</Text>
                 </View>
               </View>
               <View style={[styles.heightInputWrap, batterHeightError && styles.inputError]}>
@@ -644,26 +440,10 @@ export default function AnalyzeScreen() {
                   );
                 })}
               </View>
-              <View style={styles.zonePreviewRow}>
-                <View style={styles.zonePreviewItem}>
-                  <Text style={styles.zonePreviewValue}>43.2</Text>
-                  <Text style={styles.zonePreviewLabel}>寬 cm</Text>
-                </View>
-                <View style={styles.zonePreviewDivider} />
-                <View style={styles.zonePreviewItem}>
-                  <Text style={styles.zonePreviewValue}>{zoneHeightCm ? zoneHeightCm.toFixed(1) : '-'}</Text>
-                  <Text style={styles.zonePreviewLabel}>高 cm</Text>
-                </View>
-                <View style={styles.zonePreviewDivider} />
-                <View style={styles.zonePreviewItem}>
-                  <Text style={styles.zonePreviewValue}>27-53.5</Text>
-                  <Text style={styles.zonePreviewLabel}>身高 %</Text>
-                </View>
-              </View>
               <Text style={[styles.heightHint, batterHeightError && { color: Colors.red }]}>
                 {batterHeightError
                   ? '請輸入 1.00 到 2.40 公尺之間的身高'
-                  : needsHeight ? '輸入後即可開始分析。' : '好球帶會套用到本次分析與疊圖。'}
+                  : needsHeight ? '輸入後即可開始分析。' : `好球帶高度約 ${zoneHeightCm?.toFixed(1)} cm。`}
               </Text>
             </View>
 
@@ -677,12 +457,12 @@ export default function AnalyzeScreen() {
               </View>
               <View style={styles.distanceCalibrationCopy}>
                 <Text style={styles.distanceCalibrationTitle}>
-                  {hasDistanceCalibration ? '投打距離已手動校正' : '投打距離校正必填'}
+                  {hasDistanceCalibration ? `投打距離 ${settings.moundDistanceM.toFixed(2)}m` : '設定投打距離'}
                 </Text>
                 <Text style={styles.distanceCalibrationText}>
                   {hasDistanceCalibration
-                    ? `使用 ${settings.moundDistanceM.toFixed(2)}m；正式球速會以此值扣除跨步補償。`
-                    : '量測投手板前緣到本壘板後尖端，輸入後才會開始球速分析。'}
+                    ? '已完成校正，可用於球速計算。'
+                    : '完成校正後即可開始球速分析。'}
                 </Text>
               </View>
               <TouchableOpacity
@@ -694,22 +474,6 @@ export default function AnalyzeScreen() {
               >
                 <Text style={styles.distanceCalibrationButtonText}>{hasDistanceCalibration ? '修改' : '校正'}</Text>
               </TouchableOpacity>
-            </View>
-
-            <View style={styles.capturePanel}>
-              {[
-                ['scan-outline', '捕手後方', '鏡頭對齊本壘中心'],
-                ['sunny-outline', '光線穩定', '避免背光與強反光'],
-                ['speedometer-outline', '高幀率', '慢動作影片更準'],
-              ].map(([icon, title, sub]) => (
-                <View key={title} style={styles.captureItem}>
-                  <Ionicons name={icon as keyof typeof Ionicons.glyphMap} size={18} color={Colors.textMuted} />
-                  <View style={styles.captureText}>
-                    <Text style={styles.captureTitle}>{title}</Text>
-                    <Text style={styles.captureSub}>{sub}</Text>
-                  </View>
-                </View>
-              ))}
             </View>
 
             {statusMsg ? (
@@ -755,15 +519,15 @@ export default function AnalyzeScreen() {
             !videoUri ? '請先選擇影片'
               : !hasDistanceCalibration ? '請先完成投打距離校正'
               : !hasValidBatterHeight ? '請先輸入打者身高'
-              : analyzing ? (isOffline ? '裝置分析進行中' : '伺服器分析進行中')
-              : (isOffline ? '開始離線分析' : '開始線上分析')
+              : analyzing ? '裝置分析進行中'
+              : '開始分析'
           }
         >
           {analyzing ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <ActivityIndicator size="small" color="#fff" />
               <Text style={styles.analyzeBtnText}>
-                {isOffline ? '裝置分析中…' : '上傳分析中…'}
+                裝置分析中…
               </Text>
             </View>
           ) : (
@@ -786,19 +550,15 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     alignItems: 'center',
-    paddingTop: Spacing.md,
+    paddingTop: Spacing.xl,
     paddingBottom: 80,
   },
   responsivePane: {
     alignSelf: 'center',
   },
-  consoleHeader: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.xxl,
-    padding: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    ...Shadows.soft,
+  pageHeader: {
+    paddingHorizontal: Spacing.xs,
+    marginBottom: Spacing.lg,
   },
   headerTopRow: {
     flexDirection: 'row',
@@ -806,18 +566,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.md,
   },
-  eyebrow: {
-    color: Colors.textMuted,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 1.2,
-    marginBottom: 4,
-  },
   headerTitle: {
     color: Colors.text,
-    fontSize: 24,
-    fontWeight: '900',
+    fontSize: 23,
+    fontWeight: '800',
     letterSpacing: 0,
+  },
+  headerSub: {
+    color: Colors.textMuted,
+    fontSize: 13,
+    marginTop: 4,
   },
   modePill: {
     flexDirection: 'row',
@@ -836,99 +594,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.8,
   },
-  stepRail: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: Colors.surface2,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.xl,
-    padding: Spacing.sm,
-    marginTop: Spacing.lg,
-  },
-  stepItem: {
-    flex: 1,
-    minHeight: 42,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  stepNode: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  stepNodeDone: {
-    backgroundColor: Colors.green,
-    borderColor: Colors.green,
-  },
-  stepText: {
-    color: Colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  stepTextDone: {
-    color: Colors.text,
-  },
-  readinessGrid: {
-    gap: Spacing.sm,
-    marginTop: Spacing.sm,
-  },
-  readinessItem: {
-    minHeight: 48,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.surface2,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-  },
-  readinessIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  readinessIconDone: {
-    backgroundColor: Colors.green,
-    borderColor: Colors.green,
-  },
-  readinessTextWrap: {
-    flex: 1,
-    minWidth: 0,
-  },
-  readinessLabel: {
-    color: Colors.text,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  readinessValue: {
-    color: Colors.textMuted,
-    fontSize: 11,
-    marginTop: 2,
-    fontVariant: ['tabular-nums'],
-  },
   workflowPanel: {
     backgroundColor: Colors.surface,
-    borderRadius: Radius.xxl,
+    borderRadius: Radius.xl,
     borderWidth: 1,
     borderColor: Colors.border,
     padding: Spacing.lg,
-    marginTop: Spacing.md,
-    ...Shadows.soft,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -973,7 +644,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   emptyPicker: {
-    minHeight: 170,
+    minHeight: 156,
     borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: Colors.borderStrong,
@@ -1005,11 +676,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   inputPanel: {
-    backgroundColor: Colors.surface2,
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
+    paddingTop: Spacing.lg,
     marginTop: Spacing.md,
   },
   inputHeader: {
@@ -1028,20 +695,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textMuted,
     marginTop: 2,
-  },
-  absBadge: {
-    borderRadius: 999,
-    backgroundColor: 'rgba(14,165,233,0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(14,165,233,0.24)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  absBadgeText: {
-    fontSize: 10,
-    color: Colors.accent,
-    fontWeight: '900',
-    letterSpacing: 0.8,
   },
   heightInputWrap: {
     height: 52,
@@ -1158,45 +811,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
   },
-  zonePreviewRow: {
-    minHeight: 58,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginTop: Spacing.sm,
-  },
-  zonePreviewItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.xs,
-  },
-  zonePreviewValue: {
-    color: Colors.text,
-    fontSize: 15,
-    fontWeight: '900',
-    fontVariant: ['tabular-nums'],
-  },
-  zonePreviewLabel: {
-    color: Colors.textMuted,
-    fontSize: 10,
-    marginTop: 3,
-    fontWeight: '700',
-  },
-  zonePreviewDivider: {
-    width: 1,
-    height: 34,
-    backgroundColor: Colors.border,
-  },
   previewCard: {
     backgroundColor: Colors.surface2,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.xl,
-    padding: 8,
+    borderRadius: Radius.lg,
+    padding: Spacing.sm,
   },
   video: {
     width: '100%',
@@ -1226,93 +844,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
-  specPanel: {
+  videoDetails: {
     marginTop: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
-    padding: Spacing.md,
+    paddingHorizontal: Spacing.xs,
   },
-  specHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.sm,
-    marginBottom: Spacing.sm,
-  },
-  specTitle: {
-    color: Colors.text,
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  specBadge: {
-    color: Colors.accent,
+  videoDetailsText: {
+    color: Colors.textMuted,
     fontSize: 11,
-    fontWeight: '900',
-    backgroundColor: 'rgba(14,165,233,0.10)',
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    overflow: 'hidden',
-  },
-  specGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-  },
-  specItem: {
-    flexBasis: '47%',
-    flexGrow: 1,
-    minHeight: 56,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface2,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    justifyContent: 'center',
-  },
-  specValue: {
-    color: Colors.text,
-    fontSize: 13,
-    fontWeight: '900',
     fontVariant: ['tabular-nums'],
-  },
-  specLabel: {
-    color: Colors.textMuted,
-    fontSize: 10,
-    fontWeight: '700',
-    marginTop: 3,
-  },
-  capturePanel: {
-    gap: Spacing.sm,
-    marginTop: Spacing.md,
-  },
-  captureItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    minHeight: 42,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.surface2,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.md,
-  },
-  captureText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  captureTitle: {
-    color: Colors.text,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  captureSub: {
-    color: Colors.textMuted,
-    fontSize: 11,
-    marginTop: 1,
   },
   statusCard: {
     flexDirection: 'row',

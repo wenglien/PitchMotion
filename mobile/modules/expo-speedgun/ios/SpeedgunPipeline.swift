@@ -543,6 +543,29 @@ final class SpeedgunPipeline {
                 }
         }
 
+        func captureTime(for sample: BallTrajectorySample) -> Double? {
+            if sample.frameIndex >= 0 && sample.frameIndex < frameInfos.count {
+                return frameInfos[sample.frameIndex].captureTimeS
+            }
+            return frameInfos.first(where: { $0.frameIndex == sample.frameIndex })?.captureTimeS
+        }
+
+        func trajectorySamplePayload(_ sample: BallTrajectorySample) -> [String: Any] {
+            let fallbackFps = Swift.max(Double(effectiveCaptureFps), 1.0)
+            let fallbackTimeS = Double(sample.frameIndex) / fallbackFps
+            let timeS = captureTime(for: sample) ?? fallbackTimeS
+            let xNorm = Double(sample.point.x) / Double(displayWidth)
+            let yNorm = Double(sample.point.y) / Double(displayHeight)
+            return [
+                "frame_index": sample.frameIndex,
+                "t_s": timeS,
+                "x_norm": xNorm,
+                "y_norm": yNorm,
+                "is_synthetic": sample.isSynthetic,
+                "confidence": sample.isSynthetic ? 0.45 : 1.0,
+            ]
+        }
+
         // The visual overlay can use a continuous trajectory, but all timing
         // anchors use only real, non-gap-filled camera observations.
         let firstBallFrame = frameInfos.firstIndex(where: isTimingObservation)
@@ -1036,6 +1059,74 @@ final class SpeedgunPipeline {
         result["trajectory_count"] = trajectoryPoints.count
         result["trajectory_actual_count"] = trajectorySamples.filter { !$0.isSynthetic }.count
         result["trajectory_synthetic_count"] = trajectorySamples.filter { $0.isSynthetic }.count
+
+        if !trajectorySamples.isEmpty && displayWidth > 0 && displayHeight > 0 {
+            let maxSamples = 64
+            let step = max(1, Int(ceil(Double(trajectorySamples.count) / Double(maxSamples))))
+            var sampled: [[String: Any]] = []
+            var idx = 0
+            while idx < trajectorySamples.count {
+                let sample = trajectorySamples[idx]
+                sampled.append(trajectorySamplePayload(sample))
+                idx += step
+            }
+            if let last = trajectorySamples.last,
+               sampled.last?["frame_index"] as? Int != last.frameIndex {
+                sampled.append(trajectorySamplePayload(last))
+            }
+            result["trajectory_samples"] = sampled
+        }
+
+        let metadataMoundDistance = speedInfo.moundDistanceM ?? speedInfo.totalDistanceM ?? speedInfo.effectiveDistanceM ?? MLB_MOUND_DISTANCE_M
+        let metadataTotalDistance = speedInfo.totalDistanceM ?? speedInfo.effectiveDistanceM ?? speedInfo.moundDistanceM ?? MLB_MOUND_DISTANCE_M
+        let metadataZoneWidthCm = speedInfo.strikeZoneWidthCm ?? ABS_STRIKE_ZONE_WIDTH_M * 100.0
+        let metadataZoneHeightCm = speedInfo.strikeZoneHeightCm ?? LEGACY_STRIKE_ZONE_HEIGHT_M * 100.0
+        var trajectoryMetadata: [String: Any] = [
+            "source": "native_samples_v1",
+            "mound_distance_m": metadataMoundDistance,
+            "total_distance_m": metadataTotalDistance,
+            "strike_zone_width_cm": metadataZoneWidthCm,
+            "strike_zone_height_cm": metadataZoneHeightCm,
+            "video_width": displayWidth,
+            "video_height": displayHeight,
+        ]
+        if let v = speedInfo.releaseTimeS { trajectoryMetadata["release_time_s"] = v }
+        if let v = speedInfo.catchTimeS { trajectoryMetadata["catch_time_s"] = v }
+        if let v = speedInfo.plateXNorm { trajectoryMetadata["plate_x_norm"] = v }
+        if let v = speedInfo.plateYNorm { trajectoryMetadata["plate_y_norm"] = v }
+        if let v = speedInfo.horizontalBreakCm { trajectoryMetadata["horizontal_break_cm"] = v }
+        if let v = speedInfo.inducedVerticalBreakCm { trajectoryMetadata["induced_vertical_break_cm"] = v }
+        if let isStrike = speedInfo.isStrike { trajectoryMetadata["is_strike"] = isStrike }
+
+        let zoneForWorld = speedInfo.plateZone ?? DEFAULT_STRIKE_ZONE
+        let zoneWidthM = metadataZoneWidthCm / 100.0
+        let zoneHeightM = metadataZoneHeightCm / 100.0
+        if let px = speedInfo.plateXNorm, let py = speedInfo.plateYNorm {
+            let crossing = worldCoordsFromNorm(
+                xNorm: px,
+                yNorm: py,
+                zone: zoneForWorld,
+                zoneWidthM: zoneWidthM,
+                zoneHeightM: zoneHeightM
+            )
+            trajectoryMetadata["plate_crossing_x_m"] = crossing.x
+            trajectoryMetadata["plate_crossing_y_m"] = crossing.y
+        }
+        if let first = trajectorySamples.first, displayWidth > 0, displayHeight > 0 {
+            let xNorm = Double(first.point.x) / Double(displayWidth)
+            let yNorm = Double(first.point.y) / Double(displayHeight)
+            let release = worldCoordsFromNorm(
+                xNorm: xNorm,
+                yNorm: yNorm,
+                zone: zoneForWorld,
+                zoneWidthM: zoneWidthM,
+                zoneHeightM: zoneHeightM
+            )
+            trajectoryMetadata["release_point_x_m"] = release.x
+            trajectoryMetadata["release_point_y_m"] = release.y
+            trajectoryMetadata["release_point_z_m"] = metadataMoundDistance
+        }
+        result["trajectory_metadata"] = trajectoryMetadata
 
         // Sampled trajectory points normalised to video frame (x: 0-1 left→right, y: 0-1 top→bottom)
         if !trajectoryPoints.isEmpty && displayWidth > 0 && displayHeight > 0 {
@@ -2424,4 +2515,23 @@ final class SpeedgunPipeline {
         }
         return nil
     }
+}
+
+private let PLATE_ZONE_CENTER_M = 0.9
+
+/// Map normalised image coordinates to approximate lateral / height metres at the plate plane.
+private func worldCoordsFromNorm(
+    xNorm: Double,
+    yNorm: Double,
+    zone: [String: Double],
+    zoneWidthM: Double,
+    zoneHeightM: Double
+) -> (x: Double, y: Double) {
+    let zoneCenterX = ((zone["x_min"] ?? STRIKE_ZONE_X_MIN) + (zone["x_max"] ?? STRIKE_ZONE_X_MAX)) / 2.0
+    let zoneCenterY = ((zone["y_min"] ?? STRIKE_ZONE_Y_MIN) + (zone["y_max"] ?? STRIKE_ZONE_Y_MAX)) / 2.0
+    let zoneNormW = max(0.05, (zone["x_max"] ?? STRIKE_ZONE_X_MAX) - (zone["x_min"] ?? STRIKE_ZONE_X_MIN))
+    let zoneNormH = max(0.05, (zone["y_max"] ?? STRIKE_ZONE_Y_MAX) - (zone["y_min"] ?? STRIKE_ZONE_Y_MIN))
+    let lateral = ((xNorm - zoneCenterX) / zoneNormW) * zoneWidthM
+    let height = PLATE_ZONE_CENTER_M + ((zoneCenterY - yNorm) / zoneNormH) * zoneHeightM
+    return (lateral, height)
 }

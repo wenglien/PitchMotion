@@ -5,11 +5,10 @@ import { Colors } from '../theme';
 
 interface Props {
   pct: number;
-  isUpload: boolean;
   stageColor?: string;
 }
 
-export default function ProgressRing({ pct, isUpload, stageColor }: Props) {
+export default function ProgressRing({ pct, stageColor }: Props) {
   const R = 26;
   const C = 2 * Math.PI * R;
   const off = C - (pct / 100) * C;
@@ -23,7 +22,7 @@ export default function ProgressRing({ pct, isUpload, stageColor }: Props) {
           cy={34}
           r={R}
           fill="none"
-          stroke={isUpload ? '#3b82f6' : (stageColor || '#2563eb')}
+          stroke={stageColor || '#2563eb'}
           strokeWidth={5}
           strokeLinecap="round"
           strokeDasharray={`${C}`}

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, FlatList, StyleSheet } from 'react-native';
-import { RouteProp, useRoute } from '@react-navigation/native';
+import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { Colors, Spacing, Radius, FontSize, Shadows } from '../theme';
 import { Session, PitchResult } from '../types';
 import { KMH_TO_MPH, getSpeedKmh } from '../utils/conversions';
@@ -20,6 +20,8 @@ type RouteParams = { SessionDetail: { session: Session } };
 const TABS = ['投球列表', '軌跡圖', 'AI 建議'];
 
 function ListTab({ records }: { records: PitchResult[] }) {
+  const navigation = useNavigation<any>();
+
   if (records.length === 0) {
     return (
       <View style={styles.emptyWrap}>
@@ -32,7 +34,14 @@ function ListTab({ records }: { records: PitchResult[] }) {
       data={records}
       keyExtractor={(r, i) => r.job_id || String(i)}
       renderItem={({ item, index }) => (
-        <PitchCard pitch={item} index={records.length - index} />
+        <PitchCard
+          pitch={item}
+          index={records.length - index}
+          onViewTrajectory={() => navigation.navigate('TrajectorySimulation', {
+            pitch: item,
+            title: `第 ${records.length - index} 球 3D 軌跡`,
+          })}
+        />
       )}
       contentContainerStyle={{ paddingTop: Spacing.sm, paddingBottom: Spacing.xl }}
     />

@@ -10,15 +10,15 @@ interface RawLogEntry {
 }
 
 interface Props {
-  uploadPct: number;
+  progressPct: number;
   stageId: string | null;
   stageMessages: string[];
   rawLogs: RawLogEntry[];
   showRaw: boolean;
 }
 
-export default function AnalysisProgress({ uploadPct, stageId, stageMessages, rawLogs, showRaw }: Props) {
-  const currentIdx = stageIndex(stageId || 'upload');
+export default function AnalysisProgress({ progressPct, stageId, stageMessages, rawLogs, showRaw }: Props) {
+  const currentIdx = stageIndex(stageId || 'init');
   const logScrollRef = useRef<ScrollView>(null);
   const lastMsg = stageMessages[stageMessages.length - 1] || '';
 
@@ -31,18 +31,15 @@ export default function AnalysisProgress({ uploadPct, stageId, stageMessages, ra
       {/* Header with progress ring */}
       <View style={styles.header}>
         <ProgressRing
-          pct={uploadPct < 100 ? uploadPct : Math.round(((currentIdx + 0.5) / STAGES.length) * 100)}
-          isUpload={uploadPct < 100}
+          pct={Math.max(progressPct, Math.round(((currentIdx + 0.5) / STAGES.length) * 100))}
           stageColor={STAGES[Math.max(0, currentIdx)]?.color}
         />
         <View style={styles.headerText}>
           <Text style={styles.title}>
-            {uploadPct < 100 ? '上傳影片中' : (STAGES[currentIdx]?.label ?? '分析中')}
+            {STAGES[currentIdx]?.label ?? '分析中'}
           </Text>
           <Text style={styles.subtitle} numberOfLines={1}>
-            {uploadPct < 100
-              ? `${uploadPct}% 已上傳`
-              : (lastMsg || STAGES[currentIdx]?.sublabel || '處理中…')}
+            {lastMsg || STAGES[currentIdx]?.sublabel || '處理中…'}
           </Text>
         </View>
       </View>

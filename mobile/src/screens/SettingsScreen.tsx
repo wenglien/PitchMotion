@@ -1,18 +1,16 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, ScrollView, TouchableOpacity,
-  KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet,
+  KeyboardAvoidingView, Platform, StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, FontSize, Radius, Shadows, Spacing, TouchTarget } from '../theme';
 import { useSettings } from '../context/SettingsContext';
-import { checkHealth } from '../api';
 import {
   isManualDistanceCalibrated,
   MAX_MANUAL_MOUND_DISTANCE_M,
   MIN_MANUAL_MOUND_DISTANCE_M,
 } from '../types';
-import type { AnalysisMode } from '../types';
 import SegmentedTabs from '../components/SegmentedTabs';
 
 const BASIC_TAB = '基本';
@@ -26,8 +24,6 @@ const CONF_PRESETS = ['0.03', '0.05', '0.10'];
 export default function SettingsScreen() {
   const { settings, updateSettings } = useSettings();
   const [activeTab, setActiveTab] = useState(BASIC_TAB);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; ms: number; msg: string } | null>(null);
 
   // Local string state so decimal-point mid-input isn't swallowed by parseFloat
   const [moundText, setMoundText] = useState(
@@ -41,7 +37,6 @@ export default function SettingsScreen() {
   const [zyMinText, setZyMinText] = useState(settings.strikeZone ? String(settings.strikeZone.yMin) : '');
   const [zyMaxText, setZyMaxText] = useState(settings.strikeZone ? String(settings.strikeZone.yMax) : '');
 
-  const isOffline = settings.analysisMode === 'offline';
   const hasDistanceCalibration = isManualDistanceCalibrated(settings.moundDistanceM);
   const moundInputValue = Number.parseFloat(moundText);
   const moundInputError = moundTouched
@@ -59,30 +54,6 @@ export default function SettingsScreen() {
     // Clearing or entering an invalid value explicitly invalidates the prior
     // calibration. Keeping an old distance would be much more dangerous.
     updateSettings({ moundDistanceM: 0 });
-  };
-
-  const onTestConnection = async () => {
-    const url = settings.backendUrl.trim();
-    if (!url) {
-      setTestResult({ ok: false, ms: 0, msg: '請先輸入 Backend URL' });
-      return;
-    }
-    setTesting(true);
-    setTestResult(null);
-    const t0 = Date.now();
-    try {
-      const ok = await checkHealth(url);
-      const ms = Date.now() - t0;
-      setTestResult(
-        ok
-          ? { ok: true, ms, msg: `連線成功（${ms} ms）` }
-          : { ok: false, ms, msg: '伺服器無回應或回傳錯誤狀態' },
-      );
-    } catch {
-      setTestResult({ ok: false, ms: Date.now() - t0, msg: '連線失敗，請檢查 URL 與網路' });
-    } finally {
-      setTesting(false);
-    }
   };
 
   const commitStrikeZone = () => {
@@ -112,16 +83,6 @@ export default function SettingsScreen() {
     updateSettings({ strikeZone: null });
   };
 
-  const modeOptions: Array<{
-    key: AnalysisMode;
-    title: string;
-    desc: string;
-    icon: keyof typeof Ionicons.glyphMap;
-  }> = [
-    { key: 'offline', title: '離線模式', desc: '裝置端 AI', icon: 'phone-portrait-outline' },
-    { key: 'online', title: '線上模式', desc: '後端運算', icon: 'cloud-outline' },
-  ];
-
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -139,9 +100,7 @@ export default function SettingsScreen() {
           <View style={styles.headerCopy}>
             <Text style={styles.eyebrow}>SETTINGS</Text>
             <Text style={styles.headerTitle}>分析設定</Text>
-            <Text style={styles.headerSub}>
-              {isOffline ? '目前使用裝置端分析' : '目前使用伺服器分析'}
-            </Text>
+            <Text style={styles.headerSub}>所有分析均在這台裝置完成</Text>
           </View>
         </View>
 
@@ -154,110 +113,6 @@ export default function SettingsScreen() {
 
         {activeTab === BASIC_TAB ? (
           <>
-            <View style={styles.card}>
-              <View style={styles.cardHeader}>
-                <View>
-                  <Text style={styles.sectionTitle}>分析模式</Text>
-                  <Text style={styles.sectionSub}>{isOffline ? '免網路，適合現場練習' : '適合使用遠端算力'}</Text>
-                </View>
-                <View style={styles.statusPill}>
-                  <View style={[styles.statusDot, { backgroundColor: isOffline ? Colors.green : Colors.accent }]} />
-                  <Text style={styles.statusPillText}>{isOffline ? '離線' : '線上'}</Text>
-                </View>
-              </View>
-              <View style={styles.modeRow}>
-                {modeOptions.map((option) => {
-                  const selected = settings.analysisMode === option.key;
-                  return (
-                    <TouchableOpacity
-                      key={option.key}
-                      style={[styles.modeBtn, selected && styles.modeBtnActive]}
-                      onPress={() => updateSettings({ analysisMode: option.key })}
-                      activeOpacity={0.75}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected }}
-                      accessibilityLabel={`${option.title}，${option.desc}`}
-                    >
-                      <View style={[styles.modeIcon, selected && styles.modeIconActive]}>
-                        <Ionicons
-                          name={option.icon}
-                          size={20}
-                          color={selected ? '#fff' : Colors.textMuted}
-                        />
-                      </View>
-                      <Text style={[styles.modeBtnLabel, selected && styles.modeBtnLabelActive]}>
-                        {option.title}
-                      </Text>
-                      <Text style={styles.modeBtnDesc}>{option.desc}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-
-            {!isOffline && (
-              <View style={styles.card}>
-                <View style={styles.cardHeader}>
-                  <View>
-                    <Text style={styles.sectionTitle}>伺服器連線</Text>
-                    <Text style={styles.sectionSub}>Backend URL</Text>
-                  </View>
-                  <Ionicons name="server-outline" size={20} color={Colors.textMuted} />
-                </View>
-                <View style={styles.field}>
-                  <TextInput
-                    style={styles.input}
-                    value={settings.backendUrl}
-                    onChangeText={(v) => {
-                      updateSettings({ backendUrl: v });
-                      if (testResult) setTestResult(null);
-                    }}
-                    placeholder="https://your-server.example.com"
-                    placeholderTextColor={Colors.textMuted}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    keyboardType="url"
-                    returnKeyType="done"
-                    clearButtonMode="while-editing"
-                    accessibilityLabel="後端伺服器網址"
-                  />
-                </View>
-                <TouchableOpacity
-                  style={[styles.primaryBtn, (!settings.backendUrl.trim() || testing) && styles.btnDisabled]}
-                  onPress={onTestConnection}
-                  disabled={testing || !settings.backendUrl.trim()}
-                  activeOpacity={0.75}
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: testing || !settings.backendUrl.trim(), busy: testing }}
-                  accessibilityLabel="測試後端伺服器連線"
-                >
-                  {testing ? (
-                    <View style={styles.btnInner}>
-                      <ActivityIndicator size="small" color="#fff" />
-                      <Text style={styles.primaryBtnText}>測試中…</Text>
-                    </View>
-                  ) : (
-                    <View style={styles.btnInner}>
-                      <Ionicons name="pulse-outline" size={18} color="#fff" />
-                      <Text style={styles.primaryBtnText}>測試連線</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-                {testResult !== null && (
-                  <View style={[styles.resultBanner, testResult.ok ? styles.resultGood : styles.resultBad]}>
-                    <Ionicons
-                      name={testResult.ok ? 'checkmark-circle-outline' : 'alert-circle-outline'}
-                      size={18}
-                      color={testResult.ok ? Colors.green : Colors.red}
-                    />
-                    <Text style={[styles.resultText, { color: testResult.ok ? Colors.green : Colors.red }]}>
-                      {testResult.msg}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            )}
-
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <View>

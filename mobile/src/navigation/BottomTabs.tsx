@@ -31,7 +31,11 @@ export default function BottomTabs() {
 
   return (
     <Tab.Navigator
+      // Analysis keeps a native task and progress subscription alive. Keeping
+      // tab screens attached prevents a tab switch from interrupting either.
+      detachInactiveScreens={false}
       screenOptions={({ route }) => ({
+        freezeOnBlur: false,
         headerStyle: { backgroundColor: Colors.bg, shadowColor: 'transparent', elevation: 0 },
         headerTitleStyle: { fontWeight: '800', color: Colors.text, fontSize: 18 },
         headerShadowVisible: false,

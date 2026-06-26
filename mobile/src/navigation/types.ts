@@ -1,4 +1,9 @@
-import { Session } from '../types';
+import { PitchResult, Session } from '../types';
+
+export type RootStackParamList = {
+  MainTabs: undefined;
+  TrajectorySimulation: { pitch: PitchResult; title?: string };
+};
 
 export type BottomTabParamList = {
   Analyze: undefined;

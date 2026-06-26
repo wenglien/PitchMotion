@@ -23,7 +23,7 @@ export function isCancellation(e: unknown): boolean {
 }
 
 interface FriendlyOptions {
-  /** Context label included in the message, e.g. "上傳影片". */
+  /** Context label included in the message, e.g. "本機分析". */
   action?: string;
 }
 
@@ -40,25 +40,8 @@ export function friendlyError(e: unknown, opts: FriendlyOptions = {}): string | 
     typeof e === 'string' ? e :
     JSON.stringify(e ?? {});
 
-  // Network-level
-  if (/Network request failed|net::ERR|Failed to fetch/i.test(raw)) {
-    return `${action}無法連線到伺服器。請確認網路連線與 Settings 中的 Backend URL 是否正確。`;
-  }
-  if (/timeout|timed? out|逾時/i.test(raw)) {
-    return `${action}連線逾時。可能是檔案太大或網路太慢，請改用較短的影片或切到「離線分析」模式再試。`;
-  }
   if (/aborted|cancel/i.test(raw)) {
     return `${action}已取消。`;
-  }
-
-  // HTTP-level
-  const httpMatch = raw.match(/(\d{3})/);
-  if (httpMatch) {
-    const code = parseInt(httpMatch[1], 10);
-    if (code === 401 || code === 403) return `${action}伺服器拒絕請求（${code}）。`;
-    if (code === 404) return `${action}找不到伺服器資源（404）。請確認 Backend URL。`;
-    if (code === 413) return `${action}影片檔案過大，伺服器拒絕接收。請壓縮後再試。`;
-    if (code >= 500 && code < 600) return `${action}伺服器內部錯誤（${code}）。請稍後再試。`;
   }
 
   // Already user-friendly Chinese — pass through with prefix

@@ -4,13 +4,13 @@ import * as Sharing from 'expo-sharing';
 import { Colors, Spacing, Radius, FontSize, Layout, Shadows } from '../theme';
 import VideoPlayer from '../components/VideoPlayer';
 import { useResult } from '../context/ResultContext';
-import { useSettings } from '../context/SettingsContext';
 import { kmhToMph, pitchColor, shortMethod } from '../utils/conversions';
 import StrikeZone from '../components/StrikeZone';
 import BreakChart from '../components/BreakChart';
 import { friendlyError } from '../utils/errors';
 import SegmentedTabs from '../components/SegmentedTabs';
 import { useNavigation } from '@react-navigation/native';
+import type { PitchResult } from '../types';
 
 const VIDEO_TAB_OVERLAY = '分析疊圖';
 const VIDEO_TAB_ORIGINAL = '原始錄影';
@@ -18,41 +18,29 @@ const RESULT_TAB_OVERVIEW = '總覽';
 const RESULT_TAB_VIDEO = '影片';
 const RESULT_TAB_DETAILS = '細節';
 const RESULT_TABS = [RESULT_TAB_OVERVIEW, RESULT_TAB_VIDEO, RESULT_TAB_DETAILS];
+const EMPTY_RESULT: PitchResult = { job_id: '', speed_info: {}, created_at: '' };
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
 }
 
-function resolveUriHelper(url: string | undefined, baseUrl: string): string | null {
+function resolveUriHelper(url: string | undefined): string | null {
   if (!url) return null;
   if (url.startsWith('file://') || url.startsWith('/')) return url;
-  if (url.startsWith('http')) return url;
-  if (!baseUrl) return null;  // can't resolve a relative backend path without a base
-  return `${baseUrl}${url.replace(/^https?:\/\/[^/]+/, '')}`;
+  return null;
 }
 
 export default function ResultScreen() {
   const { width } = useWindowDimensions();
   const { result, sessionPitches, clearPitches, analysisLogs } = useResult();
-  const { settings } = useSettings();
   const navigation = useNavigation<any>();
   const [showLogs, setShowLogs] = useState(false);
   const [videoTab, setVideoTab] = useState<string>(VIDEO_TAB_OVERLAY);
   const [resultTab, setResultTab] = useState<string>(RESULT_TAB_OVERVIEW);
   const logScrollRef = useRef<ScrollView>(null);
+  const analysis = result ?? EMPTY_RESULT;
 
-  if (!result) {
-    return (
-      <View style={styles.emptyContainer}>
-        <Text style={styles.emptyTitle}>尚無分析結果</Text>
-        <Text style={styles.emptySubtitle}>
-          前往 <Text style={{ fontWeight: '700', color: Colors.accent }}>分析</Text> 頁面上傳影片開始分析。
-        </Text>
-      </View>
-    );
-  }
-
-  const si = result.speed_info || {};
+  const si = analysis.speed_info || {};
   const primaryKmh = si.release_speed_kmh ?? si.initial_speed_kmh ?? null;
   const primaryMph = primaryKmh !== null ? kmhToMph(primaryKmh) : null;
   const maxKmh = si.max_speed_kmh ?? null;
@@ -84,17 +72,15 @@ export default function ResultScreen() {
   const panelWidth = Math.min(width - 32, Layout.maxWidth);
   const speedFontSize = width < 380 ? 66 : 82;
 
-  const baseUrl = settings.backendUrl;
-
   // Stable identity so StrikeZone / VideoPlayer don't see new prop refs on
   // unrelated re-renders (e.g. log toggle, tab switch).
   const overlayUrl = useMemo(
-    () => resolveUriHelper(result.overlay_uri || result.overlay_url, baseUrl),
-    [result.overlay_uri, result.overlay_url, baseUrl],
+    () => resolveUriHelper(analysis.overlay_uri || analysis.overlay_url),
+    [analysis.overlay_uri, analysis.overlay_url],
   );
   const originalUrl = useMemo(
-    () => resolveUriHelper(result.original_url, baseUrl),
-    [result.original_url, baseUrl],
+    () => resolveUriHelper(analysis.original_url),
+    [analysis.original_url],
   );
   const hasOverlay = !!overlayUrl && !overlayUrl.includes('/dev/');
   const hasOriginal = !!originalUrl;
@@ -103,25 +89,25 @@ export default function ResultScreen() {
   const hasResultVideo = (hasOverlay || hasOriginal) && !!activeVideoUrl;
   const resultTabs = hasResultVideo ? RESULT_TABS : RESULT_TABS.filter((tab) => tab !== RESULT_TAB_VIDEO);
   const selectedResultTab = resultTabs.includes(resultTab) ? resultTab : RESULT_TAB_OVERVIEW;
-  const videoAspectRatio = result.video_width && result.video_height
-    ? result.video_width / result.video_height
+  const videoAspectRatio = analysis.video_width && analysis.video_height
+    ? analysis.video_width / analysis.video_height
     : 16 / 9;
-  const detectionPct = result.total_frames && result.yolo_raw_detection_frames != null
-    ? Math.round((result.yolo_raw_detection_frames / result.total_frames) * 100)
+  const detectionPct = analysis.total_frames && analysis.yolo_raw_detection_frames != null
+    ? Math.round((analysis.yolo_raw_detection_frames / analysis.total_frames) * 100)
     : null;
-  const trajectoryActual = result.trajectory_actual_count ?? null;
-  const trajectorySynthetic = result.trajectory_synthetic_count ?? null;
-  const trajectoryTotal = result.trajectory_count ?? null;
+  const trajectoryActual = analysis.trajectory_actual_count ?? null;
+  const trajectorySynthetic = analysis.trajectory_synthetic_count ?? null;
+  const trajectoryTotal = analysis.trajectory_count ?? null;
   const actualTrajectoryRatio = trajectoryTotal && trajectoryActual != null
     ? trajectoryActual / Math.max(1, trajectoryTotal)
     : breakActualRatio;
   const syntheticPct = trajectoryTotal && trajectorySynthetic != null
     ? Math.round((trajectorySynthetic / Math.max(1, trajectoryTotal)) * 100)
     : null;
-  const sourceFps = result.source_fps ?? null;
-  const captureFps = result.capture_fps ?? null;
-  const effectiveCaptureFps = result.effective_capture_fps ?? result.fps ?? null;
-  const interpolationFactor = result.interpolation_factor ?? null;
+  const sourceFps = analysis.source_fps ?? null;
+  const captureFps = analysis.capture_fps ?? null;
+  const effectiveCaptureFps = analysis.effective_capture_fps ?? analysis.fps ?? null;
+  const interpolationFactor = analysis.interpolation_factor ?? null;
   const qualityParts = {
     detection: detectionPct !== null ? clamp01(detectionPct / 18) : 0.55,
     actual: actualTrajectoryRatio !== null && actualTrajectoryRatio !== undefined ? clamp01(actualTrajectoryRatio) : 0.65,
@@ -187,6 +173,14 @@ export default function ResultScreen() {
     [plateZone?.x_min, plateZone?.x_max, plateZone?.y_min, plateZone?.y_max],
   );
 
+  const handleOpenTrajectory = useCallback(() => {
+    if (!result) return;
+    navigation.navigate('TrajectorySimulation', {
+      pitch: result,
+      title: '本球 3D 軌跡',
+    });
+  }, [navigation, result]);
+
   const handleDownload = useCallback(async () => {
     const target = activeVideoUrl;
     if (!target) return;
@@ -208,6 +202,17 @@ export default function ResultScreen() {
       }
     }
   }, [activeVideoUrl, showOverlayTab]);
+
+  if (!result) {
+    return (
+      <View style={styles.emptyContainer}>
+        <Text style={styles.emptyTitle}>尚無分析結果</Text>
+        <Text style={styles.emptySubtitle}>
+          前往 <Text style={{ fontWeight: '700', color: Colors.accent }}>分析</Text> 頁面選擇影片開始分析。
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
@@ -282,6 +287,15 @@ export default function ResultScreen() {
             </View>
           )}
         </View>
+        <TouchableOpacity
+          style={styles.trajectoryHeroBtn}
+          onPress={handleOpenTrajectory}
+          accessibilityRole="button"
+          accessibilityLabel="查看本球 3D 軌跡模擬"
+          activeOpacity={0.78}
+        >
+          <Text style={styles.trajectoryHeroBtnText}>查看 3D 軌跡模擬</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={[styles.resultTabsWrap, { width: panelWidth }]}>
@@ -509,7 +523,7 @@ export default function ResultScreen() {
       {selectedResultTab === RESULT_TAB_DETAILS && (
         <>
       {/* ── 分析詳情（給使用者的精簡版；__DEV__ 顯示完整內部數值） ── */}
-      {result.yolo_ball_in_frame_count !== undefined && (
+      {analysis.yolo_ball_in_frame_count !== undefined && (
         <View style={[styles.card, { width: panelWidth }]}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>分析詳情</Text>
@@ -521,15 +535,15 @@ export default function ResultScreen() {
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>影片解析度</Text>
               <Text style={styles.detailValue}>
-                {result.video_width && result.video_height
-                  ? `${result.video_width} × ${result.video_height}`
+                {analysis.video_width && analysis.video_height
+                  ? `${analysis.video_width} × ${analysis.video_height}`
                   : '—'}
               </Text>
             </View>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>幀率（FPS）</Text>
               <Text style={styles.detailValue}>
-                {sourceFps ? `${sourceFps} → ${result.fps ?? '—'}` : result.fps ?? '—'}
+                {sourceFps ? `${sourceFps} → ${analysis.fps ?? '—'}` : analysis.fps ?? '—'}
               </Text>
             </View>
             <View style={styles.detailRow}>
@@ -540,9 +554,9 @@ export default function ResultScreen() {
             </View>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>偵測到球的幀數</Text>
-              <Text style={[styles.detailValue, { color: (result.yolo_raw_detection_frames ?? 0) > 0 ? Colors.green : Colors.red }]}>
-                {result.yolo_raw_detection_frames ?? '—'}
-                {result.total_frames ? ` / ${result.total_frames}` : ''}
+              <Text style={[styles.detailValue, { color: (analysis.yolo_raw_detection_frames ?? 0) > 0 ? Colors.green : Colors.red }]}>
+                {analysis.yolo_raw_detection_frames ?? '—'}
+                {analysis.total_frames ? ` / ${analysis.total_frames}` : ''}
               </Text>
             </View>
             <View style={styles.detailRow}>
@@ -588,16 +602,16 @@ export default function ResultScreen() {
                 <View style={styles.divider} />
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>YOLO 處理幀（dev）</Text>
-                  <Text style={styles.detailValue}>{result.yolo_frames_processed ?? '—'}</Text>
+                  <Text style={styles.detailValue}>{analysis.yolo_frames_processed ?? '—'}</Text>
                 </View>
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>YOLO 偵測總次數（dev）</Text>
-                  <Text style={styles.detailValue}>{result.yolo_total_detections ?? '—'}</Text>
+                  <Text style={styles.detailValue}>{analysis.yolo_total_detections ?? '—'}</Text>
                 </View>
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>球在幀中 Phase1（dev）</Text>
-                  <Text style={[styles.detailValue, { color: result.yolo_ball_in_frame_count! > 0 ? Colors.green : Colors.red }]}>
-                    {result.yolo_ball_in_frame_count ?? '—'}
+                  <Text style={[styles.detailValue, { color: analysis.yolo_ball_in_frame_count! > 0 ? Colors.green : Colors.red }]}>
+                    {analysis.yolo_ball_in_frame_count ?? '—'}
                   </Text>
                 </View>
                 <View style={styles.detailRow}>
@@ -825,6 +839,19 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   warnChipText: { fontSize: FontSize.xs, color: Colors.yellow, fontWeight: '600' },
+  trajectoryHeroBtn: {
+    marginTop: Spacing.md,
+    minHeight: 46,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.accent,
+  },
+  trajectoryHeroBtnText: {
+    color: '#fff',
+    fontSize: FontSize.md,
+    fontWeight: '900',
+  },
 
   /* Quality */
   qualityHeader: {
