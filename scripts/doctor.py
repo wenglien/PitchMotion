@@ -1,12 +1,3 @@
-"""
-Environment doctor for speedgun-mobile.
-
-This script helps diagnose common setup issues:
-- Wrong Python version
-- mediapipe shadowed by local files/folders
-- Missing key dependencies
-"""
-
 from __future__ import annotations
 
 import importlib
@@ -17,27 +8,25 @@ from pathlib import Path
 
 def _try_import(name: str):
     try:
-        return importlib.import_module(name), None
+        mod = importlib.import_module(name)
+        return mod, None
     except Exception as e:  # noqa: BLE001
         return None, e
 
 
-def _print_kv(k: str, v: str) -> None:
-    print(f"{k}: {v}")
-
-
 def main() -> int:
-    print("== speedgun-mobile doctor ==")
-    _print_kv("python", sys.version.replace("\n", " "))
-    _print_kv("executable", sys.executable)
-    _print_kv("platform", f"{platform.system()} {platform.release()} ({platform.machine()})")
-    _print_kv("cwd", str(Path.cwd()))
-    print()
-
     repo_root = Path(__file__).resolve().parents[1]
-    _print_kv("repo_root", str(repo_root))
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
-    # Common shadowing checks
+    print("== speedgun-mobile doctor ==")
+    print(f"python:     {sys.version.replace(chr(10), ' ')}")
+    print(f"executable: {sys.executable}")
+    print(f"platform:   {platform.system()} {platform.release()} ({platform.machine()})")
+    print(f"cwd:        {Path.cwd()}")
+    print(f"repo_root:  {repo_root}")
+
+    # ── Shadowing check ──────────────────────────────────────────────────────
     shadow_candidates = [
         repo_root / "mediapipe.py",
         repo_root / "mediapipe",
@@ -48,26 +37,46 @@ def main() -> int:
     if shadow_hits:
         print("\nWARN 可能的同名覆蓋（會導致 import 載入錯誤）：")
         for p in shadow_hits:
-            print(f" - {p}")
+            print(f"  - {p}")
 
-    print("\n== imports ==")
-    for name in ["cv2", "mediapipe", "ultralytics", "numpy"]:
+    # ── Dependency imports ───────────────────────────────────────────────────
+    ok_all = True
+    print("\n== dependencies ==")
+    for name in ["numpy", "cv2", "mediapipe", "ultralytics"]:
         mod, err = _try_import(name)
         if err is not None:
-            print(f"FAIL import {name} 失敗：{err}")
+            ok_all = False
+            print(f"  FAIL {name}: {err}")
             continue
-
-        mod_file = getattr(mod, "__file__", None)
-        mod_ver = getattr(mod, "__version__", None)
-        print(f"OK {name}: version={mod_ver} file={mod_file}")
-
+        ver  = getattr(mod, "__version__", "?")
+        path = getattr(mod, "__file__", "?")
+        print(f"  OK   {name}: version={ver}  file={path}")
         if name == "mediapipe":
-            has_solutions = hasattr(mod, "solutions")
-            print(f"   mediapipe.has_solutions: {has_solutions}")
+            print(f"       mediapipe.has_solutions: {hasattr(mod, 'solutions')}")
 
-    return 0
+    # ── Project imports ──────────────────────────────────────────────────────
+    print("\n== project modules ==")
+    project_modules = [
+        "src.get_pitch_frames_yolov8",
+        "src.pipelines.yolov8_pipeline",
+        "pitch_classifier",
+    ]
+    for name in project_modules:
+        mod, err = _try_import(name)
+        if err is not None:
+            ok_all = False
+            print(f"  FAIL {name}: {err}")
+        else:
+            print(f"  OK   {name}")
+
+    # ── Result ───────────────────────────────────────────────────────────────
+    print()
+    if ok_all:
+        print("PASS")
+        return 0
+    print("FAIL（請先修正上述問題）")
+    return 2
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

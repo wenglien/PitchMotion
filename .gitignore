@@ -51,22 +51,26 @@ model/yolov4-tiny-baseball-416/variables/
 *.weights
 *.onnx
 *.mlmodel
+!mobile/modules/expo-speedgun/android/src/main/assets/**/*.tflite
+!mobile/modules/expo-speedgun/Resources/**/*.mlmodel
 
 # Training outputs (yolov8/runs/ 已納入版控以保留訓練權重)
 # yolov8/runs/
 *.csv
 *.png
 *.jpg
+!mobile/android/app/src/main/res/**/*.png
 !yolov8/datasets/**/*.jpg
 !yolov8/datasets/**/*.txt
+!yolov26n/datasets/**/*.jpg
+!yolov26n/datasets/**/*.txt
 
-# Video files (test videos, can be large)
-videos/
-*.mp4
-*.avi
-*.mov
-*.mkv
-!pitcher.mp4  # Keep example video if needed
+# Video files — tracked via Git LFS in ver.2
+# videos/
+# *.mp4
+# *.avi
+# *.mov
+# *.mkv
 
 # Logs
 *.log
@@ -90,12 +94,32 @@ Thumbs.db
 
 # MediaPipe
 *.tflite
+!mobile/modules/expo-speedgun/android/src/main/assets/**/*.tflite
 
 # CoreML
 *.mlmodelc
+!mobile/modules/expo-speedgun/Resources/**/*.mlmodelc
+!mobile/modules/expo-speedgun/Resources/**/*.mlmodelc/**
 
 # Test outputs
 test_output/
 output/
 Overlay.mp4
 *_overlay.mp4
+
+# Local dev env overrides (use .env.example as template)
+.env
+
+# iOS – CocoaPods & Xcode generated files
+# Regenerate with: cd ios && xcodegen generate && pod install
+ios/Pods/
+ios/*.xcworkspace/
+ios/*.xcodeproj/
+
+# iOS / MediaPipe model files (binary, distribute separately)
+*.task
+!mobile/modules/expo-speedgun/Resources/pose_landmarker_full.task
+!mobile/modules/expo-speedgun/Resources/pose_landmarker_heavy.task
+
+# Claude Code local state (worktrees, per-machine settings)
+.claude/

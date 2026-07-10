@@ -44,9 +44,20 @@ python -m pip install -U pip
 echo "安裝依賴..."
 python -m pip install -r "${REQ_FILE}"
 
+# ── .env 設定 ──────────────────────────────────────────────────────────────
+ENV_FILE="${ROOT_DIR}/.env"
+ENV_EXAMPLE="${ROOT_DIR}/.env.example"
+
+if [[ ! -f "${ENV_FILE}" ]]; then
+  if [[ -f "${ENV_EXAMPLE}" ]]; then
+    cp "${ENV_EXAMPLE}" "${ENV_FILE}"
+    echo "已從 .env.example 建立 .env"
+  fi
+else
+  echo ".env 已存在，略過建立"
+fi
+
 echo
 echo "OK 完成。你現在可以："
 echo " - 執行環境健檢：python scripts/doctor.py"
-echo " - 開啟 GUI：python gui_app.py"
-echo " - 跑 CLI：python pitching_overlay.py -v path/to/video.mp4 --conf 0.03"
-
+echo " - 調整 Python 研究工具設定：編輯 .env（參考 .env.example）"

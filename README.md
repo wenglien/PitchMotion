@@ -1,280 +1,292 @@
-# 投球姿勢與球軌跡分析
+# SpeedGun — iOS 棒球投球分析
 
-深度學習技術分析棒球投球姿勢與球軌跡的開源專案，支援影片分析和即時處理。
+SpeedGun 是以 **iOS 離線分析**為主的棒球投球分析 App。影片會在裝置端透過 CoreML / Swift 管線完成球體偵測、姿勢估距、球速計算、球種辨識、好球帶落點、位移量（Break）與分析品質評估。
 
-## 功能
+> 目前不再維護桌面版、Web frontend 或伺服器端分析流程。分析流程以 iOS 端本機執行為主。
 
-- Ultralytics YOLO（**推薦/預設：YOLO11**；亦相容 YOLOv8；YOLOv4 為 legacy）偵測棒球位置
-- 整合MediaPipe Pose分析投球姿勢與關鍵點
-- 追蹤球的飛行軌跡並繪製 overlay
-- 測量球速，包含出手球速、最大速度和飛行距離
-- 使用手腕關節自動修正出球點位置，讓軌跡更準確
-- 考慮相機透視變形，提供更準確的距離和速度計算
-- 自動生成帶有分析結果的視覺化影片（包含姿勢骨架、球軌跡、球速資訊）
+---
 
+## 目前重點功能
 
-## 系統需求
+| 功能 | 狀態 | 說明 |
+|------|------|------|
+| 離線 iOS 分析 | 支援 | CoreML YOLO + Pose，全程 on-device |
+| 球速計算 | 支援 | 透過軌跡、飛行時間、距離估算與透視修正計算 |
+| 30/60fps 補幀 | 支援 | 低 FPS 影片會自動提高分析密度，目標接近 120fps |
+| 軌跡補點 | 支援 | YOLO 中途漏偵時會補出連續軌跡，避免 overlay 斷線 |
+| 角度容錯 | 支援 | 強化偏斜拍攝時的追蹤選球與 plate/catcher 估計 |
+| MLB ABS 好球帶 | 支援 | 分析前必填打者身高，依 ABS 比例計算好球帶高度 |
+| 好球帶落點 | 支援 | 2D 平面顯示，軌跡線保留 3D 視覺厚度與光影 |
+| 位移量 Break | 支援 | 顯示水平位移、Induced Vertical Break、可信度與來源 |
+| 分析品質 | 支援 | 結果頁顯示偵測覆蓋率、實測軌跡比例、落點與位移信心 |
+| Overlay 影片 | 支援 | 原影片上疊加軌跡、球速與好球帶資訊 |
+| 歷史紀錄 | 支援 | 本機保存分析紀錄與單次投球詳情 |
 
-- Python 3.10 / 3.11（**建議 3.11**；Python 3.12+ 可能會遇到 mediapipe / tensorflow 相容性問題）
-- pip（搭配 venv 虛擬環境）
-- macOS / Windows / Linux 皆可
-- OpenCV、MediaPipe、Ultralytics（YOLO11 / YOLOv8）
-- （選用）TensorFlow：只有在使用舊的 YOLOv4 流程或轉換/自動標註腳本時才需要
-
-## 安裝步驟
-
-1. **下載專案**
-
-```bash
-git clone https://github.com/yourusername/speedgun-mobile.git
-cd speedgun-mobile
-```
-
-2. **建立虛擬環境**
-
-macOS / Linux：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -U pip
-```
-
-Windows（PowerShell）：
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-```
-
-3. **安裝依賴套件**
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-若你需要舊的 YOLOv4 / TensorFlow（不建議，且軌跡穩定度較差）：
-
-```bash
-python3 -m pip install -r requirements-yolov4.txt
-```
-
-（推薦）**一鍵安裝 + 環境健檢（macOS / Linux）**
-
-```bash
-./scripts/bootstrap_dev.sh
-```
-
-只裝 Ultralytics YOLO（YOLO11/YOLOv8）依賴時：
-
-```bash
-REQ_FILE=requirements-yolov8.txt ./scripts/bootstrap_dev.sh
-```
-
-4. **準備模型權重**
-
-本專案**不一定包含**可直接使用的權重檔。有兩種做法：
-
-- **A：使用你已經有的權重（推薦）**
-  - Ultralytics YOLO（YOLO11/YOLOv8）：準備一個 `.pt` 權重檔，之後用參數 `-w/--weights` 指向它即可。
-- **B：自己訓練（需要時才做）**
-  - 參考下方「訓練自訂模型」。
-
-若你想沿用 README 的預設路徑：
-
-- **YOLO（預設 YOLO11）權重**：放在 `yolov8/runs/baseball_yolo11n/weights/best.pt`
-- **YOLOv4-tiny 模型**（只有選 YOLOv4 才需要）： `model/yolov4-tiny-baseball-416/`
-
-5. **快速驗證是否安裝成功**
-
-```bash
-python3 -c "import cv2, mediapipe, ultralytics; print('OK')"
-```
-
-### 常見環境問題排查
-
-#### `AttributeError: module 'mediapipe' has no attribute 'solutions'`
-
-這通常不是你的程式碼問題，而是 **import 到錯的 `mediapipe`**（被同名檔案/資料夾覆蓋、或裝到不同 Python 環境）。
-另外，若安裝到較新的 mediapipe 發佈版本，可能不再提供 `mp.solutions`（Legacy Solutions）。
-
-請在專案根目錄執行：
-
-```bash
-python scripts/doctor.py
-```
-
-（建議）快速 smoke test（不會跑推論、不會開 GUI）：
-
-```bash
-python scripts/smoke_test.py
-```
-
-`doctor` 會輸出：
-- `mediapipe.__file__`（實際載入的來源路徑）
-- 是否有 `mediapipe.py` / `mediapipe/` 造成覆蓋
-- Python 版本是否太新（3.12+）
-
-若你看到 `mediapipe.__file__` 指向專案內的同名檔案，請改名或移除後重試。
-若 `mediapipe.__version__` 很新且 `mediapipe.has_solutions: False`，請改裝本專案固定版本：
-
-```bash
-python3 -m pip uninstall -y mediapipe
-python3 -m pip install mediapipe==0.10.21
-```
-
-## 使用方法
-
-### GUI 應用程式
-
-執行圖形介面應用程式：
-
-```bash
-python3 gui_app.py
-```
-
-操作步驟：
-
-1. 點擊「選擇影片」按鈕，選擇 1~2 支投球影片（支援 mp4/avi/mov/mkv 格式）
-2. 點擊「開始分析」
-3. 分析完成後，會在影片同一個資料夾輸出 overlay 影片：`Overlay.mp4`
-
-
-#### 使用 Ultralytics YOLO（預設/推薦：YOLO11；支援球速測定）
-
-```bash
-# 單一影片模式
-python3 pitching_overlay.py -v path/to/video.mp4 --conf 0.03
-```
-
-（除錯/輸出控制）
-
-- `--debug`: 顯示完整 traceback（方便定位錯誤）
-- `-V / --verbose`：輸出更多除錯資訊（可重複，例如 `-VV`）
-- `--quiet`：只輸出錯誤訊息（ERROR）
-
-
-**基本使用（啟用球速測定，改用手動輸入距離）：**
-```bash
-# 單一影片模式
-python3 pitching_overlay.py -v path/to/video.mp4 --conf 0.03
-
-# 預設距離為 18.44m（投手丘到本壘板）
-# 若要改距離，請加上 --distance（公尺）
-```
-
-**指定投手到捕手距離（公尺）：**
-```bash
-python3 pitching_overlay.py -v path/to/video.mp4 --conf 0.03 --distance 18.44
-```
-
-**停用球速計算：**
-```bash
-python3 pitching_overlay.py -v path/to/video.mp4 --conf 0.03 --no-speed
-```
-
-**處理資料夾內所有影片：**
-```bash
-python3 pitching_overlay.py -f videos/videos1 --conf 0.03
-```
-
-**參數：**
-
-- `-v, --video_file`: 單一影片檔案路徑
-- `-f, --videos_folder`: 包含多個影片的資料夾路徑
-- `-w, --weights`: Ultralytics YOLO 權重檔路徑（預設：`yolov8/runs/baseball_yolo11n/weights/best.pt`）
-- `-c, --conf`: YOLO 置信度閾值（預設：0.1，建議 0.03~0.2 之間調整）
-- `--no-speed`: 停用球速計算功能
-- `-d, --distance`: 手動輸入投手到捕手距離（公尺），例如：18.44 或 15
-- `--no-calibration`: （已廢止）過去用於停用點選校正；目前已移除點選校正，此參數保留相容
-
-**輸出：**
-
-- 單一影片模式：輸出到與輸入影片相同的資料夾，檔名為 `Overlay.mp4`
-- 包含視覺化的球速資訊：出手球速、最大速度、飛行距離
+---
 
 ## 專案結構
 
-```
+```text
 speedgun-mobile/
-├── legacy/                    # legacy 功能集中（保留相容路徑）
-│   └── yolov4/
-│       ├── get_pitch_frames.py # YOLOv4 投球影格擷取（實作）
-│       └── convert_yolov4_tiny_to_coreml.py  # YOLOv4 → CoreML 轉換（實作）
-├── gui_app.py                 # GUI 主程式
-├── pitching_overlay.py        # CLI 入口（YOLO11/YOLOv8 + 選用 legacy YOLOv4）
-├── scripts/                   # 開發/輔助腳本
-│   ├── export_mediapipe_pose.py  # MediaPipe Pose 匯出（姿勢骨架影片）
-│   └── preprocess_video.py    # 影片前處理（120fps/1080p）
-├── requirements.txt           # Python 依賴套件
-├── requirements-yolov4.txt    # 舊 YOLOv4 / TensorFlow 依賴（legacy）
-├── src/                       # 核心模組
-│   ├── pipelines/            # 共用 pipeline（GUI/CLI 共用）
-│   │   └── yolov8_pipeline.py
-│   ├── FrameInfo.py          # 影格資訊類別
-│   ├── get_pitch_frames.py   # YOLOv4 相容 shim（延遲載入；實作在 legacy/yolov4/）
-│   ├── get_pitch_frames_yolov8.py  # Ultralytics YOLO 投球影格擷取（歷史檔名）
-│   ├── generate_overlay.py   # 生成 overlay 影片
-│   ├── ball_speed_calculator.py  # 球速計算模組
-│   ├── release_point_detector.py # 出球點偵測模組
-│   ├── utils.py              # tool函數
-│   └── SORT_tracker/         # SORT 演算法
-│       ├── kalman_filter.py
-│       ├── sort.py
-│       └── tracker.py
-├── model/                     # 模型檔案、轉換工具
-│   ├── convert_yolov4_tiny_to_coreml.py  # CoreML 轉換 shim（實作在 legacy/yolov4/）
-│   └── yolov4-tiny-baseball-416/  # YOLOv4 模型
-├── yolov8/                    # Ultralytics YOLO 訓練與模型（歷史資料夾名稱）
-│   ├── train_yolov8.py       # 訓練腳本（YOLOv8）
-│   ├── train_yolo11.py       # 訓練腳本（YOLO11）
-│   └── runs/                  # 訓練結果與權重
-├── ios/                       # iOS 版本（Swift）
-│   ├── SpeedgunMobileApp.swift
-│   ├── ContentView.swift
-│   ├── CameraViewModel.swift
-│   ├── CameraPreview.swift
-│   ├── FrameProcessor.swift
-│   └── PoseAndBallOverlay.swift
-└── img/                       # 專案圖片與範例
-    └── *.gif                 # 範例動畫
+├── mobile/                         # 主要 App：Expo React Native iOS
+│   ├── modules/expo-speedgun/      # 原生分析模組（Expo Module）
+│   │   ├── src/ExpoSpeedgun.ts     # JS/TS bridge
+│   │   └── ios/
+│   │       ├── ExpoSpeedgunModule.swift    # analyzeVideoOffline / getVideoMetadata
+│   │       ├── SpeedgunPipeline.swift      # 主分析流程
+│   │       ├── YOLODetector.swift          # CoreML YOLO 棒球偵測
+│   │       ├── PoseEstimator.swift         # CoreML 姿勢估計
+│   │       ├── SORTTracker.swift           # 物件追蹤
+│   │       ├── FrameInterpolator.swift     # 影格插值 / 補幀
+│   │       ├── BallSpeedCalculator.swift   # 球速計算
+│   │       ├── BallKinematics.swift        # 位移量 / Break
+│   │       ├── PitchClassifier.swift       # 球種辨識
+│   │       ├── OverlayGenerator.swift      # Overlay 影片輸出
+│   │       └── Types.swift                 # 共用型別與分析常數
+│   ├── src/
+│   │   ├── screens/
+│   │   │   ├── AnalyzeScreen.tsx           # 選影片、打者身高、影片規格、開始分析
+│   │   │   ├── ResultScreen.tsx            # 結果、分析品質、好球帶、位移圖
+│   │   │   ├── HistoryScreen.tsx           # 歷史紀錄
+│   │   │   ├── SessionDetailScreen.tsx     # 單次投球詳情
+│   │   │   └── SettingsScreen.tsx          # 設定
+│   │   ├── components/
+│   │   │   ├── StrikeZone.tsx              # 好球帶落點與 3D 視覺軌跡線
+│   │   │   ├── BreakChart.tsx              # MLB 風格 X/Y 位移圖
+│   │   │   ├── PitchCard.tsx               # 單球資訊卡片
+│   │   │   └── AnalysisProgress.tsx        # 分析進度
+│   │   ├── hooks/
+│   │   │   ├── useOfflineAnalysis.ts       # 呼叫原生分析模組
+│   │   │   └── useLocalHistory.ts          # 本機歷史紀錄
+│   │   └── types.ts                        # TypeScript 型別
+│   └── ios/                                # Xcode workspace / CocoaPods
+├── pitch_classifier/               # Python 球種分類研究工具
+├── src/                            # Python CV / overlay 工具
+└── scripts/                        # 開發輔助腳本
 ```
 
-## 架構
+---
 
-- **物件偵測**：YOLOv4-tiny / Ultralytics YOLO（YOLO11/YOLOv8）
-- **姿勢標記**：MediaPipe Pose
-- **物件追蹤**：SORT (Simple Online and Realtime Tracking) / 簡化追蹤（Ultralytics YOLO 版本）
-- **影像處理**：OpenCV
-- **深度學習框架**：Ultralytics；（legacy）TensorFlow
+## iOS App 開發
 
-### Ultralytics YOLO 版本改進
-- 使用 Ultralytics 官方影片串流介面，提升偵測穩定性
-- 用手腕關節修正出球點，讓軌跡起點更準確
-- 優化軌跡顯示：固定長度尾巴，讓速度感更貼合實際飛行
+### 環境需求
 
-### 訓練自訂模型
+- macOS 13+
+- Xcode 15+
+- Node.js 20+
+- CocoaPods
 
-YOLO11（推薦）模型訓練：
+### 安裝與啟動
 
 ```bash
-cd yolov8
-python train_yolo11.py
+cd mobile
+npm install
+cd ios && pod install && cd ..
+open ios/SpeedGun.xcworkspace
 ```
 
-YOLOv8（備案/相容）模型訓練：
+在 Xcode 內選擇 `SpeedGun` scheme，設定 Signing 後即可 build 到模擬器或實機。
+
+### 實機 Release Build
 
 ```bash
-cd yolov8
-python train_yolov8.py
+xcodebuild \
+  -workspace ios/SpeedGun.xcworkspace \
+  -scheme SpeedGun \
+  -configuration Release \
+  -destination "id=你的裝置UDID" \
+  -allowProvisioningUpdates \
+  -allowProvisioningDeviceRegistration \
+  CODE_SIGN_STYLE=Automatic \
+  DEVELOPMENT_TEAM=你的TeamID \
+  build
 ```
+
+安裝到裝置：
+
+```bash
+xcrun devicectl device install app \
+  --device 你的裝置UDID \
+  "$(find ~/Library/Developer/Xcode/DerivedData -name 'SpeedGun.app' -path '*Release-iphoneos*' -print -quit)"
+```
+
+> Release build 會嵌入 JS bundle，手機離線也能分析，不需要 Metro server。
+
+---
+
+## 使用流程
+
+1. 在分析頁選擇投球影片。
+2. App 會讀取影片規格：FPS、解析度、原始幀數、分析 FPS 與補幀倍率。
+3. 在設定中用捲尺量測並輸入「投手板前緣到本壘板後尖端」的投打距離（3–30m）。未完成手動校正時，App 不會輸出正式球速。
+4. 輸入打者身高（公尺）。系統會依 MLB ABS 規則計算好球帶：
+   - 寬度：43.18 cm
+   - 高度：打者身高的 27% 到 53.5%
+5. 開始分析。
+6. 結果頁會顯示球速、球種、好球帶落點、軌跡、Break、overlay 影片與分析品質。
+
+---
+
+## 分析管線
+
+### 1. 影片讀取與補幀
+
+- 讀取原始影片 FPS、解析度、duration 與 frame count。
+- 30fps / 60fps 影片會自動做影格插值，提高偵測密度。
+- 結果頁會顯示原始 FPS、分析 FPS、有效 capture FPS 與補幀倍率。
+
+### 2. 球體偵測與追蹤
+
+- 使用 CoreML YOLO 偵測棒球。
+- 使用 SORT 追蹤球體軌跡。
+- 追蹤關聯距離會依 frame 尺寸調整，改善偏斜拍攝時的掉追問題。
+- 對低 FPS 影片避免過度縮小球體搜尋半徑。
+
+### 3. 軌跡補點
+
+當 YOLO 在中途漏偵時，管線會利用既有軌跡補出缺失段落：
+
+- 保留真實偵測點與補出點數量。
+- overlay 與結果頁會使用連續軌跡，減少「中途斷掉」的視覺問題。
+- 分析品質會把「實測軌跡比例」納入評分，避免補點過多時看起來過度自信。
+
+### 4. 球速與距離校正
+
+- 必須使用手動量測的投手板至本壘距離；不會從姿勢、自動 metadata 或 MLB 預設值推估。
+- 可設定跨步補償，將量測的投手板距離換算成實際出手到本壘的有效飛行距離。
+- 結果距離來源固定為 `manual`。
+- 飛行時間使用原始影片 PTS 建立拍攝時間軸；插補影格只用於追蹤／overlay，不會作為正式時間或 TTC 證據。
+- 出手點會先由姿勢提出候選，再由最早的真實球軌跡反推至手腕位置微調；接球端會綜合音訊與實際影格時間。
+
+### 5. 好球帶與落點
+
+- 分析前需輸入打者身高。
+- 好球帶以 MLB ABS 規則推算實際寬高。
+- plate/catcher 估計會把好球帶定位到本次影片的 plate plane。
+- 結果會回傳：
+  - `plate_x_norm`
+  - `plate_y_norm`
+  - `pitch_loc_x`
+  - `pitch_loc_y`
+  - `is_strike`
+  - `catch_point_confidence`
+  - `plate_fit_error_px`
+  - `plate_zone`
+
+### 6. 位移量 Break
+
+位移量會以好球帶寬度與高度做像素到公分校正，並輸出：
+
+- `horizontal_break_cm`
+- `vertical_break_cm`
+- `induced_vertical_break_cm`
+- `total_break_cm`
+- `break_angle_deg`
+- `break_confidence`
+- `break_actual_sample_ratio`
+- `break_endpoint_source`
+
+Break Chart 採用 MLB 風格 X/Y 顯示：
+
+- X 軸：水平位移，正值往右。
+- Y 軸：Induced Vertical Break，正值代表扣除重力後的上抬效果。
+
+### 7. 球種辨識
+
+`PitchClassifier` 會根據速度、位移、軌跡形狀與 late break 特徵進行規則分類，目前支援：
+
+- Fastball
+- Curveball
+- Slider
+- Changeup
+
+結果會包含 `pitch_type` 與 `pitch_confidence`。
+
+---
+
+## UI / UX 更新
+
+### 分析頁
+
+- 新增影片規格卡片。
+- 開始分析前必填打者身高。
+- 顯示 ABS 好球帶寬度、高度與比例。
+- 顯示原始 FPS、分析 FPS、補幀倍率、解析度與幀數。
+
+### 結果頁
+
+- 新增分析品質分數。
+- 顯示偵測覆蓋率、實測軌跡比例、落點信心、位移信心。
+- 分析詳情包含補幀設定、落點來源、plate error、距離來源。
+- 好球帶動畫改為 2D 平面，軌跡線保留 3D 厚度、陰影與高光。
+
+---
+
+## 常用檢查
+
+### TypeScript
+
+```bash
+cd mobile
+npx tsc --noEmit
+```
+
+### iOS Build
+
+```bash
+xcodebuild \
+  -workspace mobile/ios/SpeedGun.xcworkspace \
+  -scheme SpeedGun \
+  -configuration Debug \
+  -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' \
+  build
+```
+
+### Shell Script 語法
+
+```bash
+bash -n scripts/bootstrap_dev.sh
+```
+
+---
+
+## 常見問題
+
+**Q：為什麼 30/60fps 影片比較容易不準？**
+
+低 FPS 代表球在相鄰幀之間位移更大，偵測器看到的樣本更少，因此 release/catch frame、軌跡連續性與球速都會更敏感。App 會自動補幀到接近 120fps 的分析密度，但原始影像若模糊或球太小，仍會影響結果。
+
+**Q：拍攝角度偏一點就會不準嗎？**
+
+角度會影響球體大小、plate plane、catcher 位置與姿勢估距。管線已加入更寬容的追蹤與 plate/catcher 推估，但建議仍讓鏡頭靠近本壘後方、固定不晃動，並讓投手到捕手路徑清楚可見。
+
+**Q：分析品質分數低代表什麼？**
+
+通常代表偵測覆蓋不足、補點比例偏高、落點信心低、位移樣本不足或距離來源較不可靠。結果頁會列出主要原因與重拍建議。
+
+**Q：iOS App 顯示 `No script URL provided`？**
+
+請使用 Release 設定 build，Release build 才會嵌入 JS bundle。
+
+**Q：Signing 出現 bundle identifier 無法註冊？**
+
+在 Xcode 的 Signing & Capabilities 修改 bundle identifier，例如改成你 Apple Developer Team 底下唯一的 `com.yourname.speedgun`。
+
+---
+
+## 技術
+
+- React Native / Expo
+- Swift Expo Module
+- CoreML
+- AVFoundation
+- Metal
+- react-native-svg
+- YOLO / SORT
+
+---
 
 ## 授權
 
-本專案採用 MIT 授權條款 - 詳見 [LICENSE](LICENSE) 檔案
-
-- [YOLO](https://github.com/AlexeyAB/darknet) - 物件偵測模型
-- [MediaPipe](https://mediapipe.dev/) - 姿勢估計
-- [SORT](https://github.com/abewley/sort) - 物件追蹤演算法
-- [Ultralytics](https://github.com/ultralytics/ultralytics) - Ultralytics YOLO（YOLO11/YOLOv8）
+本專案採用 MIT 授權，詳見 [LICENSE](LICENSE)。

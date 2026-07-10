@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "SpeedGun",
+    "slug": "speedgun-mobile",
+    "platforms": ["ios"],
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f4f6f9"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.wenglien.speedgun.mobile",
+      "buildNumber": "1",
+      "requireFullScreen": false,
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "SpeedGun needs access to your photo library to select pitch videos for analysis.",
+        "NSPhotoLibraryAddUsageDescription": "SpeedGun saves analysed pitch videos with overlays back to your photo library.",
+        "NSCameraUsageDescription": "SpeedGun uses the camera to record pitch videos for speed and pitch-type analysis.",
+        "NSMicrophoneUsageDescription": "SpeedGun records audio with each pitch video to detect catch impact for accurate flight time.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      "expo-sharing",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "SpeedGun needs access to your photo library to select pitch videos.",
+          "cameraPermission": "SpeedGun uses the camera to record pitch videos.",
+          "microphonePermission": "SpeedGun records audio with each pitch video to detect catch impact."
+        }
+      ],
+      "expo-video"
+    ]
+  }
+}

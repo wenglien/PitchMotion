@@ -1,1 +1,11 @@
--r requirements-yolov8.txt
+filterpy==1.4.5
+image_registration==0.2.9
+matplotlib==3.9.0
+numpy==1.26.4
+Pillow==10.3.0
+scipy==1.13.1
+scikit-image==0.22.0
+opencv-python==4.9.0.80
+mediapipe==0.10.21
+ultralytics>=8.3.150  # YOLO26 support (released 2026-01-14)
+tensorflow==2.16.1

@@ -26,7 +26,13 @@ def build_filter(method: str, resolution: str) -> str:
         target_w, target_h = 1920, 1080
 
     # Use minterpolate for interpolation; otherwise simple fps duplication.
-    scale_pad = f"scale={target_w}:-2,pad={target_w}:{target_h}:({target_w}-iw)/2:({target_h}-ih)/2"
+    # 使用 force_original_aspect_ratio=decrease，確保先把畫面縮放到
+    # 不超出目標解析度，再置中填滿，避免「Padded dimensions cannot be smaller」
+    # 這類錯誤（例如直式 4K 影片帶有旋轉矩陣的情況）。
+    scale_pad = (
+        f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+        f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2"
+    )
     if method == "interpolate":
         return (
             "minterpolate=fps=120:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1," + scale_pad
