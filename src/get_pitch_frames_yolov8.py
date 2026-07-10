@@ -427,9 +427,18 @@ def get_pitch_frames_yolov8(
     release_detection = None
     throwing_hand = release_detector.infer_throwing_hand()
     release_pose_frame_idx = None
-    
+
+    # 找出第一個有球偵測的幀，用於交叉驗證 release point
+    _first_ball_frame_for_validation = None
+    for _rd in raw_detections:
+        if _rd["dets_list"]:
+            _first_ball_frame_for_validation = _rd["frame_id"]
+            break
+
     if release_detector.frame_count >= 10:
-        release_detection = release_detector.detect_release_point()
+        release_detection = release_detector.detect_release_point(
+            first_ball_frame=_first_ball_frame_for_validation
+        )
         
         if release_detection and release_detection['confidence'] > 0.3:
             optimal_release_frame_idx = release_detection['frame_idx']

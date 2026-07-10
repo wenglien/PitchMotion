@@ -198,8 +198,12 @@ class ReleasePointDetector:
         vel_window = max(3, int(round(self.fps / 10)))
         velocities = self._calculate_velocity(valid_points, window=vel_window)
 
-        # 找速度峰值
-        peak_local_idx = int(np.argmax(velocities))
+        # 只在後半段搜尋速度峰值：放球發生在投球動作後期，
+        # 前半段的峰值通常是 wind-up 或 arm cocking 的假峰值
+        search_start = len(velocities) // 3  # 從後 2/3 開始搜尋
+        if search_start >= len(velocities):
+            search_start = 0
+        peak_local_idx = search_start + int(np.argmax(velocities[search_start:]))
 
         # 高 FPS 下，真實放球通常更接近峰值或峰值前 0~2 幀
         # 以「秒」表示的前移量，讓不同 FPS 表現一致
@@ -332,88 +336,122 @@ class ReleasePointDetector:
             y_velocities.append(abs(y_positions[i] - y_positions[i-1]))
         
         # 找前腳落地：Y 方向速度突然接近 0 並持續
+        # 連續幀數需依 FPS 縮放：要求至少 ~100ms 的穩定期
         foot_contact_idx = None
         velocity_threshold = np.mean(y_velocities) * 0.25
-        
-        for i in range(len(y_velocities) - 3):
-            # 連續 3 幀速度都很小
-            if (y_velocities[i] < velocity_threshold and 
-                y_velocities[i+1] < velocity_threshold and 
-                y_velocities[i+2] < velocity_threshold):
+        consec_needed = max(3, int(round(0.1 * self.fps)))  # 100ms 換算成幀數
+
+        for i in range(len(y_velocities) - consec_needed):
+            if all(y_velocities[i + k] < velocity_threshold for k in range(consec_needed)):
                 foot_contact_idx = valid_indices[i]
                 break
         
         if foot_contact_idx is not None:
-            # 出球通常在落地後約 0.10s ~ 0.67s（用 FPS 換算成幀數，避免高 FPS 錯位）
-            start_delay_sec = 0.10
-            end_delay_sec = 0.67
+            # 出球通常在落地後約 0.08s ~ 0.45s（用 FPS 換算成幀數，避免高 FPS 錯位）
+            # 原本 0.67s 窗口太寬，容易把非出球幀也納入
+            start_delay_sec = 0.08
+            end_delay_sec = 0.45
             window_start = foot_contact_idx + int(round(start_delay_sec * self.fps))
             window_end = min(foot_contact_idx + int(round(end_delay_sec * self.fps)), len(self.pose_history) - 1)
             return (window_start, window_end)
         
         return None
     
-    def detect_release_point(self) -> Optional[Dict]:
+    def detect_release_point(self, first_ball_frame: Optional[int] = None) -> Optional[Dict]:
+        """
+        偵測出球點。
+
+        Args:
+            first_ball_frame: 第一顆球偵測到的幀索引（可選），用於交叉驗證。
+
+        Returns:
+            dict with 'frame_idx', 'confidence', 'signals' or None
+        """
         if len(self.pose_history) < 10:
             return None
-        
+
         # 檢測各個訊號
         s1_frame = self._detect_signal_s1_wrist_speed_peak()
         s2_frame = self._detect_signal_s2_elbow_extension()
         s3_window = self._detect_signal_s3_foot_contact()
-        
+
         signals = {
             's1_wrist_speed': s1_frame,
             's2_elbow_extension': s2_frame,
             's3_foot_window': s3_window
         }
-        
-        # 融合策略
+
+        # ---- S1-S2 時間一致性檢查 ----
+        # 如果 S1 和 S2 相差超過 0.15 秒，表示其中一個可能是誤判，
+        # 降低離群訊號的權重
+        s1_weight = 0.4
+        s2_weight = 0.3
+        agreement_sec = 0.15  # 允許的最大偏差（秒）
+        agreement_frames = int(round(agreement_sec * self.fps))
+
+        if s1_frame is not None and s2_frame is not None:
+            gap = abs(s1_frame - s2_frame)
+            if gap > agreement_frames:
+                # 不一致：降低離群訊號的權重而非直接丟棄
+                # 偏好 S1（手腕峰值較穩定），S2 降為 0.1
+                s2_weight = 0.1
+
+        # ---- 組建候選 ----
         candidates = []
-        
-        # S1 權重 0.4
         if s1_frame is not None:
-            candidates.append((s1_frame, 0.4))
-        
-        # S2 權重 0.3
+            candidates.append((s1_frame, s1_weight))
         if s2_frame is not None:
-            candidates.append((s2_frame, 0.3))
-        
-        # S3 約束：如果有落地窗口，只考慮窗口內的候選
+            candidates.append((s2_frame, s2_weight))
+
+        # ---- S3 約束 ----
         if s3_window is not None:
             window_start, window_end = s3_window
-            filtered_candidates = [
-                (frame, weight) for frame, weight in candidates
-                if window_start <= frame <= window_end
+            filtered = [
+                (f, w) for f, w in candidates
+                if window_start <= f <= window_end
             ]
-            
-            if filtered_candidates:
-                candidates = filtered_candidates
-                # S3 約束成功，增加信心度
-                for i in range(len(candidates)):
-                    frame, weight = candidates[i]
-                    candidates[i] = (frame, weight * 1.2)
-        
+
+            if filtered:
+                # S3 約束成功，給予信心加成
+                candidates = [(f, w * 1.2) for f, w in filtered]
+            # else: S3 約束失敗時不丟棄所有候選——繼續使用 S1/S2
+
+        # ---- 球軌跡交叉驗證 ----
+        # 出球應在第一顆球偵測到的前方（最多提前 ~0.3s）
+        if first_ball_frame is not None and candidates:
+            max_lead_sec = 0.30
+            max_lead_frames = int(round(max_lead_sec * self.fps))
+            ball_filtered = [
+                (f, w) for f, w in candidates
+                if f <= first_ball_frame and (first_ball_frame - f) <= max_lead_frames
+            ]
+            if ball_filtered:
+                candidates = ball_filtered
+
         if not candidates:
-            # 沒有任何訊號，退回到簡單的第一幀有球的點
             return None
-        
-        # 加權平均（取最接近加權中心的候選點）
-        weighted_sum = sum(frame * weight for frame, weight in candidates)
-        total_weight = sum(weight for _, weight in candidates)
-        
+
+        # ---- 選擇最佳幀 ----
+        weighted_sum = sum(f * w for f, w in candidates)
+        total_weight = sum(w for _, w in candidates)
+
         if total_weight == 0:
             return None
-        
+
         target_frame = weighted_sum / total_weight
-        
+
         # 選擇最接近加權中心的候選點
         best_frame = min(candidates, key=lambda x: abs(x[0] - target_frame))[0]
-        
-        # 計算信心度
-        confidence = total_weight / 1.0  # 最大權重和為 0.4 + 0.3 + S3加成
+
+        # ---- 信心度 ----
+        # 基礎信心來自訊號權重總和
+        confidence = total_weight / 1.0
+        # 只有單一訊號時上限為 0.6（避免單訊號過度自信）
+        num_signals = sum(1 for s in [s1_frame, s2_frame] if s is not None)
+        if num_signals <= 1:
+            confidence = min(confidence, 0.6)
         confidence = min(confidence, 1.0)
-        
+
         return {
             'frame_idx': best_frame,
             'confidence': confidence,
