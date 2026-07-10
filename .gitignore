@@ -51,6 +51,7 @@ model/yolov4-tiny-baseball-416/variables/
 *.weights
 *.onnx
 *.mlmodel
+!mobile/modules/expo-speedgun/android/src/main/assets/**/*.tflite
 !mobile/modules/expo-speedgun/Resources/**/*.mlmodel
 
 # Training outputs (yolov8/runs/ 已納入版控以保留訓練權重)
@@ -58,6 +59,7 @@ model/yolov4-tiny-baseball-416/variables/
 *.csv
 *.png
 *.jpg
+!mobile/android/app/src/main/res/**/*.png
 !yolov8/datasets/**/*.jpg
 !yolov8/datasets/**/*.txt
 !yolov26n/datasets/**/*.jpg
@@ -92,6 +94,7 @@ Thumbs.db
 
 # MediaPipe
 *.tflite
+!mobile/modules/expo-speedgun/android/src/main/assets/**/*.tflite
 
 # CoreML
 *.mlmodelc

@@ -2,7 +2,7 @@
 
 SpeedGun 是以 **iOS 離線分析**為主的棒球投球分析 App。影片會在裝置端透過 CoreML / Swift 管線完成球體偵測、姿勢估距、球速計算、球種辨識、好球帶落點、位移量（Break）與分析品質評估。
 
-> 目前不再維護桌面版或 Web frontend。`frontend/` 已移除；Python 後端保留作為開發、研究與模型驗證輔助。
+> 目前不再維護桌面版、Web frontend 或伺服器端分析流程。分析流程以 iOS 端本機執行為主。
 
 ---
 
@@ -29,7 +29,7 @@ SpeedGun 是以 **iOS 離線分析**為主的棒球投球分析 App。影片會�
 ```text
 speedgun-mobile/
 ├── mobile/                         # 主要 App：Expo React Native iOS
-│   ├── modules/expo-speedgun/      # 原生 Swift 分析模組（Expo Module）
+│   ├── modules/expo-speedgun/      # 原生分析模組（Expo Module）
 │   │   ├── src/ExpoSpeedgun.ts     # JS/TS bridge
 │   │   └── ios/
 │   │       ├── ExpoSpeedgunModule.swift    # analyzeVideoOffline / getVideoMetadata
@@ -60,12 +60,9 @@ speedgun-mobile/
 │   │   │   └── useLocalHistory.ts          # 本機歷史紀錄
 │   │   └── types.ts                        # TypeScript 型別
 │   └── ios/                                # Xcode workspace / CocoaPods
-├── backend/                        # 可選 FastAPI 後端（開發 / 研究）
 ├── pitch_classifier/               # Python 球種分類研究工具
 ├── src/                            # Python CV / overlay 工具
-├── train_tool/                     # YOLO 訓練與模型資料
-├── scripts/                        # 開發輔助腳本
-└── dev_start.sh                    # 啟動可選後端
+└── scripts/                        # 開發輔助腳本
 ```
 
 ---
@@ -225,36 +222,6 @@ Break Chart 採用 MLB 風格 X/Y 顯示：
 
 ---
 
-## 可選 Python 後端
-
-Python 後端目前主要用於開發、研究、模型驗證與舊流程測試；一般 iOS 離線分析不需要啟動後端。
-
-### 安裝
-
-```bash
-./scripts/bootstrap_dev.sh
-```
-
-### 啟動
-
-```bash
-./dev_start.sh
-```
-
-預設設定在 `.env.example`：
-
-```bash
-BACKEND_PORT=8000
-YOLO_WEIGHTS=train_tool/runs/detect/baseball_yolo26n_v5/weights/best.pt
-```
-
-啟動後：
-
-- API：http://localhost:8000
-- Docs：http://localhost:8000/docs
-
----
-
 ## 常用檢查
 
 ### TypeScript
@@ -279,7 +246,6 @@ xcodebuild \
 ### Shell Script 語法
 
 ```bash
-bash -n dev_start.sh
 bash -n scripts/bootstrap_dev.sh
 ```
 
@@ -317,7 +283,6 @@ bash -n scripts/bootstrap_dev.sh
 - AVFoundation
 - Metal
 - react-native-svg
-- FastAPI / Python（可選開發工具）
 - YOLO / SORT
 
 ---

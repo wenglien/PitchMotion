@@ -1,5 +1,10 @@
 import { useRef, useCallback } from 'react';
-import { analyzeVideoOffline, addProgressListener } from '../../modules/expo-speedgun';
+import {
+  analyzeVideoOffline,
+  addProgressListener,
+  type ABSCalibration,
+  type AnalysisOptions,
+} from '../../modules/expo-speedgun';
 import { PitchResult, StrikeZoneCalibration, TrajectoryMetadata, TrajectorySample } from '../types';
 
 /** Maps native stage names → pipeline stage IDs used by AnalysisProgress */
@@ -56,6 +61,8 @@ export function useOfflineAnalysis() {
         pitcherHeightM?: number;
         batterHeightM?: number;
         strikeZone?: StrikeZoneCalibration | null;
+        absCalibration?: ABSCalibration | null;
+        absCalibrationJson?: string | null;
       },
       callbacks?: OfflineAnalysisCallbacks,
     ): Promise<PitchResult> => {
@@ -103,14 +110,22 @@ export function useOfflineAnalysis() {
       });
 
       try {
-        const raw = await analyzeVideoOffline(videoUri, {
+        const nativeOptions: AnalysisOptions = {
           moundDistance: opts.moundDistanceM,
           strideCorrectionM: opts.strideCorrectionM,
           confThreshold: opts.confThreshold,
           pitcherHeightM: opts.pitcherHeightM,
           batterHeightM: opts.batterHeightM,
           strikeZone: opts.strikeZone,
-        });
+        };
+        if (opts.absCalibration != null) {
+          nativeOptions.absCalibration = opts.absCalibration;
+        }
+        if (opts.absCalibrationJson != null && opts.absCalibrationJson.trim() !== '') {
+          nativeOptions.absCalibrationJson = opts.absCalibrationJson;
+        }
+
+        const raw = await analyzeVideoOffline(videoUri, nativeOptions);
 
         if (raw.error) {
           throw new Error(raw.error as string);

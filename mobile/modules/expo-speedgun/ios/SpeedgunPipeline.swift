@@ -23,7 +23,8 @@ final class SpeedgunPipeline {
         confThreshold: Double,
         pitcherHeightM: Double? = nil,
         batterHeightM: Double? = nil,
-        strikeZone: [String: Double]? = nil
+        strikeZone: [String: Double]? = nil,
+        absCalibration: ABSCalibration? = nil
     ) async throws -> [String: Any] {
         // Resolve URI to file URL
         let videoURL: URL
@@ -48,7 +49,7 @@ final class SpeedgunPipeline {
               moundDistance <= MAX_MANUAL_MOUND_DISTANCE_M else {
             throw SpeedgunError.manualDistanceRequired
         }
-        let manualStrikeZone = strikeZone != nil
+        var manualStrikeZone = strikeZone != nil
         let absZoneHeightM = absStrikeZoneHeightM(batterHeightM)
         var resolvedStrikeZone = resolveStrikeZone(strikeZone, batterHeightM: batterHeightM)
 
@@ -77,6 +78,21 @@ final class SpeedgunPipeline {
         let displayHeight = decoder.displayHeight
         let fps = decoder.fps
         let totalFrames = decoder.totalFrames
+
+        if let absZone = absCalibration?.normalizedPlateZone(
+            sourceWidth: displayWidth,
+            sourceHeight: displayHeight
+        ) {
+            resolvedStrikeZone = absZone
+            manualStrikeZone = true
+            NSLog(
+                "[SpeedgunPipeline] ABS 2D calibration drives strike-zone analysis: x=%.3f-%.3f y=%.3f-%.3f",
+                absZone["x_min"] ?? 0,
+                absZone["x_max"] ?? 0,
+                absZone["y_min"] ?? 0,
+                absZone["y_max"] ?? 0
+            )
+        }
 
         // Camera focal length in pixels: prefer the per-video QuickTime metadata
         // (true recorded FOV incl. lens choice / zoom / stabilization crop) over
@@ -1003,6 +1019,7 @@ final class SpeedgunPipeline {
                 speedInfo: speedInfo,
                 outputURL: overlayURL,
                 interpFactor: interpolationFactor,
+                absCalibration: absCalibration,
                 progressCallback: { [weak self] pct, detail in
                     self?.reportProgress("overlay", 0.71 + pct * 0.24, detail)
                 }
@@ -1175,53 +1192,6 @@ final class SpeedgunPipeline {
 
     // MARK: - Helpers
 
-    private func absStrikeZoneHeightM(_ batterHeightM: Double?) -> Double? {
-        guard let batterHeightM,
-              batterHeightM >= 1.0,
-              batterHeightM <= 2.4 else {
-            return nil
-        }
-        return batterHeightM * (ABS_STRIKE_ZONE_TOP_RATIO - ABS_STRIKE_ZONE_BOTTOM_RATIO)
-    }
-
-    private func strikeZoneSpan(batterHeightM: Double?) -> (width: Double, height: Double, absHeightM: Double?) {
-        let zoneW = STRIKE_ZONE_X_MAX - STRIKE_ZONE_X_MIN
-        let defaultH = STRIKE_ZONE_Y_MAX - STRIKE_ZONE_Y_MIN
-        guard let absHeightM = absStrikeZoneHeightM(batterHeightM) else {
-            return (zoneW, defaultH, nil)
-        }
-        let zoneH = clamp(defaultH * (absHeightM / LEGACY_STRIKE_ZONE_HEIGHT_M), min: 0.08, max: 0.45)
-        return (zoneW, zoneH, absHeightM)
-    }
-
-    private func resolveStrikeZone(_ override: [String: Double]?, batterHeightM: Double? = nil) -> [String: Double] {
-        guard let override else {
-            let span = strikeZoneSpan(batterHeightM: batterHeightM)
-            let cx = (STRIKE_ZONE_X_MIN + STRIKE_ZONE_X_MAX) / 2.0
-            let cy = (STRIKE_ZONE_Y_MIN + STRIKE_ZONE_Y_MAX) / 2.0
-            return [
-                "x_min": cx - span.width / 2.0,
-                "x_max": cx + span.width / 2.0,
-                "y_min": cy - span.height / 2.0,
-                "y_max": cy + span.height / 2.0,
-            ]
-        }
-        let xMin = override["x_min"] ?? STRIKE_ZONE_X_MIN
-        let xMax = override["x_max"] ?? STRIKE_ZONE_X_MAX
-        let yMin = override["y_min"] ?? STRIKE_ZONE_Y_MIN
-        let yMax = override["y_max"] ?? STRIKE_ZONE_Y_MAX
-        guard xMin >= 0.0, xMin < xMax, xMax <= 1.0,
-              yMin >= 0.0, yMin < yMax, yMax <= 1.0 else {
-            return DEFAULT_STRIKE_ZONE
-        }
-        return [
-            "x_min": xMin,
-            "x_max": xMax,
-            "y_min": yMin,
-            "y_max": yMax,
-        ]
-    }
-
     /// Refine a pose-derived release moment using only the first real ball
     /// observations. The first few ball centres define a short-time image-plane
     /// velocity; projecting that line backwards to the throwing wrist removes
@@ -1351,293 +1321,6 @@ final class SpeedgunPipeline {
         }
 
         return first.ballCenter
-    }
-
-    private func estimateAutoStrikeZone(
-        frameInfos: [FrameInfo],
-        displayWidth: Int,
-        displayHeight: Int,
-        lastBallFrame: Int?,
-        batterHeightM: Double? = nil
-    ) -> [String: Double] {
-        guard displayWidth > 0, displayHeight > 0 else { return DEFAULT_STRIKE_ZONE }
-
-        let span = strikeZoneSpan(batterHeightM: batterHeightM)
-        let zoneW = span.width
-        let zoneH = span.height
-        let defaultCX = (STRIKE_ZONE_X_MIN + STRIKE_ZONE_X_MAX) / 2.0
-        let defaultCY = (STRIKE_ZONE_Y_MIN + STRIKE_ZONE_Y_MAX) / 2.0
-
-        var poseCentersX: [Double] = []
-        var poseMidY: [Double] = []
-        for fi in frameInfos {
-            guard let pose = fi.poseLandmarks else { continue }
-            let xs = [pose.leftShoulder, pose.rightShoulder, pose.leftHip, pose.rightHip]
-                .compactMap { $0?.x }
-            if xs.count >= 2 {
-                poseCentersX.append(Double(xs.reduce(0, +)) / Double(xs.count) / Double(displayWidth))
-            }
-
-            let ys = [pose.leftShoulder, pose.rightShoulder, pose.leftHip, pose.rightHip]
-                .compactMap { $0?.y }
-            if ys.count >= 2 {
-                poseMidY.append(Double(ys.reduce(0, +)) / Double(ys.count) / Double(displayHeight))
-            }
-        }
-
-        let poseCX = poseCentersX.isEmpty ? nil : median(poseCentersX)
-
-        var tailXs: [Double] = []
-        var tailYs: [Double] = []
-        if let last = lastBallFrame, !frameInfos.isEmpty {
-            let end = min(last, frameInfos.count - 1)
-            let start = max(0, end - 15)
-            if start <= end {
-                for i in start...end {
-                    let fi = frameInfos[i]
-                    guard fi.ballInFrame && !fi.ballLostTracking else { continue }
-                    tailXs.append(Double(fi.ballCenter.x) / Double(displayWidth))
-                    tailYs.append(Double(fi.ballCenter.y) / Double(displayHeight))
-                }
-            }
-        }
-        let tailX = tailXs.isEmpty ? nil : median(tailXs)
-        let tailY = tailYs.isEmpty ? nil : median(tailYs)
-
-        let centerX: Double
-        if let poseCX {
-            centerX = 0.75 * poseCX + 0.25 * (tailX ?? defaultCX)
-        } else if let tailX {
-            centerX = 0.65 * defaultCX + 0.35 * tailX
-        } else {
-            centerX = defaultCX
-        }
-
-        var centerY = defaultCY
-        if let tailY {
-            centerY += 0.35 * (tailY - defaultCY)
-        }
-        if !poseMidY.isEmpty {
-            centerY += 0.08 * (median(poseMidY) - 0.40)
-        }
-
-        let clampedX = clamp(centerX, min: zoneW / 2.0 + 0.02, max: 1.0 - zoneW / 2.0 - 0.02)
-        let clampedY = clamp(centerY, min: zoneH / 2.0 + 0.02, max: 1.0 - zoneH / 2.0 - 0.02)
-
-        return [
-            "x_min": clampedX - zoneW / 2.0,
-            "x_max": clampedX + zoneW / 2.0,
-            "y_min": clampedY - zoneH / 2.0,
-            "y_max": clampedY + zoneH / 2.0,
-        ]
-    }
-
-    /// Strike-zone relative location in display-normalized catcher/umpire POV.
-    private func strikeZoneLocation(
-        xNorm: Double,
-        yNorm: Double,
-        plateZone: [String: Double]
-    ) -> (x: Double, y: Double, isStrike: Bool) {
-        let xMin = plateZone["x_min"] ?? STRIKE_ZONE_X_MIN
-        let xMax = plateZone["x_max"] ?? STRIKE_ZONE_X_MAX
-        let yMin = plateZone["y_min"] ?? STRIKE_ZONE_Y_MIN
-        let yMax = plateZone["y_max"] ?? STRIKE_ZONE_Y_MAX
-        let zoneW = xMax - xMin
-        let zoneH = yMax - yMin
-        let locX = zoneW > 0 ? (xNorm - xMin) / zoneW : 0.5
-        let locY = zoneH > 0 ? (yNorm - yMin) / zoneH : 0.5
-        return (
-            x: locX,
-            y: locY,
-            isStrike: locX >= 0.0 && locX <= 1.0 && locY >= 0.0 && locY <= 1.0
-        )
-    }
-
-    private struct QuadraticFit {
-        let a: Double
-        let b: Double
-        let c: Double
-        let rmse: Double
-    }
-
-    private func evaluateQuadratic(_ fit: QuadraticFit, _ t: Double) -> Double {
-        fit.a * t * t + fit.b * t + fit.c
-    }
-
-    private func weightedQuadraticFit(ts: [Double], values: [Double], weights: [Double]) -> QuadraticFit? {
-        guard ts.count == values.count, values.count == weights.count, ts.count >= 4 else { return nil }
-
-        var s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0
-        var t0 = 0.0, t1 = 0.0, t2 = 0.0
-        var weightSum = 0.0
-
-        for i in 0..<ts.count {
-            let w = max(0.001, weights[i])
-            let x = ts[i]
-            let y = values[i]
-            let x2 = x * x
-            s0 += w
-            s1 += w * x
-            s2 += w * x2
-            s3 += w * x2 * x
-            s4 += w * x2 * x2
-            t0 += w * y
-            t1 += w * y * x
-            t2 += w * y * x2
-            weightSum += w
-        }
-
-        // Normal equations for y = a*t^2 + b*t + c.
-        let a11 = s4, a12 = s3, a13 = s2
-        let a21 = s3, a22 = s2, a23 = s1
-        let a31 = s2, a32 = s1, a33 = s0
-        let det = a11 * (a22 * a33 - a23 * a32)
-            - a12 * (a21 * a33 - a23 * a31)
-            + a13 * (a21 * a32 - a22 * a31)
-        guard abs(det) > 1e-9, weightSum > 0 else { return nil }
-
-        let b1 = t2, b2 = t1, b3 = t0
-        let qa = (b1 * (a22 * a33 - a23 * a32)
-            - a12 * (b2 * a33 - a23 * b3)
-            + a13 * (b2 * a32 - a22 * b3)) / det
-        let qb = (a11 * (b2 * a33 - a23 * b3)
-            - b1 * (a21 * a33 - a23 * a31)
-            + a13 * (a21 * b3 - b2 * a31)) / det
-        let qc = (a11 * (a22 * b3 - b2 * a32)
-            - a12 * (a21 * b3 - b2 * a31)
-            + b1 * (a21 * a32 - a22 * a31)) / det
-
-        var err = 0.0
-        for i in 0..<ts.count {
-            let residual = values[i] - (qa * ts[i] * ts[i] + qb * ts[i] + qc)
-            err += max(0.001, weights[i]) * residual * residual
-        }
-        let rmse = sqrt(err / weightSum)
-        return QuadraticFit(a: qa, b: qb, c: qc, rmse: rmse)
-    }
-
-    /// Estimate the ball position at the plate using a recency-weighted tail fit.
-    /// We fit x(t) and y(t) independently with a quadratic over the final actual
-    /// YOLO detections. This preserves late horizontal movement while damping the
-    /// frame-to-frame bbox jitter that dominates near the glove.
-    private func estimatePlatePosition(
-        frameInfos: [FrameInfo],
-        displayWidth: Int,
-        displayHeight: Int,
-        lastBallFrame: Int?,
-        catchFrame: Int?,
-        fps: Int,
-        plateZone: [String: Double]
-    ) -> (point: CGPoint, source: String, confidence: Double, fitErrorPx: Double?, extrapolatedFrames: Double)? {
-        guard let last = lastBallFrame else { return nil }
-
-        // Collect actual detections only (not gap-filled synthetic points). The
-        // lookback scales with capture fps so slow-mo gets enough real time.
-        let maxLookback = min(max(18, Int(round(Double(max(1, fps)) * 0.18))), 48)
-        let maxSamples = 10
-        var actualDetections: [(frameIdx: Int, x: Double, y: Double, area: Double)] = []
-        let searchStart = max(0, last - maxLookback)
-        for i in stride(from: last, through: searchStart, by: -1) {
-            let fi = frameInfos[i]
-            if fi.ballInFrame && !fi.ballLostTracking {
-                actualDetections.insert((i, Double(fi.ballCenter.x), Double(fi.ballCenter.y), fi.ballArea), at: 0)
-            }
-            if actualDetections.count >= maxSamples { break }
-        }
-
-        guard actualDetections.count >= 2 else {
-            return (frameInfos[last].ballCenter, "last_detection", 0.45, nil, 0)
-        }
-
-        let pLast = actualDetections[actualDetections.count - 1]
-        let curX = pLast.x
-        let curY = pLast.y
-
-        var vxs: [Double] = []
-        var vys: [Double] = []
-        for i in 1..<actualDetections.count {
-            let a = actualDetections[i - 1]
-            let b = actualDetections[i]
-            let df = Double(max(1, b.frameIdx - a.frameIdx))
-            vxs.append((b.x - a.x) / df)
-            vys.append((b.y - a.y) / df)
-        }
-        let vx = median(vxs)
-        let vyLinear = median(vys)
-
-        let ts = actualDetections.map { Double($0.frameIdx - pLast.frameIdx) }
-        let xs = actualDetections.map { $0.x }
-        let ys = actualDetections.map { $0.y }
-        let medianArea = median(actualDetections.map { max($0.area, 1.0) })
-        let weights = actualDetections.enumerated().map { idx, det -> Double in
-            let recency = Double(idx + 1) / Double(actualDetections.count)
-            let areaWeight = medianArea > 1 ? clamp(sqrt(max(det.area, 1.0) / medianArea), min: 0.75, max: 1.25) : 1.0
-            return (0.45 + 0.55 * recency) * areaWeight
-        }
-
-        let xFit = actualDetections.count >= 4 ? weightedQuadraticFit(ts: ts, values: xs, weights: weights) : nil
-        let yFit = actualDetections.count >= 4 ? weightedQuadraticFit(ts: ts, values: ys, weights: weights) : nil
-
-        let diag = Double(displayWidth * displayWidth + displayHeight * displayHeight).squareRoot()
-        let fitErrorPx = hypot(xFit?.rmse ?? 0, yFit?.rmse ?? 0)
-        let fitQuality = clamp(1.0 - fitErrorPx / max(12.0, diag * 0.018), min: 0.0, max: 1.0)
-
-        let useXFit = xFit != nil && (xFit!.rmse <= max(10.0, Double(displayWidth) * 0.018))
-        let useYFit = yFit != nil
-            && yFit!.b > 0.25
-            && yFit!.a >= -0.08
-            && yFit!.rmse <= max(12.0, Double(displayHeight) * 0.018)
-
-        func extrapolated(_ tFrames: Double) -> CGPoint {
-            let x = useXFit ? evaluateQuadratic(xFit!, tFrames) : curX + vx * tFrames
-            let y = useYFit ? evaluateQuadratic(yFit!, tFrames) : curY + vyLinear * tFrames
-            return CGPoint(
-                x: clamp(x, min: 0.0, max: Double(displayWidth)),
-                y: clamp(y, min: 0.0, max: Double(displayHeight))
-            )
-        }
-
-        func confidence(for tFrames: Double, source: String) -> Double {
-            let sampleScore = clamp(Double(actualDetections.count - 2) / 6.0, min: 0.25, max: 1.0)
-            let horizonScore = clamp(1.0 - tFrames / max(1.0, Double(max(1, fps)) * 0.35), min: 0.20, max: 1.0)
-            let sourceBoost = source == "last_detection" ? 0.06 : (source == "extrapolated_audio" ? 0.10 : 0.0)
-            return clamp(0.28 + 0.34 * fitQuality + 0.22 * sampleScore + 0.10 * horizonScore + sourceBoost, min: 0.25, max: 0.95)
-        }
-
-        let maxFrames = Double(max(1, fps)) * 0.5
-
-        if let cf = catchFrame, cf >= pLast.frameIdx {
-            let t = min(Double(cf - pLast.frameIdx), maxFrames)
-            if t <= 0 {
-                return (CGPoint(x: curX, y: curY), "last_detection", confidence(for: 0, source: "last_detection"), fitErrorPx, 0)
-            }
-            return (extrapolated(t), "extrapolated_audio", confidence(for: t, source: "extrapolated_audio"), fitErrorPx, t)
-        }
-
-        let zoneYMin = plateZone["y_min"] ?? STRIKE_ZONE_Y_MIN
-        let plateBandLo = zoneYMin * Double(displayHeight)
-
-        if curY >= plateBandLo {
-            return (CGPoint(x: curX, y: curY), "last_detection", confidence(for: 0, source: "last_detection"), fitErrorPx, 0)
-        }
-
-        let vyAtLast = useYFit ? yFit!.b : vyLinear
-        let yAccel = useYFit ? yFit!.a : 0.0
-        guard vyAtLast > 0.5 else {
-            return (CGPoint(x: curX, y: curY), "last_detection", confidence(for: 0, source: "last_detection"), fitErrorPx, 0)
-        }
-
-        let drop = plateBandLo - curY
-        let tCross: Double
-        if yAccel > 1e-9 {
-            tCross = (-vyAtLast + sqrt(vyAtLast * vyAtLast + 4 * yAccel * drop)) / (2 * yAccel)
-        } else {
-            tCross = drop / vyAtLast
-        }
-        guard tCross > 0, tCross <= maxFrames else {
-            return (CGPoint(x: curX, y: curY), "last_detection", confidence(for: 0, source: "last_detection"), fitErrorPx, 0)
-        }
-        return (extrapolated(tCross), "extrapolated_band", confidence(for: tCross, source: "extrapolated_band"), fitErrorPx, tCross)
     }
 
     // MARK: - Catcher Detection (catch-point cross-check + strike-zone anchor)
@@ -2515,23 +2198,4 @@ final class SpeedgunPipeline {
         }
         return nil
     }
-}
-
-private let PLATE_ZONE_CENTER_M = 0.9
-
-/// Map normalised image coordinates to approximate lateral / height metres at the plate plane.
-private func worldCoordsFromNorm(
-    xNorm: Double,
-    yNorm: Double,
-    zone: [String: Double],
-    zoneWidthM: Double,
-    zoneHeightM: Double
-) -> (x: Double, y: Double) {
-    let zoneCenterX = ((zone["x_min"] ?? STRIKE_ZONE_X_MIN) + (zone["x_max"] ?? STRIKE_ZONE_X_MAX)) / 2.0
-    let zoneCenterY = ((zone["y_min"] ?? STRIKE_ZONE_Y_MIN) + (zone["y_max"] ?? STRIKE_ZONE_Y_MAX)) / 2.0
-    let zoneNormW = max(0.05, (zone["x_max"] ?? STRIKE_ZONE_X_MAX) - (zone["x_min"] ?? STRIKE_ZONE_X_MIN))
-    let zoneNormH = max(0.05, (zone["y_max"] ?? STRIKE_ZONE_Y_MAX) - (zone["y_min"] ?? STRIKE_ZONE_Y_MIN))
-    let lateral = ((xNorm - zoneCenterX) / zoneNormW) * zoneWidthM
-    let height = PLATE_ZONE_CENTER_M + ((zoneCenterY - yNorm) / zoneNormH) * zoneHeightM
-    return (lateral, height)
 }

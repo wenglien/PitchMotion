@@ -6,13 +6,44 @@ interface ProgressEvent {
   message: string;
 }
 
-interface AnalysisOptions {
+type Vector3 = [number, number, number];
+type CameraMatrix3x3 = [Vector3, Vector3, Vector3];
+
+interface ABSCalibration2D {
+  mode: '2d';
+  zone:
+    | { left: number; right: number; top: number; bottom: number }
+    | {
+        top_left: [number, number];
+        top_right: [number, number];
+        bottom_right: [number, number];
+        bottom_left: [number, number];
+      };
+  depth_offset?: { x: number; y: number };
+}
+
+interface ABSCalibration3D {
+  mode: '3d';
+  zone: { center: Vector3; width: number; height: number; depth: number };
+  camera: {
+    matrix: CameraMatrix3x3;
+    rvec: Vector3;
+    tvec: Vector3;
+    dist_coeffs?: number[];
+  };
+}
+
+export type ABSCalibration = ABSCalibration2D | ABSCalibration3D;
+
+export interface AnalysisOptions {
   moundDistance?: number;
   strideCorrectionM?: number;
   confThreshold?: number;
   pitcherHeightM?: number;
   batterHeightM?: number;
   strikeZone?: { xMin: number; xMax: number; yMin: number; yMax: number } | null;
+  absCalibration?: ABSCalibration | null;
+  absCalibrationJson?: string | null;
 }
 
 export interface VideoMetadata {
