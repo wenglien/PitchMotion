@@ -96,7 +96,7 @@ let KALMAN_ROI_SIZE: Int = 160
 let KALMAN_ROI_MIN_CONF: Double = 0.03
 
 // Overlay
-let DEFAULT_OUTPUT_SCALE: Double = 0.5
+let DEFAULT_OUTPUT_SCALE: Double = 0.75
 
 // Synthetic trajectory completion for the analysis overlay. YOLO can miss the
 // ball through motion blur or near the glove, so the overlay fills short visual

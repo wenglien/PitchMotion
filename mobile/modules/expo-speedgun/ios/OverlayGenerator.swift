@@ -8,8 +8,36 @@ import UIKit
 final class OverlayGenerator {
     let outputScale: Double
 
-    init(outputScale: Double = 0.5) {
+    init(outputScale: Double = DEFAULT_OUTPUT_SCALE) {
         self.outputScale = outputScale
+    }
+
+    private func adaptiveOutputSize(sourceWidth: Int, sourceHeight: Int) -> (width: Int, height: Int) {
+        let srcW = max(2, sourceWidth)
+        let srcH = max(2, sourceHeight)
+        let shortSide = Double(min(srcW, srcH))
+        let longSide = Double(max(srcW, srcH))
+
+        // Keep 4K exports practical on-device, but avoid turning 1080p clips into
+        // soft 540p overlays. Portrait 4K usually lands at 1080x1920; 1080p lands
+        // near 810x1440; 720p stays native.
+        let minShortSide = 720.0
+        let maxLongSide = 1920.0
+        let floorScale = minShortSide / shortSide
+        let ceilingScale = maxLongSide / longSide
+        let chosenScale = clamp(max(outputScale, floorScale), min: 0.25, max: min(1.0, ceilingScale))
+
+        func even(_ value: Double) -> Int {
+            max(2, Int(round(value / 2.0) * 2))
+        }
+        return (even(Double(srcW) * chosenScale), even(Double(srcH) * chosenScale))
+    }
+
+    private func overlayBitrate(width: Int, height: Int) -> Int {
+        let pixels = Double(max(1, width * height))
+        let bitsPerPixel = pixels >= 1_800_000 ? 5.0 : 6.0
+        let target = Int(pixels * bitsPerPixel)
+        return clamp(target, min: 5_000_000, max: 12_000_000)
     }
 
     func generate(
@@ -18,6 +46,7 @@ final class OverlayGenerator {
         speedInfo: SpeedInfo?,
         outputURL: URL,
         interpFactor: Int = 2,
+        absCalibration: ABSCalibration? = nil,
         progressCallback: ((Double, String) -> Void)? = nil
     ) throws {
         let asset = AVAsset(url: sourceURL)
@@ -30,8 +59,10 @@ final class OverlayGenerator {
         let transformedSize = naturalSize.applying(transform)
         let srcWidth = Int(abs(transformedSize.width))
         let srcHeight = Int(abs(transformedSize.height))
-        let outWidth = Int(Double(srcWidth) * outputScale)
-        let outHeight = Int(Double(srcHeight) * outputScale)
+        let outputSize = adaptiveOutputSize(sourceWidth: srcWidth, sourceHeight: srcHeight)
+        let outWidth = outputSize.width
+        let outHeight = outputSize.height
+        let actualOutputScale = Double(outWidth) / Double(max(1, srcWidth))
 
         // --- Video reader ---
         let videoReader = try AVAssetReader(asset: asset)
@@ -76,14 +107,19 @@ final class OverlayGenerator {
 
         try? FileManager.default.removeItem(at: outputURL)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        let expectedFPS = max(24, min(120, Int(round(videoTrack.nominalFrameRate))))
+        let targetBitrate = overlayBitrate(width: outWidth, height: outHeight)
 
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: outWidth,
             AVVideoHeightKey: outHeight,
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: outWidth * outHeight * 4,
+                AVVideoAverageBitRateKey: targetBitrate,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                AVVideoExpectedSourceFrameRateKey: expectedFPS,
+                AVVideoMaxKeyFrameIntervalKey: max(30, expectedFPS * 2),
+                AVVideoAllowFrameReorderingKey: false,
             ],
         ]
         let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
@@ -108,7 +144,7 @@ final class OverlayGenerator {
 
         let smoothedTrajectory = buildSmoothedTrajectory(
             frameInfos: frameInfos,
-            scale: outputScale,
+            scale: actualOutputScale,
             outWidth: outWidth,
             interpFactor: max(1, interpFactor)
         )
@@ -134,6 +170,8 @@ final class OverlayGenerator {
                 "src_height": srcHeight,
                 "out_width": outWidth,
                 "out_height": outHeight,
+                "output_scale": actualOutputScale,
+                "bitrate": targetBitrate,
                 "total_frames": totalFrames,
                 "audio_skipped": true,
             ]
@@ -167,8 +205,10 @@ final class OverlayGenerator {
                     outHeight: outHeight,
                     srcWidth: srcWidth,
                     srcHeight: srcHeight,
+                    outputScale: actualOutputScale,
                     totalFrames: totalFrames,
                     interpFactor: max(1, interpFactor),
+                    absCalibration: absCalibration,
                     colorSpace: colorSpace
                 )
 
@@ -312,8 +352,10 @@ final class OverlayGenerator {
         outHeight: Int,
         srcWidth: Int,
         srcHeight: Int,
+        outputScale: Double,
         totalFrames: Int,
         interpFactor: Int,
+        absCalibration: ABSCalibration?,
         colorSpace: CGColorSpace
     ) {
         CVPixelBufferLockBaseAddress(source, .readOnly)
@@ -406,7 +448,17 @@ final class OverlayGenerator {
             if frameIndex > startFrame {
                 let fadeFrames = max(1, min(30, realTotal - startFrame))
                 let alpha = min(1.0, Double(frameIndex - startFrame) / Double(fadeFrames))
-                drawFullFrameStrikeZone(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: 0.45 + 0.35 * alpha, currentFrame: frameIndex)
+                drawFullFrameStrikeZone(
+                    ctx: ctx,
+                    speedInfo: si,
+                    outWidth: outWidth,
+                    outHeight: outHeight,
+                    srcWidth: srcWidth,
+                    srcHeight: srcHeight,
+                    alpha: 0.55 + 0.35 * alpha,
+                    currentFrame: frameIndex,
+                    absCalibration: absCalibration
+                )
                 drawSpeedText(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: alpha)
                 drawStrikeZone(ctx: ctx, speedInfo: si, outWidth: outWidth, outHeight: outHeight, alpha: alpha)
             }
@@ -938,8 +990,10 @@ final class OverlayGenerator {
         let visible = smoothedTrajectory.filter { $0.frameIndex <= currentFrame }
         guard visible.count >= 2 else { return }
 
-        // Keep last 25 points for the visible trail window
-        let trail = visible.count > 25 ? Array(visible.suffix(25)) : visible
+        // Keep a short moving window: long enough to read the pitch path, short
+        // enough to keep the video from becoming a static spaghetti trace.
+        let trailWindow = max(28, min(42, outWidth / 28))
+        let trail = visible.count > trailWindow ? Array(visible.suffix(trailWindow)) : visible
         let n = trail.count
         let sc = max(0.5, Double(outWidth) / 1080.0)
 
@@ -1085,8 +1139,8 @@ final class OverlayGenerator {
             (rHip, rKnee), (rKnee, rAnkle),
         ]
 
-        let lineWidth = CGFloat(max(1.5, 2.5 * scale))
-        let dotRadius = CGFloat(max(2.0, 3.5 * scale))
+        let lineWidth = CGFloat(max(1.0, 2.0 * scale))
+        let dotRadius = CGFloat(max(1.6, 2.8 * scale))
 
         // Draw bones
         ctx.setLineWidth(lineWidth)
@@ -1094,11 +1148,11 @@ final class OverlayGenerator {
         for (a, b) in bones {
             guard let a = a, let b = b else { continue }
             // Black outline for contrast
-            ctx.setStrokeColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.4))
-            ctx.setLineWidth(lineWidth + CGFloat(1.5 * scale))
+            ctx.setStrokeColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.28))
+            ctx.setLineWidth(lineWidth + CGFloat(1.2 * scale))
             ctx.move(to: a); ctx.addLine(to: b); ctx.strokePath()
             // Cyan bone line
-            ctx.setStrokeColor(CGColor(red: 0.0, green: 0.9, blue: 0.9, alpha: 0.85))
+            ctx.setStrokeColor(CGColor(red: 0.0, green: 0.86, blue: 0.92, alpha: 0.48))
             ctx.setLineWidth(lineWidth)
             ctx.move(to: a); ctx.addLine(to: b); ctx.strokePath()
         }
@@ -1108,7 +1162,7 @@ final class OverlayGenerator {
         for joint in joints {
             guard let j = joint else { continue }
             let r = dotRadius
-            ctx.setFillColor(CGColor(red: 1.0, green: 1.0, blue: 0.2, alpha: 0.9))
+            ctx.setFillColor(CGColor(red: 1.0, green: 1.0, blue: 0.35, alpha: 0.58))
             ctx.fillEllipse(in: CGRect(x: j.x - r, y: j.y - r, width: r*2, height: r*2))
         }
     }
@@ -1124,40 +1178,135 @@ final class OverlayGenerator {
     ) {
         guard let speedKmh = speedInfo.releaseSpeedKmh ?? speedInfo.initialSpeedKmh else { return }
         let mph = Int(round(speedKmh * KMH_TO_MPH))
-        let text = "\(mph) mph"
-
-        let fontSize = CGFloat(outWidth) * 0.06
-        let font = UIFont.boldSystemFont(ofSize: fontSize)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: UIColor.white.withAlphaComponent(CGFloat(alpha)),
-            .strokeColor: UIColor.black.withAlphaComponent(CGFloat(alpha * 0.8)),
-            .strokeWidth: -3.0,
-        ]
-
-        let attrStr = NSAttributedString(string: text, attributes: attrs)
-        let textSize = attrStr.size()
-        let x = CGFloat(outWidth) * 0.05
-        // ctx is already y-flipped (y-up). UIKit draws y-down from the given origin,
-        // so place text at outHeight * 0.92 to appear near the top-left in the video.
-        let y = CGFloat(outHeight) * 0.92
+        let kmh = Int(round(speedKmh))
+        let a = CGFloat(clamp(alpha, min: 0.0, max: 1.0))
+        let sc = max(0.62, Double(outWidth) / 1080.0)
+        let margin = CGFloat(18.0 * sc)
+        let cardW = min(CGFloat(outWidth) - margin * 2, max(CGFloat(260.0 * sc), CGFloat(outWidth) * 0.34))
+        let cardH = CGFloat(118.0 * sc)
+        let card = CGRect(
+            x: margin,
+            y: CGFloat(outHeight) - cardH - margin,
+            width: cardW,
+            height: cardH
+        )
 
         UIGraphicsPushContext(ctx)
-        attrStr.draw(at: CGPoint(x: x, y: y))
+        defer { UIGraphicsPopContext() }
 
-        // Pitch type below speed text (further down in y-down = smaller y in y-up ctx)
+        let path = UIBezierPath(roundedRect: card, cornerRadius: CGFloat(10.0 * sc))
+        UIColor(white: 0.02, alpha: 0.66 * a).setFill()
+        path.fill()
+        UIColor(white: 1.0, alpha: 0.16 * a).setStroke()
+        path.lineWidth = CGFloat(1.0 * sc)
+        path.stroke()
+
+        let accent = speedInfo.isStrike == false
+            ? UIColor(red: 1.0, green: 0.35, blue: 0.32, alpha: a)
+            : UIColor(red: 0.18, green: 0.92, blue: 0.52, alpha: a)
+        let accentBar = UIBezierPath(
+            roundedRect: CGRect(x: card.minX, y: card.minY, width: CGFloat(4.0 * sc), height: card.height),
+            cornerRadius: CGFloat(2.0 * sc)
+        )
+        accent.setFill()
+        accentBar.fill()
+
+        let labelFont = UIFont.boldSystemFont(ofSize: CGFloat(11.0 * sc))
+        let speedFont = UIFont.monospacedDigitSystemFont(ofSize: CGFloat(46.0 * sc), weight: .heavy)
+        let unitFont = UIFont.boldSystemFont(ofSize: CGFloat(16.0 * sc))
+        let chipFont = UIFont.boldSystemFont(ofSize: CGFloat(13.0 * sc))
+        let detailFont = UIFont.monospacedDigitSystemFont(ofSize: CGFloat(12.0 * sc), weight: .semibold)
+
+        let x = card.minX + CGFloat(16.0 * sc)
+        let top = card.minY + CGFloat(12.0 * sc)
+        drawText("PITCH SPEED", at: CGPoint(x: x, y: top), font: labelFont, color: UIColor(white: 1, alpha: 0.58 * a))
+
+        let speedText = "\(mph)"
+        drawText(speedText, at: CGPoint(x: x, y: top + CGFloat(16.0 * sc)), font: speedFont, color: .white)
+        let speedSize = NSAttributedString(string: speedText, attributes: [.font: speedFont]).size()
+        drawText("MPH", at: CGPoint(x: x + speedSize.width + CGFloat(6.0 * sc), y: top + CGFloat(43.0 * sc)), font: unitFont, color: UIColor(white: 1, alpha: 0.82 * a))
+        drawText("\(kmh) km/h", at: CGPoint(x: x, y: top + CGFloat(72.0 * sc)), font: detailFont, color: UIColor(white: 1, alpha: 0.66 * a))
+
+        var chipX = card.maxX - CGFloat(16.0 * sc)
+        if let isStrike = speedInfo.isStrike {
+            let verdict = isStrike ? "STRIKE" : "BALL"
+            chipX = drawRightAlignedChip(
+                verdict,
+                rightX: chipX,
+                y: top + CGFloat(12.0 * sc),
+                font: chipFont,
+                color: isStrike
+                    ? UIColor(red: 0.18, green: 0.92, blue: 0.52, alpha: a)
+                    : UIColor(red: 1.0, green: 0.35, blue: 0.32, alpha: a),
+                alpha: a
+            ) - CGFloat(8.0 * sc)
+        }
         if let pitchType = speedInfo.pitchType, pitchType != "Unknown" {
-            let typeAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.boldSystemFont(ofSize: fontSize * 0.5),
-                .foregroundColor: UIColor.yellow.withAlphaComponent(CGFloat(alpha)),
-                .strokeColor: UIColor.black.withAlphaComponent(CGFloat(alpha * 0.8)),
-                .strokeWidth: -2.0,
-            ]
-            let typeStr = NSAttributedString(string: pitchType, attributes: typeAttrs)
-            typeStr.draw(at: CGPoint(x: x, y: y - textSize.height - 4))
+            _ = drawRightAlignedChip(
+                pitchType.uppercased(),
+                rightX: chipX,
+                y: top + CGFloat(12.0 * sc),
+                font: chipFont,
+                color: UIColor(red: 1.0, green: 0.84, blue: 0.28, alpha: a),
+                alpha: a
+            )
         }
 
-        UIGraphicsPopContext()
+        if let hBreak = speedInfo.horizontalBreakCm ?? speedInfo.totalBreakCm {
+            let ivb = speedInfo.inducedVerticalBreakCm
+            let breakText: String
+            if let ivb {
+                breakText = String(format: "HB %+0.0f cm   IVB %+0.0f cm", hBreak, ivb)
+            } else {
+                breakText = String(format: "BREAK %0.0f cm", abs(hBreak))
+            }
+            drawText(
+                breakText,
+                at: CGPoint(x: x, y: card.maxY - CGFloat(22.0 * sc)),
+                font: detailFont,
+                color: UIColor(white: 1.0, alpha: 0.72 * a)
+            )
+        }
+    }
+
+    private func drawText(_ text: String, at point: CGPoint, font: UIFont, color: UIColor) {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+        ]
+        NSAttributedString(string: text, attributes: attrs).draw(at: point)
+    }
+
+    private func drawRightAlignedChip(
+        _ text: String,
+        rightX: CGFloat,
+        y: CGFloat,
+        font: UIFont,
+        color: UIColor,
+        alpha: CGFloat
+    ) -> CGFloat {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+        ]
+        let attr = NSAttributedString(string: text, attributes: attrs)
+        let size = attr.size()
+        let padX = font.pointSize * 0.62
+        let padY = font.pointSize * 0.32
+        let rect = CGRect(
+            x: rightX - size.width - padX * 2,
+            y: y - padY,
+            width: size.width + padX * 2,
+            height: size.height + padY * 2
+        )
+        UIColor(white: 1, alpha: 0.09 * alpha).setFill()
+        UIBezierPath(roundedRect: rect, cornerRadius: font.pointSize * 0.55).fill()
+        color.withAlphaComponent(0.35 * alpha).setStroke()
+        let border = UIBezierPath(roundedRect: rect, cornerRadius: font.pointSize * 0.55)
+        border.lineWidth = 1
+        border.stroke()
+        attr.draw(at: CGPoint(x: rect.minX + padX, y: rect.minY + padY))
+        return rect.minX
     }
 
     // MARK: - Strike Zone
@@ -1170,8 +1319,11 @@ final class OverlayGenerator {
         speedInfo: SpeedInfo,
         outWidth: Int,
         outHeight: Int,
+        srcWidth: Int,
+        srcHeight: Int,
         alpha: Double,
-        currentFrame: Int
+        currentFrame: Int,
+        absCalibration: ABSCalibration?
     ) {
         let zone = speedInfo.plateZone ?? DEFAULT_STRIKE_ZONE
         let zoneXMin = zone["x_min"] ?? STRIKE_ZONE_X_MIN
@@ -1205,85 +1357,22 @@ final class OverlayGenerator {
             )
         }
 
-        // 1) Glass fill: subtle vertical gradient instead of a flat wash
-        if let gradient = CGGradient(
-            colorsSpace: CGColorSpaceCreateDeviceRGB(),
-            colors: [
-                CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.16 * alpha),
-                CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.04 * alpha),
-            ] as CFArray,
-            locations: [0.0, 1.0]
-        ) {
-            ctx.saveGState()
-            ctx.clip(to: rect)
-            ctx.drawLinearGradient(
-                gradient,
-                start: CGPoint(x: rect.midX, y: rect.minY),
-                end: CGPoint(x: rect.midX, y: rect.maxY),
-                options: []
-            )
-            ctx.restoreGState()
-        }
+        // Draw the ABS strike zone as a single floating AR plane. If no
+        // external ABS calibration is supplied, use the pipeline-resolved
+        // plateZone so offline iOS analysis still gets the same overlay style.
+        let renderCalibration = absCalibration ?? ABSCalibration.fromPlateZone(zone)
+        ABSStrikeZoneRenderer().render(
+            ctx: ctx,
+            calibration: renderCalibration,
+            sourceWidth: srcWidth,
+            sourceHeight: srcHeight,
+            outputWidth: outWidth,
+            outputHeight: outHeight,
+            alpha: alpha,
+            showLabel: true
+        )
 
-        // 2) Hit-cell highlight: tint the 3×3 cell the pitch crossed (strike only)
-        if let impact = impact, impact.isStrike {
-            let col = min(2, max(0, Int((impact.pt.x - rect.minX) / (rect.width / 3))))
-            let row = min(2, max(0, Int((impact.pt.y - rect.minY) / (rect.height / 3))))
-            let cell = CGRect(
-                x: rect.minX + rect.width / 3 * CGFloat(col),
-                y: rect.minY + rect.height / 3 * CGFloat(row),
-                width: rect.width / 3,
-                height: rect.height / 3
-            )
-            ctx.setFillColor(CGColor(red: 0.20, green: 0.90, blue: 0.45, alpha: 0.18 * alpha))
-            ctx.fill(cell.insetBy(dx: CGFloat(1.5 * sc), dy: CGFloat(1.5 * sc)))
-        }
-
-        // 3) 3×3 grid — thin solid hairlines (calmer than dashed)
-        ctx.setLineCap(.round)
-        ctx.setStrokeColor(CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.20 * alpha))
-        ctx.setLineWidth(CGFloat(max(0.8, 1.0 * sc)))
-        for t in [CGFloat(1.0 / 3.0), CGFloat(2.0 / 3.0)] {
-            let x = rect.minX + rect.width * t
-            ctx.move(to: CGPoint(x: x, y: rect.minY))
-            ctx.addLine(to: CGPoint(x: x, y: rect.maxY))
-            let y = rect.minY + rect.height * t
-            ctx.move(to: CGPoint(x: rect.minX, y: y))
-            ctx.addLine(to: CGPoint(x: rect.maxX, y: y))
-        }
-        ctx.strokePath()
-
-        // 4) Border: soft outer glow → dark contrast line → main yellow stroke
-        ctx.setStrokeColor(CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.18 * alpha))
-        ctx.setLineWidth(CGFloat(max(7.0, 9.0 * sc)))
-        ctx.stroke(rect)
-
-        ctx.setStrokeColor(CGColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.40 * alpha))
-        ctx.setLineWidth(CGFloat(max(3.5, 4.5 * sc)))
-        ctx.stroke(rect)
-
-        ctx.setStrokeColor(CGColor(red: 1.0, green: 0.84, blue: 0.29, alpha: 0.95 * alpha))
-        ctx.setLineWidth(CGFloat(max(1.8, 2.4 * sc)))
-        ctx.stroke(rect)
-
-        // 5) Corner brackets — broadcast K-zone accent
-        let bracketLen = min(rect.width, rect.height) * 0.16
-        ctx.setStrokeColor(CGColor(red: 1.0, green: 0.92, blue: 0.55, alpha: alpha))
-        ctx.setLineWidth(CGFloat(max(3.5, 5.0 * sc)))
-        let cornerDirs: [(CGPoint, CGFloat, CGFloat)] = [
-            (CGPoint(x: rect.minX, y: rect.minY), 1, 1),
-            (CGPoint(x: rect.maxX, y: rect.minY), -1, 1),
-            (CGPoint(x: rect.minX, y: rect.maxY), 1, -1),
-            (CGPoint(x: rect.maxX, y: rect.maxY), -1, -1),
-        ]
-        for (corner, sx, sy) in cornerDirs {
-            ctx.move(to: CGPoint(x: corner.x + bracketLen * sx, y: corner.y))
-            ctx.addLine(to: corner)
-            ctx.addLine(to: CGPoint(x: corner.x, y: corner.y + bracketLen * sy))
-        }
-        ctx.strokePath()
-
-        // 6) Impact marker with a breathing pulse ring
+        // Impact marker with a breathing pulse ring
         if let impact = impact {
             let pt = impact.pt
             guard pt.x.isFinite, pt.y.isFinite,

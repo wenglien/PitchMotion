@@ -358,6 +358,7 @@ enum SpeedgunError: LocalizedError {
     case noBallDetected
     case insufficientTrajectory(Int)
     case overlayGenerationFailed(String)
+    case invalidConfiguration(String)
 
     var errorDescription: String? {
         switch self {
@@ -369,6 +370,7 @@ enum SpeedgunError: LocalizedError {
         case .noBallDetected: return "No ball detected in video"
         case .insufficientTrajectory(let n): return "Insufficient trajectory points: \(n)"
         case .overlayGenerationFailed(let msg): return "Overlay generation failed: \(msg)"
+        case .invalidConfiguration(let msg): return "Invalid configuration: \(msg)"
         }
     }
 }

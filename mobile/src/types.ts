@@ -187,6 +187,7 @@ export interface Settings {
   confThreshold: number;
   pitcherHeightM?: number;         // 保留舊版設定相容性；手動距離校正不使用此值
   strikeZone?: StrikeZoneCalibration | null;
+  speedUnit: 'mph' | 'kmh';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -195,4 +196,5 @@ export const DEFAULT_SETTINGS: Settings = {
   confThreshold: 0.03,
   pitcherHeightM: undefined,
   strikeZone: null,
+  speedUnit: 'mph',
 };

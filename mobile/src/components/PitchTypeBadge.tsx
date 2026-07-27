@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { pitchColor } from '../utils/conversions';
+import { pitchColor, pitchTypeLabel } from '../utils/conversions';
 
 interface Props {
   type: string;
@@ -11,7 +11,7 @@ export default function PitchTypeBadge({ type, confidence }: Props) {
   return (
     <View style={[styles.badge, { backgroundColor: pitchColor(type) }]}>
       <Text style={styles.text}>
-        {type}
+        {pitchTypeLabel(type)}
         {confidence != null ? `  ${confidence}%` : ''}
       </Text>
     </View>

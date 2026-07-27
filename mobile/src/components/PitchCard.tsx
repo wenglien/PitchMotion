@@ -2,8 +2,9 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Colors, Radius, Shadows, Spacing } from '../theme';
 import { PitchResult } from '../types';
-import { kmhToMph, pitchColor, formatTime, formatDate, shortMethod } from '../utils/conversions';
+import { formatSpeed, pitchColor, pitchTypeLabel, formatTime, formatDate, shortMethod, speedUnitLabel } from '../utils/conversions';
 import { generateCoachingComment } from '../utils/coaching';
+import { useSettings } from '../context/SettingsContext';
 
 interface Props {
   pitch: PitchResult;
@@ -12,14 +13,16 @@ interface Props {
 }
 
 export default function PitchCard({ pitch, index, onViewTrajectory }: Props) {
+  const { settings } = useSettings();
+  const unitLabel = speedUnitLabel(settings.speedUnit);
   const si = pitch?.speed_info || {};
 
-  const vMph = si.release_speed_kmh
-    ? kmhToMph(si.release_speed_kmh)
+  const speed = si.release_speed_kmh
+    ? formatSpeed(si.release_speed_kmh, settings.speedUnit)
     : si.initial_speed_kmh
-      ? kmhToMph(si.initial_speed_kmh)
+      ? formatSpeed(si.initial_speed_kmh, settings.speedUnit)
       : null;
-  const maxMph = si.max_speed_kmh ? kmhToMph(si.max_speed_kmh) : null;
+  const maxSpeed = si.max_speed_kmh ? formatSpeed(si.max_speed_kmh, settings.speedUnit) : null;
   const distM = si.total_distance_m ?? si.effective_distance_m ?? null;
   const flightS = si.flight_time_s ?? null;
   const spinRpm = si.spin_rpm ?? null;
@@ -35,12 +38,12 @@ export default function PitchCard({ pitch, index, onViewTrajectory }: Props) {
   const comment = generateCoachingComment(si);
 
   const cells = [
-    { label: '球速', value: vMph ?? '-', unit: 'mph' },
-    { label: '最高', value: maxMph ?? '-', unit: 'mph' },
+    { label: '球速', value: speed ?? '-', unit: unitLabel },
+    { label: '最高', value: maxSpeed ?? '-', unit: unitLabel },
     { label: '距離', value: distM != null ? distM.toFixed(1) : '-', unit: 'm' },
     { label: '飛行', value: flightS != null ? flightS.toFixed(3) : '-', unit: 's' },
     { label: '橫移', value: breakH != null ? breakH.toFixed(1) : '-', unit: 'cm' },
-    { label: 'IVB', value: breakV != null ? breakV.toFixed(1) : '-', unit: 'cm' },
+    { label: '垂直位移', value: breakV != null ? breakV.toFixed(1) : '-', unit: 'cm' },
     { label: '總位移', value: breakTotal != null ? breakTotal.toFixed(1) : '-', unit: 'cm' },
     { label: '轉速', value: spinRpm != null ? Math.round(spinRpm).toLocaleString() : '-', unit: 'rpm' },
     { label: '信心', value: confPct != null ? `${confPct}%` : '-', unit: '' },
@@ -51,7 +54,7 @@ export default function PitchCard({ pitch, index, onViewTrajectory }: Props) {
   const a11yLabel = [
     `第 ${index} 球`,
     pitchType ?? '',
-    vMph !== null ? `球速 ${vMph} mph` : '',
+    speed !== null ? `球速 ${speed} ${unitLabel}` : '',
     spinRpm !== null ? `轉速 ${Math.round(spinRpm)} rpm` : '',
     hasWarn ? '軌跡品質警告' : '',
   ].filter(Boolean).join('，');
@@ -68,7 +71,7 @@ export default function PitchCard({ pitch, index, onViewTrajectory }: Props) {
         </View>
         {pitchType && (
           <View style={[styles.typeBadge, { backgroundColor: pitchColor(pitchType) }]}>
-            <Text style={styles.typeBadgeText}>{pitchType}</Text>
+            <Text style={styles.typeBadgeText}>{pitchTypeLabel(pitchType)}</Text>
           </View>
         )}
       </View>
@@ -97,7 +100,7 @@ export default function PitchCard({ pitch, index, onViewTrajectory }: Props) {
 
       {/* Coaching comment */}
       <View style={styles.comment}>
-        <Text style={styles.commentLabel}>COMMENT</Text>
+        <Text style={styles.commentLabel}>本球建議</Text>
         <Text style={styles.commentBody}>{comment}</Text>
       </View>
       {onViewTrajectory && (

@@ -17,6 +17,18 @@ export const Colors = {
   text: '#0f172a',
   textMuted: '#64748b',
   textInverse: '#f8fafc',
+  onAccent: '#ffffff',
+  accentSoft: '#e0f2fe',
+  accentSubtle: '#f0f9ff',
+  accentBorder: '#bae6fd',
+  successSoft: '#ecfdf5',
+  successBorder: '#a7f3d0',
+  warningSoft: '#fffbeb',
+  warningBorder: '#fde68a',
+  dangerSoft: '#fef2f2',
+  dangerBorder: '#fecaca',
+  chartGrid: '#dbe4ef',
+  chartArea: '#bae6fd',
 };
 
 export const PitchColors: Record<string, string> = {
@@ -73,11 +85,27 @@ export const Layout = {
  * styles that we haven't migrated yet — migrate when you next touch them.
  */
 export const Typography = {
+  pageTitle: {
+    fontSize: 24,
+    fontWeight: '900' as const,
+    color: Colors.text,
+  },
   /** Card / section heading. e.g. "好球帶落點" */
   cardTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700' as const,
     color: '#0f172a',
+  },
+  metricValue: {
+    fontSize: FontSize.xxl,
+    fontWeight: '900' as const,
+    fontVariant: ['tabular-nums'] as const,
+    color: Colors.text,
+  },
+  metricLabel: {
+    fontSize: FontSize.sm,
+    fontWeight: '700' as const,
+    color: Colors.textMuted,
   },
   /** Sub-heading directly under a cardTitle. e.g. "本次練習 5 球" */
   cardSub: {
@@ -112,6 +140,23 @@ export const Typography = {
     fontWeight: '400' as const,
     lineHeight: 18,
     color: '#64748b',
+  },
+};
+
+/** Shared structural styles used by feature screens. */
+export const Surfaces = {
+  card: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+  },
+  inset: {
+    backgroundColor: Colors.surface2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
   },
 };
 

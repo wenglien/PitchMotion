@@ -51,7 +51,7 @@ ENV_EXAMPLE="${ROOT_DIR}/.env.example"
 if [[ ! -f "${ENV_FILE}" ]]; then
   if [[ -f "${ENV_EXAMPLE}" ]]; then
     cp "${ENV_EXAMPLE}" "${ENV_FILE}"
-    echo "已從 .env.example 建立 .env（如需自訂 port 請編輯 .env）"
+    echo "已從 .env.example 建立 .env"
   fi
 else
   echo ".env 已存在，略過建立"
@@ -59,6 +59,5 @@ fi
 
 echo
 echo "OK 完成。你現在可以："
-echo " - 啟動後端：./dev_start.sh"
 echo " - 執行環境健檢：python scripts/doctor.py"
-echo " - 自訂 port：編輯 .env（參考 .env.example）"
+echo " - 調整 Python 研究工具設定：編輯 .env（參考 .env.example）"

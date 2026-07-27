@@ -31,6 +31,7 @@ public final class ExpoSpeedgunModule: Module {
             }
 
             do {
+                let absCalibration = try Self.parseABSCalibration(options)
                 let result = try await pipeline.analyze(
                     videoUri: videoUri,
                     moundDistance: moundDistance,
@@ -38,7 +39,8 @@ public final class ExpoSpeedgunModule: Module {
                     confThreshold: confThreshold,
                     pitcherHeightM: pitcherHeight,
                     batterHeightM: batterHeight,
-                    strikeZone: strikeZone
+                    strikeZone: strikeZone,
+                    absCalibration: absCalibration
                 )
                 return result
             } catch {
@@ -69,6 +71,13 @@ public final class ExpoSpeedgunModule: Module {
                 return ["error": error.localizedDescription]
             }
         }
+    }
+
+    private static func parseABSCalibration(_ options: [String: Any]) throws -> ABSCalibration? {
+        if let calibration = try ABSCalibration.parse(options["absCalibration"]) {
+            return calibration
+        }
+        return try ABSCalibration.parse(options["absCalibrationJson"])
     }
 
     private static func resolveVideoURL(_ videoUri: String) throws -> URL {

@@ -1,8 +1,8 @@
 # SpeedGun — iOS 棒球投球分析
 
-SpeedGun 是以 **iOS 離線分析**為主的棒球投球分析 App。影片會在裝置端透過 CoreML / Swift 管線完成球體偵測、姿勢估距、球速計算、球種辨識、好球帶落點、位移量（Break）與分析品質評估。
+SpeedGun 是一款 **iOS 離線棒球投球分析 App**。影片會在裝置端透過 CoreML / Swift 管線完成球體偵測、姿勢輔助定位、球速計算、球種辨識、好球帶落點、位移量（Break）與分析品質評估。
 
-> 目前不再維護桌面版或 Web frontend。`frontend/` 已移除；Python 後端保留作為開發、研究與模型驗證輔助。
+> 專案目前只建置 iOS App，不再維護 Android、桌面版、Web frontend 或伺服器端分析流程。影片與分析結果不需要上傳伺服器。
 
 ---
 
@@ -11,11 +11,11 @@ SpeedGun 是以 **iOS 離線分析**為主的棒球投球分析 App。影片會�
 | 功能 | 狀態 | 說明 |
 |------|------|------|
 | 離線 iOS 分析 | 支援 | CoreML YOLO + Pose，全程 on-device |
-| 球速計算 | 支援 | 透過軌跡、飛行時間、距離估算與透視修正計算 |
+| 球速計算 | 支援 | 透過軌跡、飛行時間、手動量測距離與透視修正計算 |
 | 30/60fps 補幀 | 支援 | 低 FPS 影片會自動提高分析密度，目標接近 120fps |
 | 軌跡補點 | 支援 | YOLO 中途漏偵時會補出連續軌跡，避免 overlay 斷線 |
 | 角度容錯 | 支援 | 強化偏斜拍攝時的追蹤選球與 plate/catcher 估計 |
-| MLB ABS 好球帶 | 支援 | 分析前必填打者身高，依 ABS 比例計算好球帶高度 |
+| MLB ABS 好球帶 | 支援 | 依打者身高計算，亦支援外部 2D / 3D 相機校正資料 |
 | 好球帶落點 | 支援 | 2D 平面顯示，軌跡線保留 3D 視覺厚度與光影 |
 | 位移量 Break | 支援 | 顯示水平位移、Induced Vertical Break、可信度與來源 |
 | 分析品質 | 支援 | 結果頁顯示偵測覆蓋率、實測軌跡比例、落點與位移信心 |
@@ -29,7 +29,7 @@ SpeedGun 是以 **iOS 離線分析**為主的棒球投球分析 App。影片會�
 ```text
 speedgun-mobile/
 ├── mobile/                         # 主要 App：Expo React Native iOS
-│   ├── modules/expo-speedgun/      # 原生 Swift 分析模組（Expo Module）
+│   ├── modules/expo-speedgun/      # 原生分析模組（Expo Module）
 │   │   ├── src/ExpoSpeedgun.ts     # JS/TS bridge
 │   │   └── ios/
 │   │       ├── ExpoSpeedgunModule.swift    # analyzeVideoOffline / getVideoMetadata
@@ -41,6 +41,10 @@ speedgun-mobile/
 │   │       ├── BallSpeedCalculator.swift   # 球速計算
 │   │       ├── BallKinematics.swift        # 位移量 / Break
 │   │       ├── PitchClassifier.swift       # 球種辨識
+│   │       ├── PlatePositionEstimator.swift # 本壘板交會點估算
+│   │       ├── StrikeZoneCalibration.swift  # 好球帶座標與世界座標換算
+│   │       ├── ABSStrikeZoneRenderer.swift  # ABS 2D / 3D overlay
+│   │       ├── TrajectoryMath.swift         # 加權軌跡擬合
 │   │       ├── OverlayGenerator.swift      # Overlay 影片輸出
 │   │       └── Types.swift                 # 共用型別與分析常數
 │   ├── src/
@@ -60,12 +64,10 @@ speedgun-mobile/
 │   │   │   └── useLocalHistory.ts          # 本機歷史紀錄
 │   │   └── types.ts                        # TypeScript 型別
 │   └── ios/                                # Xcode workspace / CocoaPods
-├── backend/                        # 可選 FastAPI 後端（開發 / 研究）
 ├── pitch_classifier/               # Python 球種分類研究工具
 ├── src/                            # Python CV / overlay 工具
-├── train_tool/                     # YOLO 訓練與模型資料
 ├── scripts/                        # 開發輔助腳本
-└── dev_start.sh                    # 啟動可選後端
+└── yolov26n/                       # YOLO 訓練資料與研究資產（非 App runtime）
 ```
 
 ---
@@ -83,12 +85,12 @@ speedgun-mobile/
 
 ```bash
 cd mobile
-npm install
+npm ci
 cd ios && pod install && cd ..
 open ios/SpeedGun.xcworkspace
 ```
 
-在 Xcode 內選擇 `SpeedGun` scheme，設定 Signing 後即可 build 到模擬器或實機。
+在 Xcode 內選擇 `SpeedGun` scheme，設定 Signing 後即可 build 到模擬器或實機。日常開發也可以在 `mobile/` 執行 `npm run ios`。
 
 ### 實機 Release Build
 
@@ -127,6 +129,67 @@ xcrun devicectl device install app \
    - 高度：打者身高的 27% 到 53.5%
 5. 開始分析。
 6. 結果頁會顯示球速、球種、好球帶落點、軌跡、Break、overlay 影片與分析品質。
+
+---
+
+## ABS 好球帶校正
+
+一般使用情境只需提供打者身高；App 會依 ABS 比例建立好球帶。若已有外部相機或場地校正資料，原生分析 API 也接受 `absCalibration` 物件或 `absCalibrationJson` 字串。
+
+### 2D 校正
+
+2D 座標可以使用 `0–1` 正規化座標，或直接使用來源影片的像素座標。此校正會同時影響落點分析與 overlay 顯示。
+
+```ts
+import { analyzeVideoOffline, type ABSCalibration } from './modules/expo-speedgun';
+
+const absCalibration: ABSCalibration = {
+  mode: '2d',
+  zone: {
+    left: 0.36,
+    right: 0.64,
+    top: 0.58,
+    bottom: 0.84,
+  },
+  depth_offset: { x: 0.07, y: -0.11 },
+};
+
+const result = await analyzeVideoOffline(videoUri, {
+  moundDistance: 18.44,
+  batterHeightM: 1.8,
+  absCalibration,
+});
+```
+
+也可用 `top_left`、`top_right`、`bottom_right`、`bottom_left` 四個 `[x, y]` 點取代矩形邊界。
+
+### 3D 校正
+
+3D 模式使用相機內參、畸變係數與外參，把好球帶平面投影到 overlay。落點判定仍會使用分析流程解析出的 plate zone。
+
+```ts
+const absCalibration: ABSCalibration = {
+  mode: '3d',
+  zone: {
+    center: [0, 0.9, 18.44],
+    width: 0.4318,
+    height: 0.477,
+    depth: 0.01,
+  },
+  camera: {
+    matrix: [
+      [1580, 0, 960],
+      [0, 1580, 540],
+      [0, 0, 1],
+    ],
+    rvec: [0, 0, 0],
+    tvec: [0, 0, 0],
+    dist_coeffs: [0, 0, 0, 0],
+  },
+};
+```
+
+校正資料若包含非數值、`NaN`、無限值、退化矩形、非正數尺寸或錯誤矩陣大小，原生模組會回傳設定錯誤，不會帶著無效參數繼續分析。
 
 ---
 
@@ -225,36 +288,6 @@ Break Chart 採用 MLB 風格 X/Y 顯示：
 
 ---
 
-## 可選 Python 後端
-
-Python 後端目前主要用於開發、研究、模型驗證與舊流程測試；一般 iOS 離線分析不需要啟動後端。
-
-### 安裝
-
-```bash
-./scripts/bootstrap_dev.sh
-```
-
-### 啟動
-
-```bash
-./dev_start.sh
-```
-
-預設設定在 `.env.example`：
-
-```bash
-BACKEND_PORT=8000
-YOLO_WEIGHTS=train_tool/runs/detect/baseball_yolo26n_v5/weights/best.pt
-```
-
-啟動後：
-
-- API：http://localhost:8000
-- Docs：http://localhost:8000/docs
-
----
-
 ## 常用檢查
 
 ### TypeScript
@@ -263,6 +296,15 @@ YOLO_WEIGHTS=train_tool/runs/detect/baseball_yolo26n_v5/weights/best.pt
 cd mobile
 npx tsc --noEmit
 ```
+
+### Expo 設定
+
+```bash
+cd mobile
+npx expo config --type public
+```
+
+輸出的 `platforms` 應只有 `ios`。
 
 ### iOS Build
 
@@ -279,7 +321,6 @@ xcodebuild \
 ### Shell Script 語法
 
 ```bash
-bash -n dev_start.sh
 bash -n scripts/bootstrap_dev.sh
 ```
 
@@ -307,6 +348,14 @@ bash -n scripts/bootstrap_dev.sh
 
 在 Xcode 的 Signing & Capabilities 修改 bundle identifier，例如改成你 Apple Developer Team 底下唯一的 `com.yourname.speedgun`。
 
+**Q：Build 顯示 `cannot execute tool 'metal' due to missing Metal Toolchain`？**
+
+安裝與目前 Xcode 相符的 Metal Toolchain，再重新 build：
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+```
+
 ---
 
 ## 技術
@@ -317,7 +366,6 @@ bash -n scripts/bootstrap_dev.sh
 - AVFoundation
 - Metal
 - react-native-svg
-- FastAPI / Python（可選開發工具）
 - YOLO / SORT
 
 ---
