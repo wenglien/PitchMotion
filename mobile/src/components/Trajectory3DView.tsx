@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { useIsFocused } from '@react-navigation/native';
-import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, G, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import { Colors, Radius, Spacing } from '../theme';
 import { useTrajectoryCamera } from '../hooks/useTrajectoryCamera';
 import { useTrajectoryProjection } from '../hooks/useTrajectoryProjection';
@@ -18,6 +18,9 @@ const DEFAULT_ANIM_MS = 1450;
 interface Props {
   model: Trajectory3DModel;
   pitchColor?: string;
+  comparisonModel?: Trajectory3DModel | null;
+  comparisonColor?: string;
+  comparisonLabel?: string;
   onGestureActiveChange?: (active: boolean) => void;
 }
 
@@ -31,6 +34,9 @@ function animDurationMs(model: Trajectory3DModel) {
 export default function Trajectory3DView({
   model,
   pitchColor = Colors.accent,
+  comparisonModel = null,
+  comparisonColor = Colors.accent2,
+  comparisonLabel = '上一球',
   onGestureActiveChange,
 }: Props) {
   const isFocused = useIsFocused();
@@ -62,6 +68,13 @@ export default function Trajectory3DView({
     landingProjected,
     landingShadow,
   } = useTrajectoryProjection(model, camera);
+  const comparisonProjection = useTrajectoryProjection(comparisonModel ?? model, camera);
+  const curvePoints = model.smoothPoints?.length ? model.smoothPoints : model.points;
+  const releaseProjected = projected[0] ?? null;
+  const apexIndex = curvePoints.reduce((best, point, index) => (
+    !curvePoints[best] || point.y > curvePoints[best].y ? index : best
+  ), 0);
+  const apexProjected = projected[apexIndex] ?? null;
 
   useEffect(() => {
     if (!playing || !isFocused || gesturing) return;
@@ -127,6 +140,40 @@ export default function Trajectory3DView({
             <Rect x={0} y={0} width={VIEW_W} height={VIEW_H} rx={22} fill="url(#trajectorySky)" />
 
             <TrajectorySceneStatic scene={scene} />
+
+            {comparisonModel && comparisonProjection.path ? (
+              <Path
+                d={comparisonProjection.path}
+                stroke={comparisonColor}
+                strokeWidth={4}
+                strokeDasharray="8 7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                fill="none"
+                opacity={0.78}
+              />
+            ) : null}
+
+            <G opacity={0.9}>
+              {releaseProjected ? (
+                <>
+                  <Circle cx={releaseProjected.x} cy={releaseProjected.y} r={4.5} fill={Colors.panel} stroke="#f8fafc" strokeWidth={2} />
+                  <SvgText x={releaseProjected.x + 8} y={releaseProjected.y - 8} fill="#f8fafc" fontSize={9} fontWeight="800">出手</SvgText>
+                </>
+              ) : null}
+              {apexProjected ? (
+                <>
+                  <Circle cx={apexProjected.x} cy={apexProjected.y} r={4} fill={Colors.panel} stroke="#fbbf24" strokeWidth={2} />
+                  <SvgText x={apexProjected.x + 8} y={apexProjected.y - 7} fill="#fbbf24" fontSize={9} fontWeight="800">最高點</SvgText>
+                </>
+              ) : null}
+              {landingProjected ? (
+                <>
+                  <Circle cx={landingProjected.x} cy={landingProjected.y} r={4} fill="none" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="3 2" />
+                  <SvgText x={landingProjected.x + 8} y={landingProjected.y + 13} fill="#cbd5e1" fontSize={9} fontWeight="800">本壘板</SvgText>
+                </>
+              ) : null}
+            </G>
 
             <TrajectorySceneDynamic
               pitchColor={pitchColor}
@@ -198,6 +245,18 @@ export default function Trajectory3DView({
         </Text>
       </View>
       <View style={styles.legendRow}>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendSwatch, { backgroundColor: pitchColor }]} />
+          <Text style={styles.legendText}>本球</Text>
+        </View>
+        {comparisonModel && (
+          <View style={styles.legendItem}>
+            <View style={[styles.legendSwatch, { backgroundColor: comparisonColor }]} />
+            <Text style={styles.legendText}>{comparisonLabel}（虛線）</Text>
+          </View>
+        )}
+      </View>
+      <View style={styles.legendRow}>
         <Text style={styles.legendText}>實線：高信心軌跡</Text>
         <Text style={styles.legendText}>虛線：低信心/補點</Text>
         <Text style={styles.legendText}>
@@ -229,7 +288,7 @@ const styles = StyleSheet.create({
   },
   presetBtn: {
     flex: 1,
-    minHeight: 38,
+    minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: Radius.md,
@@ -317,4 +376,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendSwatch: { width: 18, height: 3, borderRadius: 2 },
 });

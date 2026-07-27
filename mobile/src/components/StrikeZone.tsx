@@ -15,8 +15,9 @@ import Svg, {
   Path,
 } from 'react-native-svg';
 import { Colors } from '../theme';
-import { pitchDotColor, kmhToMph } from '../utils/conversions';
+import { formatSpeed, pitchDotColor, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
 import { SessionPitch } from '../types';
+import { useSettings } from '../context/SettingsContext';
 
 // ── Strike-zone bounds in raw frame-normalised coords ────────────────────
 // Must match STRIKE_ZONE_* in Swift/Python and OverlayGenerator.
@@ -71,6 +72,8 @@ interface PitchShapeProfile {
 }
 
 export default function StrikeZone({ pitches = [], zoneOverride = null, animate = true }: Props) {
+  const { settings } = useSettings();
+  const unitLabel = speedUnitLabel(settings.speedUnit);
   const zone = zoneOverride ?? DEFAULT_ZONE;
   const clipIdRef = useRef(`strikeZoneClip${Math.random().toString(36).slice(2)}`);
   const clipId = clipIdRef.current;
@@ -638,7 +641,7 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
             fill="rgba(150,150,150,0.4)"
             fontFamily="System"
           >
-            No pitches yet
+            尚無投球落點
           </SvgText>
         )}
 
@@ -651,12 +654,12 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
           <View style={[styles.tickerSwatch, { backgroundColor: currentColor }]} />
           <Text style={styles.tickerNum}>#{current.i + 1}</Text>
           {current.pitch.pitch_type ? (
-            <Text style={styles.tickerType}>{current.pitch.pitch_type}</Text>
+            <Text style={styles.tickerType}>{pitchTypeLabel(current.pitch.pitch_type)}</Text>
           ) : null}
           {current.pitch.speed_kmh != null && (
             <Text style={styles.tickerSpeed}>
-              {kmhToMph(current.pitch.speed_kmh)}
-              <Text style={styles.tickerUnit}> mph</Text>
+              {formatSpeed(current.pitch.speed_kmh, settings.speedUnit)}
+              <Text style={styles.tickerUnit}> {unitLabel}</Text>
             </Text>
           )}
           {current.pitch.horizontal_break_cm != null && (
@@ -684,8 +687,8 @@ export default function StrikeZone({ pitches = [], zoneOverride = null, animate 
                 <View style={[styles.legendDot, { backgroundColor: pitchDotColor(i) }]} />
                 <Text style={[styles.legendText, isCurrent && styles.legendTextActive]}>
                   #{i + 1}
-                  {pitch.pitch_type ? ` ${pitch.pitch_type}` : ''}
-                  {pitch.speed_kmh ? ` · ${(pitch.speed_kmh * 0.621).toFixed(0)}mph` : ''}
+                  {pitch.pitch_type ? ` ${pitchTypeLabel(pitch.pitch_type)}` : ''}
+                  {pitch.speed_kmh ? ` · ${formatSpeed(pitch.speed_kmh, settings.speedUnit, 0)}${unitLabel}` : ''}
                 </Text>
               </View>
             );

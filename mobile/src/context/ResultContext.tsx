@@ -9,26 +9,22 @@ export interface AnalysisLogEntry {
 
 interface ResultContextValue {
   result: PitchResult | null;
-  setResult: (r: PitchResult | null) => void;
   sessionPitches: SessionPitch[];
-  addPitch: (result: PitchResult) => void;
+  completeAnalysis: (result: PitchResult, logs: AnalysisLogEntry[]) => void;
   clearPitches: () => void;
   hasNewResult: boolean;
   clearNewResultFlag: () => void;
   analysisLogs: AnalysisLogEntry[];
-  setAnalysisLogs: (logs: AnalysisLogEntry[]) => void;
 }
 
 const ResultContext = createContext<ResultContextValue>({
   result: null,
-  setResult: () => {},
   sessionPitches: [],
-  addPitch: () => {},
+  completeAnalysis: () => {},
   clearPitches: () => {},
   hasNewResult: false,
   clearNewResultFlag: () => {},
   analysisLogs: [],
-  setAnalysisLogs: () => {},
 });
 
 export function ResultProvider({ children }: { children: React.ReactNode }) {
@@ -37,19 +33,17 @@ export function ResultProvider({ children }: { children: React.ReactNode }) {
   const [hasNewResult, setHasNewResult] = useState(false);
   const [analysisLogs, setAnalysisLogs] = useState<AnalysisLogEntry[]>([]);
 
-  const setResult = useCallback((r: PitchResult | null) => {
+  const completeAnalysis = useCallback((r: PitchResult, logs: AnalysisLogEntry[]) => {
+    setAnalysisLogs(logs);
     setResultState(r);
-    if (r) {
-      // Ensure created_at is set
-      const withTs: PitchResult = r.created_at
-        ? r
-        : { ...r, created_at: new Date().toISOString() };
-      saveResultToHistory(withTs);
-      setHasNewResult(true);
-    }
-  }, []);
 
-  const addPitch = useCallback((r: PitchResult) => {
+    // Ensure created_at is set
+    const withTs: PitchResult = r.created_at
+      ? r
+      : { ...r, created_at: new Date().toISOString() };
+    saveResultToHistory(withTs);
+    setHasNewResult(true);
+
     const si = r.speed_info || {};
     const xn = si.plate_x_norm;
     const yn = si.plate_y_norm;
@@ -85,14 +79,12 @@ export function ResultProvider({ children }: { children: React.ReactNode }) {
     <ResultContext.Provider
       value={{
         result,
-        setResult,
         sessionPitches,
-        addPitch,
+        completeAnalysis,
         clearPitches,
         hasNewResult,
         clearNewResultFlag,
         analysisLogs,
-        setAnalysisLogs,
       }}
     >
       {children}

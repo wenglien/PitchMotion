@@ -4,14 +4,16 @@ import {
   KeyboardAvoidingView, Platform, StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Colors, FontSize, Radius, Shadows, Spacing, TouchTarget } from '../theme';
+import { Colors, FontSize, Radius, Shadows, Spacing, Surfaces, TouchTarget } from '../theme';
 import { useSettings } from '../context/SettingsContext';
 import {
   isManualDistanceCalibrated,
   MAX_MANUAL_MOUND_DISTANCE_M,
   MIN_MANUAL_MOUND_DISTANCE_M,
+  StrikeZoneCalibration,
 } from '../types';
 import SegmentedTabs from '../components/SegmentedTabs';
+import StrikeZoneCalibrator from '../components/StrikeZoneCalibrator';
 
 const BASIC_TAB = '基本';
 const ADVANCED_TAB = '進階';
@@ -19,11 +21,17 @@ const SETTINGS_TABS = [BASIC_TAB, ADVANCED_TAB];
 
 const MOUND_PRESETS = [5, 7, 14, 18.44];
 const STRIDE_PRESETS = [0, 1.5, 1.8];
-const CONF_PRESETS = ['0.03', '0.05', '0.10'];
+const DEFAULT_ZONE: StrikeZoneCalibration = { xMin: 0.33, xMax: 0.67, yMin: 0.56, yMax: 0.86 };
+const DETECTION_MODES = [
+  { label: '靈敏', value: '0.03', description: '弱光或球較小' },
+  { label: '平衡', value: '0.05', description: '一般拍攝建議' },
+  { label: '穩定', value: '0.10', description: '減少背景雜訊' },
+] as const;
 
 export default function SettingsScreen() {
   const { settings, updateSettings } = useSettings();
   const [activeTab, setActiveTab] = useState(BASIC_TAB);
+  const [showNumericZone, setShowNumericZone] = useState(false);
 
   // Local string state so decimal-point mid-input isn't swallowed by parseFloat
   const [moundText, setMoundText] = useState(
@@ -83,6 +91,14 @@ export default function SettingsScreen() {
     updateSettings({ strikeZone: null });
   };
 
+  const applyVisualZone = (zone: StrikeZoneCalibration) => {
+    setZxMinText(String(zone.xMin));
+    setZxMaxText(String(zone.xMax));
+    setZyMinText(String(zone.yMin));
+    setZyMaxText(String(zone.yMax));
+    updateSettings({ strikeZone: zone });
+  };
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -98,7 +114,7 @@ export default function SettingsScreen() {
             <Ionicons name="options-outline" size={24} color={Colors.accent} />
           </View>
           <View style={styles.headerCopy}>
-            <Text style={styles.eyebrow}>SETTINGS</Text>
+            <Text style={styles.eyebrow}>設定</Text>
             <Text style={styles.headerTitle}>分析設定</Text>
             <Text style={styles.headerSub}>所有分析均在這台裝置完成</Text>
           </View>
@@ -113,6 +129,38 @@ export default function SettingsScreen() {
 
         {activeTab === BASIC_TAB ? (
           <>
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View>
+                  <Text style={styles.sectionTitle}>速度單位</Text>
+                  <Text style={styles.sectionSub}>整個 App 會使用相同單位</Text>
+                </View>
+                <Ionicons name="speedometer-outline" size={20} color={Colors.textMuted} />
+              </View>
+              <View style={styles.unitChoiceRow}>
+                {([
+                  ['mph', '英里／小時', '美式球探常用'],
+                  ['kmh', '公里／小時', '公制速度'],
+                ] as const).map(([value, label, description]) => {
+                  const selected = settings.speedUnit === value;
+                  return (
+                    <TouchableOpacity
+                      key={value}
+                      style={[styles.unitChoice, selected && styles.unitChoiceActive]}
+                      onPress={() => updateSettings({ speedUnit: value })}
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: selected }}
+                    >
+                      <Text style={[styles.unitChoiceValue, selected && styles.unitChoiceValueActive]}>
+                        {value === 'mph' ? 'mph' : 'km/h'}
+                      </Text>
+                      <Text style={styles.unitChoiceLabel}>{label}</Text>
+                      <Text style={styles.unitChoiceDescription}>{description}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <View>
@@ -245,54 +293,44 @@ export default function SettingsScreen() {
               <View style={styles.cardHeader}>
                 <View>
                   <Text style={styles.sectionTitle}>偵測精度</Text>
-                  <Text style={styles.sectionSub}>YOLO confidence threshold</Text>
+                  <Text style={styles.sectionSub}>選擇適合拍攝環境的偵測方式</Text>
                 </View>
                 <View style={styles.valuePill}>
                   <Text style={styles.valuePillText}>{settings.confThreshold}</Text>
                 </View>
               </View>
               <View style={[styles.field, styles.fieldLast]}>
-                <Text style={styles.label}>偵測信心閾值</Text>
-                <TextInput
-                  style={styles.input}
-                  value={confText}
-                  onChangeText={setConfText}
-                  onBlur={() => {
-                    const n = parseFloat(confText);
-                    const val = isNaN(n) || n <= 0 ? 0.03 : n;
-                    setConfText(String(val));
-                    updateSettings({ confThreshold: val });
-                  }}
-                  keyboardType="decimal-pad"
-                  placeholder="0.03"
-                  placeholderTextColor={Colors.textMuted}
-                  returnKeyType="done"
-                  accessibilityLabel="偵測信心閾值"
-                />
-                <View style={styles.quickRow}>
-                  {CONF_PRESETS.map((value) => {
-                    const selected = confText === value;
+                <Text style={styles.label}>偵測模式</Text>
+                <View style={styles.detectionModeRow}>
+                  {DETECTION_MODES.map((mode) => {
+                    const selected = confText === mode.value;
                     return (
                       <TouchableOpacity
-                        key={value}
-                        style={[styles.quickChip, selected && styles.quickChipActive]}
+                        key={mode.value}
+                        style={[styles.detectionMode, selected && styles.detectionModeActive]}
                         onPress={() => {
-                          setConfText(value);
-                          updateSettings({ confThreshold: Number(value) });
+                          setConfText(mode.value);
+                          updateSettings({ confThreshold: Number(mode.value) });
                         }}
                         activeOpacity={0.75}
-                        accessibilityRole="button"
+                        accessibilityRole="radio"
                         accessibilityState={{ selected }}
-                        accessibilityLabel={`偵測信心閾值 ${value}`}
+                        accessibilityLabel={`${mode.label}偵測模式，${mode.description}`}
                       >
-                        <Text style={[styles.quickChipText, selected && styles.quickChipTextActive]}>
-                          {value}
+                        <Ionicons
+                          name={mode.label === '靈敏' ? 'flash-outline' : mode.label === '平衡' ? 'git-compare-outline' : 'shield-checkmark-outline'}
+                          size={19}
+                          color={selected ? Colors.accent : Colors.textMuted}
+                        />
+                        <Text style={[styles.detectionModeLabel, selected && styles.detectionModeLabelActive]}>
+                          {mode.label}
                         </Text>
+                        <Text style={styles.detectionModeDescription}>{mode.description}</Text>
                       </TouchableOpacity>
                     );
                   })}
                 </View>
-                <Text style={styles.hint}>較低會抓到更多候選球點，較高會減少雜訊。</Text>
+                <Text style={styles.hint}>目前設定值 {confText}。若不確定，建議使用「平衡」。</Text>
               </View>
             </View>
 
@@ -300,33 +338,48 @@ export default function SettingsScreen() {
               <View style={styles.cardHeader}>
                 <View>
                   <Text style={styles.sectionTitle}>好球帶校正</Text>
-                  <Text style={styles.sectionSub}>主審視角畫面比例 0-1</Text>
+                  <Text style={styles.sectionSub}>直接在畫面上定位與調整大小</Text>
                 </View>
                 <Ionicons name="grid-outline" size={20} color={Colors.textMuted} />
               </View>
-              <View style={styles.zoneGrid}>
-                {([
-                  ['x_min', zxMinText, setZxMinText, '0.33', '好球帶左邊界'],
-                  ['x_max', zxMaxText, setZxMaxText, '0.67', '好球帶右邊界'],
-                  ['y_min', zyMinText, setZyMinText, '0.56', '好球帶上邊界'],
-                  ['y_max', zyMaxText, setZyMaxText, '0.86', '好球帶下邊界'],
-                ] as const).map(([label, value, setter, placeholder, a11y]) => (
-                  <View key={label} style={styles.zoneField}>
-                    <Text style={styles.label}>{label}</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={value}
-                      onChangeText={setter}
-                      onBlur={commitStrikeZone}
-                      keyboardType="decimal-pad"
-                      placeholder={placeholder}
-                      placeholderTextColor={Colors.textMuted}
-                      returnKeyType="done"
-                      accessibilityLabel={a11y}
-                    />
-                  </View>
-                ))}
-              </View>
+              <StrikeZoneCalibrator
+                zone={settings.strikeZone ?? DEFAULT_ZONE}
+                onChange={applyVisualZone}
+              />
+              <TouchableOpacity
+                style={styles.numericToggle}
+                onPress={() => setShowNumericZone((value) => !value)}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: showNumericZone }}
+              >
+                <Text style={styles.numericToggleText}>{showNumericZone ? '隱藏精確數值' : '顯示精確數值'}</Text>
+                <Ionicons name={showNumericZone ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.textMuted} />
+              </TouchableOpacity>
+              {showNumericZone && (
+                <View style={styles.zoneGrid}>
+                  {([
+                    ['左邊界', zxMinText, setZxMinText, '0.33', '好球帶左邊界'],
+                    ['右邊界', zxMaxText, setZxMaxText, '0.67', '好球帶右邊界'],
+                    ['上邊界', zyMinText, setZyMinText, '0.56', '好球帶上邊界'],
+                    ['下邊界', zyMaxText, setZyMaxText, '0.86', '好球帶下邊界'],
+                  ] as const).map(([label, value, setter, placeholder, a11y]) => (
+                    <View key={label} style={styles.zoneField}>
+                      <Text style={styles.label}>{label}</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={value}
+                        onChangeText={setter}
+                        onBlur={commitStrikeZone}
+                        keyboardType="decimal-pad"
+                        placeholder={placeholder}
+                        placeholderTextColor={Colors.textMuted}
+                        returnKeyType="done"
+                        accessibilityLabel={a11y}
+                      />
+                    </View>
+                  ))}
+                </View>
+              )}
               <TouchableOpacity
                 style={styles.secondaryBtn}
                 onPress={resetStrikeZone}
@@ -341,7 +394,7 @@ export default function SettingsScreen() {
                 <View style={styles.zoneApplied}>
                   <Ionicons name="checkmark-circle-outline" size={17} color={Colors.green} />
                   <Text style={styles.zoneAppliedText}>
-                    x {settings.strikeZone.xMin}-{settings.strikeZone.xMax} / y {settings.strikeZone.yMin}-{settings.strikeZone.yMax}
+                    已套用自訂好球帶
                   </Text>
                 </View>
               )}
@@ -429,11 +482,7 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
   card: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.xl,
-    padding: Spacing.lg,
+    ...Surfaces.card,
     marginTop: Spacing.md,
     ...Shadows.soft,
   },
@@ -443,6 +492,42 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.md,
     marginBottom: Spacing.md,
+  },
+  unitChoiceRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  unitChoice: {
+    flex: 1,
+    minHeight: 108,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface2,
+    padding: Spacing.md,
+  },
+  unitChoiceActive: {
+    borderColor: Colors.accent,
+    backgroundColor: Colors.accentSubtle,
+  },
+  unitChoiceValue: {
+    color: Colors.text,
+    fontSize: FontSize.xxl,
+    fontWeight: '900',
+  },
+  unitChoiceValueActive: { color: Colors.accent },
+  unitChoiceLabel: {
+    color: Colors.text,
+    fontSize: FontSize.sm,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  unitChoiceDescription: {
+    color: Colors.textMuted,
+    fontSize: FontSize.xs,
+    marginTop: 3,
   },
   sectionTitle: {
     fontSize: FontSize.lg,
@@ -708,10 +793,57 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontVariant: ['tabular-nums'],
   },
+  detectionModeRow: {
+    flexDirection: 'row',
+    gap: Spacing.xs,
+  },
+  detectionMode: {
+    flex: 1,
+    minHeight: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.surface2,
+    padding: Spacing.sm,
+  },
+  detectionModeActive: {
+    borderColor: Colors.accent,
+    backgroundColor: Colors.accentSubtle,
+  },
+  detectionModeLabel: {
+    color: Colors.text,
+    fontSize: FontSize.md,
+    fontWeight: '900',
+    marginTop: 6,
+  },
+  detectionModeLabelActive: { color: Colors.accent },
+  detectionModeDescription: {
+    color: Colors.textMuted,
+    fontSize: FontSize.xs,
+    lineHeight: 15,
+    marginTop: 3,
+    textAlign: 'center',
+  },
+  numericToggle: {
+    minHeight: TouchTarget.min,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    marginTop: Spacing.sm,
+  },
+  numericToggleText: {
+    color: Colors.textMuted,
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+  },
   zoneGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: Spacing.sm,
+    marginTop: Spacing.sm,
   },
   zoneField: {
     flexBasis: '47%',

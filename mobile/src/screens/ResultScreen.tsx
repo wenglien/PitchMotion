@@ -1,16 +1,17 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Linking, Alert, useWindowDimensions } from 'react-native';
 import * as Sharing from 'expo-sharing';
-import { Colors, Spacing, Radius, FontSize, Layout, Shadows } from '../theme';
+import { Colors, Spacing, Radius, FontSize, Layout, Shadows, Surfaces } from '../theme';
 import VideoPlayer from '../components/VideoPlayer';
 import { useResult } from '../context/ResultContext';
-import { kmhToMph, pitchColor, shortMethod } from '../utils/conversions';
+import { formatSpeed, pitchColor, pitchTypeLabel, shortMethod, speedUnitLabel } from '../utils/conversions';
 import StrikeZone from '../components/StrikeZone';
 import BreakChart from '../components/BreakChart';
 import { friendlyError } from '../utils/errors';
 import SegmentedTabs from '../components/SegmentedTabs';
 import { useNavigation } from '@react-navigation/native';
 import type { PitchResult } from '../types';
+import { useSettings } from '../context/SettingsContext';
 
 const VIDEO_TAB_OVERLAY = '分析疊圖';
 const VIDEO_TAB_ORIGINAL = '原始錄影';
@@ -33,18 +34,23 @@ function resolveUriHelper(url: string | undefined): string | null {
 export default function ResultScreen() {
   const { width } = useWindowDimensions();
   const { result, sessionPitches, clearPitches, analysisLogs } = useResult();
+  const { settings } = useSettings();
   const navigation = useNavigation<any>();
   const [showLogs, setShowLogs] = useState(false);
   const [videoTab, setVideoTab] = useState<string>(VIDEO_TAB_OVERLAY);
   const [resultTab, setResultTab] = useState<string>(RESULT_TAB_OVERVIEW);
+  const [showQualityDetails, setShowQualityDetails] = useState(false);
   const logScrollRef = useRef<ScrollView>(null);
   const analysis = result ?? EMPTY_RESULT;
 
   const si = analysis.speed_info || {};
   const primaryKmh = si.release_speed_kmh ?? si.initial_speed_kmh ?? null;
-  const primaryMph = primaryKmh !== null ? kmhToMph(primaryKmh) : null;
+  const speedUnit = settings.speedUnit;
+  const speedUnitText = speedUnitLabel(speedUnit);
+  const alternateUnit = speedUnit === 'mph' ? 'kmh' : 'mph';
+  const primarySpeed = primaryKmh !== null ? formatSpeed(primaryKmh, speedUnit) : null;
+  const alternateSpeed = primaryKmh !== null ? formatSpeed(primaryKmh, alternateUnit) : null;
   const maxKmh = si.max_speed_kmh ?? null;
-  const distM = si.total_distance_m ?? si.effective_distance_m ?? null;
   const flightS = si.flight_time_s ?? null;
   const breakH = si.horizontal_break_cm ?? null;
   const breakVObserved = si.vertical_break_cm ?? null;
@@ -139,18 +145,16 @@ export default function ResultScreen() {
     hasWarn || physClamped ? '本次軌跡或速度有品質警告，請優先參考趨勢。' : null,
   ].filter(Boolean) as string[];
   const heroStats = [
-    { label: '最高 mph', value: maxKmh !== null ? kmhToMph(maxKmh) : '-' },
-    { label: '距離 m', value: distM !== null ? distM.toFixed(1) : '-' },
-    { label: '飛行 s', value: flightS !== null ? flightS.toFixed(3) : '-' },
-    { label: '橫移 cm', value: breakH !== null ? breakH.toFixed(1) : '-' },
-    { label: 'IVB cm', value: breakVInduced !== null ? breakVInduced.toFixed(1) : '-' },
-    { label: '轉速 rpm', value: spinRpm !== null ? Math.round(spinRpm).toLocaleString() : '-' },
+    { label: `最高 · ${speedUnitText}`, value: maxKmh !== null ? formatSpeed(maxKmh, speedUnit) : '-' },
+    { label: '飛行時間 · 秒', value: flightS !== null ? flightS.toFixed(3) : '-' },
+    { label: '總位移 · cm', value: breakTotal !== null ? breakTotal.toFixed(1) : '-' },
+    { label: '轉速 · rpm', value: spinRpm !== null ? Math.round(spinRpm).toLocaleString() : '-' },
   ];
   const movementRows = [
     { label: '水平位移', value: breakH, unit: 'cm', tone: 'default' },
     { label: '原始垂直', value: breakVObserved, unit: 'cm', tone: 'default' },
     { label: '重力下墜', value: breakGravity, unit: 'cm', tone: 'muted' },
-    { label: '誘導垂直 IVB', value: breakVInduced, unit: 'cm', tone: (breakVInduced ?? 0) >= 0 ? 'green' : 'red' },
+    { label: '垂直位移', value: breakVInduced, unit: 'cm', tone: (breakVInduced ?? 0) >= 0 ? 'green' : 'red' },
   ];
   const movementQualityRows = [
     { label: '方向擬合 R²', value: breakFitR2 !== null ? breakFitR2.toFixed(2) : '—' },
@@ -219,34 +223,48 @@ export default function ResultScreen() {
 
       {/* ── Hero Card ─────────────────────────────────────── */}
       <View style={[styles.heroCard, { width: panelWidth }]}>
+        <Text style={styles.heroEyebrow}>本球結果</Text>
         {/* Pitch type badge row */}
-        {pitchType && (
-          <View style={styles.badgeRow}>
+        <View style={styles.badgeRow}>
+          <View style={styles.badgeGroup}>
+          {pitchType && (
             <View style={[styles.typeBadge, { backgroundColor: pitchColor(pitchType) }]}>
-              <Text style={styles.typeBadgeText}>{pitchType}</Text>
+              <Text style={styles.typeBadgeText}>{pitchTypeLabel(pitchType)}</Text>
             </View>
-            {pitchConf !== null && (
-              <Text style={styles.confText}>{pitchConf}% 信心</Text>
-            )}
+          )}
+          <View style={[
+            styles.callBadge,
+            si.is_strike === true && styles.callBadgeStrike,
+            si.is_strike === false && styles.callBadgeBall,
+          ]}>
+            <Text style={[
+              styles.callBadgeText,
+              si.is_strike === true && { color: Colors.green },
+              si.is_strike === false && { color: Colors.red },
+            ]}>
+              {si.is_strike === true ? '好球' : si.is_strike === false ? '壞球' : '未判定'}
+            </Text>
           </View>
-        )}
+          </View>
+          {pitchConf !== null && <Text style={styles.confText}>球種信心 {pitchConf}%</Text>}
+        </View>
 
         {/* Big speed number */}
         <View
           style={styles.speedWrap}
           accessible
           accessibilityLabel={
-            primaryMph !== null
-              ? `球速 ${primaryMph} mph，約等於 ${primaryKmh?.toFixed(1)} 公里每小時`
+            primarySpeed !== null
+              ? `球速 ${primarySpeed} ${speedUnitText}`
               : '無法計算球速'
           }
         >
-          {primaryMph !== null ? (
+          {primarySpeed !== null ? (
             <>
-              <Text style={[styles.speedNum, { fontSize: speedFontSize, lineHeight: speedFontSize }]}>{primaryMph}</Text>
+              <Text style={[styles.speedNum, { fontSize: speedFontSize, lineHeight: speedFontSize }]}>{primarySpeed}</Text>
               <View style={styles.speedMeta}>
-                <Text style={styles.speedUnit}>mph</Text>
-                <Text style={styles.speedKmh}>{primaryKmh?.toFixed(1)} km/h</Text>
+                <Text style={styles.speedUnit}>{speedUnitText}</Text>
+                <Text style={styles.speedKmh}>{alternateSpeed} {speedUnitLabel(alternateUnit)}</Text>
               </View>
             </>
           ) : (
@@ -286,6 +304,20 @@ export default function ResultScreen() {
               <Text style={styles.warnChipText}>速度推估值</Text>
             </View>
           )}
+        </View>
+        <View style={[
+          styles.resultInsight,
+          qualityTone === 'good' ? styles.resultInsightGood : qualityTone === 'fair' ? styles.resultInsightFair : styles.resultInsightPoor,
+        ]}>
+          <View style={styles.resultInsightCopy}>
+            <Text style={styles.resultInsightTitle}>
+              {si.is_strike === true ? '落點進入好球帶' : si.is_strike === false ? '落點在好球帶外' : '本球落點尚未判定'}
+            </Text>
+            <Text style={styles.resultInsightText}>分析品質 {qualityScore}% · {qualityLabel}</Text>
+          </View>
+          <View style={styles.resultInsightScore}>
+            <Text style={styles.resultInsightScoreText}>{qualityScore}</Text>
+          </View>
         </View>
         <TouchableOpacity
           style={styles.trajectoryHeroBtn}
@@ -349,20 +381,33 @@ export default function ResultScreen() {
             {interpolationFactor && interpolationFactor > 1 ? ` / ${interpolationFactor}x 補幀` : ''}
           </Text>
         </View>
-        <View style={styles.qualityGrid}>
-          {qualityRows.map((row) => (
-            <View key={row.label} style={styles.qualityTile}>
-              <Text style={styles.qualityTileValue}>{row.value}</Text>
-              <Text style={styles.qualityTileLabel}>{row.label}</Text>
+        <TouchableOpacity
+          style={styles.qualityToggle}
+          onPress={() => setShowQualityDetails((value) => !value)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: showQualityDetails }}
+        >
+          <Text style={styles.qualityToggleText}>{showQualityDetails ? '收起品質細節' : '查看品質細節'}</Text>
+          <Text style={styles.qualityToggleIcon}>{showQualityDetails ? '▲' : '▼'}</Text>
+        </TouchableOpacity>
+        {showQualityDetails && (
+          <>
+            <View style={styles.qualityGrid}>
+              {qualityRows.map((row) => (
+                <View key={row.label} style={styles.qualityTile}>
+                  <Text style={styles.qualityTileValue}>{row.value}</Text>
+                  <Text style={styles.qualityTileLabel}>{row.label}</Text>
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
-        {qualitySuggestions.length > 0 && (
-          <View style={styles.qualityNotePanel}>
-            {qualitySuggestions.slice(0, 3).map((tip) => (
-              <Text key={tip} style={styles.qualityNote}>• {tip}</Text>
-            ))}
-          </View>
+            {qualitySuggestions.length > 0 && (
+              <View style={styles.qualityNotePanel}>
+                {qualitySuggestions.slice(0, 3).map((tip) => (
+                  <Text key={tip} style={styles.qualityNote}>• {tip}</Text>
+                ))}
+              </View>
+            )}
+          </>
         )}
       </View>
 
@@ -412,7 +457,7 @@ export default function ResultScreen() {
         <View style={[styles.card, { width: panelWidth }]}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>球路動態分析</Text>
-            <Text style={styles.cardSub}>位移 Break</Text>
+            <Text style={styles.cardSub}>水平與垂直位移</Text>
           </View>
           <View style={styles.divider} />
 
@@ -420,7 +465,7 @@ export default function ResultScreen() {
           {hasBreakChart && (
             <View style={styles.kineBlock}>
               <View style={styles.kineHeaderRow}>
-                <Text style={styles.kineSectionTitle}>位移 (Break)</Text>
+                <Text style={styles.kineSectionTitle}>位移分析</Text>
                 {breakConf !== null && (
                   <Text style={styles.kineConfPill}>
                     可信度 {Math.round(breakConf * 100)}%
@@ -743,19 +788,38 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.lg,
     ...Shadows.card,
   },
+  heroEyebrow: {
+    color: '#7dd3fc',
+    fontSize: FontSize.xs,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    marginBottom: Spacing.sm,
+  },
   badgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: Spacing.sm,
     marginBottom: Spacing.md,
   },
+  badgeGroup: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, flex: 1 },
   typeBadge: {
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 99,
   },
-  typeBadgeText: { fontSize: FontSize.sm, fontWeight: '700', color: '#fff' },
-  confText: { fontSize: FontSize.sm, color: Colors.textMuted },
+  typeBadgeText: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.onAccent },
+  callBadge: {
+    borderRadius: 99,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#475569',
+  },
+  callBadgeStrike: { borderColor: '#34d399', backgroundColor: 'rgba(16,185,129,0.12)' },
+  callBadgeBall: { borderColor: '#f87171', backgroundColor: 'rgba(239,68,68,0.12)' },
+  callBadgeText: { color: '#cbd5e1', fontSize: FontSize.sm, fontWeight: '800' },
+  confText: { fontSize: FontSize.sm, color: '#cbd5e1', fontWeight: '700' },
 
   speedWrap: {
     flexDirection: 'row',
@@ -795,7 +859,7 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   statItem: {
-    flexBasis: '31%',
+    flexBasis: '47%',
     flexGrow: 1,
     alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.07)',
@@ -822,14 +886,14 @@ const styles = StyleSheet.create({
     marginTop: Spacing.md,
   },
   methodChip: {
-    backgroundColor: Colors.surface2,
+    backgroundColor: 'rgba(255,255,255,0.07)',
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: 'rgba(255,255,255,0.1)',
     borderRadius: Radius.sm,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 3,
   },
-  methodText: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: '500' },
+  methodText: { fontSize: FontSize.xs, color: '#cbd5e1', fontWeight: '700' },
   warnChip: {
     backgroundColor: 'rgba(217, 119, 6, 0.1)',
     borderWidth: 1,
@@ -839,6 +903,31 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   warnChipText: { fontSize: FontSize.xs, color: Colors.yellow, fontWeight: '600' },
+  resultInsight: {
+    marginTop: Spacing.md,
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    padding: Spacing.md,
+  },
+  resultInsightGood: { backgroundColor: 'rgba(16,185,129,0.10)', borderColor: 'rgba(52,211,153,0.28)' },
+  resultInsightFair: { backgroundColor: 'rgba(245,158,11,0.10)', borderColor: 'rgba(251,191,36,0.30)' },
+  resultInsightPoor: { backgroundColor: 'rgba(239,68,68,0.10)', borderColor: 'rgba(248,113,113,0.30)' },
+  resultInsightCopy: { flex: 1 },
+  resultInsightTitle: { color: Colors.textInverse, fontSize: FontSize.md, fontWeight: '900' },
+  resultInsightText: { color: '#cbd5e1', fontSize: FontSize.sm, marginTop: 3 },
+  resultInsightScore: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  resultInsightScoreText: { color: Colors.textInverse, fontSize: FontSize.lg, fontWeight: '900' },
   trajectoryHeroBtn: {
     marginTop: Spacing.md,
     minHeight: 46,
@@ -928,6 +1017,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  qualityToggle: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+    borderRadius: Radius.lg,
+  },
+  qualityToggleText: { color: Colors.accent, fontSize: FontSize.sm, fontWeight: '800' },
+  qualityToggleIcon: { color: Colors.accent, fontSize: FontSize.xs },
   qualityGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -974,10 +1074,7 @@ const styles = StyleSheet.create({
 
   /* Shared card */
   card: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.xl,
+    ...Surfaces.card,
     padding: Spacing.xl,
     marginTop: Spacing.md,
     ...Shadows.soft,

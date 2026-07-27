@@ -2,7 +2,7 @@ import { PitchResult, Session } from '../types';
 
 export type RootStackParamList = {
   MainTabs: undefined;
-  TrajectorySimulation: { pitch: PitchResult; title?: string };
+  TrajectorySimulation: { pitch: PitchResult; comparePitch?: PitchResult; title?: string };
 };
 
 export type BottomTabParamList = {

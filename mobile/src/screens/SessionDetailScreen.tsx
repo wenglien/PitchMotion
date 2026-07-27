@@ -3,7 +3,7 @@ import { View, Text, ScrollView, FlatList, StyleSheet } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { Colors, Spacing, Radius, FontSize, Shadows } from '../theme';
 import { Session, PitchResult } from '../types';
-import { KMH_TO_MPH, getSpeedKmh } from '../utils/conversions';
+import { formatSpeed, getSpeedKmh, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
 import {
   buildTypeStats,
   toStrikeZonePitches,
@@ -14,6 +14,7 @@ import { pitchColor } from '../utils/conversions';
 import PitchCard from '../components/PitchCard';
 import StrikeZone from '../components/StrikeZone';
 import SegmentedTabs from '../components/SegmentedTabs';
+import { useSettings } from '../context/SettingsContext';
 
 type RouteParams = { SessionDetail: { session: Session } };
 
@@ -39,6 +40,7 @@ function ListTab({ records }: { records: PitchResult[] }) {
           index={records.length - index}
           onViewTrajectory={() => navigation.navigate('TrajectorySimulation', {
             pitch: item,
+            comparePitch: records[index + 1] ?? records[index - 1],
             title: `第 ${records.length - index} 球 3D 軌跡`,
           })}
         />
@@ -49,6 +51,7 @@ function ListTab({ records }: { records: PitchResult[] }) {
 }
 
 function GraphTab({ records }: { records: PitchResult[] }) {
+  const { settings } = useSettings();
   const pitches = toStrikeZonePitches(records);
   const typeStats = buildTypeStats(records);
   const plateZone = records.find((r) => r.speed_info?.plate_zone)?.speed_info?.plate_zone;
@@ -75,15 +78,15 @@ function GraphTab({ records }: { records: PitchResult[] }) {
             <Text style={styles.tableHeader}>數量</Text>
             <Text style={styles.tableHeader}>均速</Text>
           </View>
-          {typeStats.map(({ type, count, avgMph, color }) => (
+          {typeStats.map(({ type, count, avgKmh, color }) => (
             <View key={type} style={[styles.tableRow, styles.tableDataRow]}>
               <View style={[styles.typeCell, { flex: 2 }]}>
                 <View style={[styles.typeDot, { backgroundColor: color }]} />
-                <Text style={styles.typeText}>{type}</Text>
+                <Text style={styles.typeText}>{pitchTypeLabel(type)}</Text>
               </View>
               <Text style={styles.tableData}>{count}</Text>
               <Text style={styles.tableData}>
-                {avgMph !== null ? `${avgMph} mph` : '—'}
+                {avgKmh !== null ? `${formatSpeed(avgKmh, settings.speedUnit)} ${speedUnitLabel(settings.speedUnit)}` : '—'}
               </Text>
             </View>
           ))}
@@ -94,15 +97,17 @@ function GraphTab({ records }: { records: PitchResult[] }) {
 }
 
 function AICoachTab({ records }: { records: PitchResult[] }) {
+  const { settings } = useSettings();
+  const unitLabel = speedUnitLabel(settings.speedUnit);
   const speeds = records
     .map(getSpeedKmh)
     .filter((v): v is number => v !== null)
-    .map((kmh) => kmh * KMH_TO_MPH);
+    .map((kmh) => kmh);
 
-  const avgMph = speeds.length
-    ? (speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1)
+  const avgSpeed = speeds.length
+    ? formatSpeed(speeds.reduce((a, b) => a + b, 0) / speeds.length, settings.speedUnit)
     : null;
-  const maxMph = speeds.length ? Math.max(...speeds).toFixed(1) : null;
+  const maxSpeed = speeds.length ? formatSpeed(Math.max(...speeds), settings.speedUnit) : null;
 
   const spinValues = records
     .map((r) => r.speed_info?.spin_rpm)
@@ -111,7 +116,7 @@ function AICoachTab({ records }: { records: PitchResult[] }) {
     ? Math.round(spinValues.reduce((a, b) => a + b, 0) / spinValues.length)
     : null;
 
-  const summary = generateSessionSummary(records);
+  const summary = generateSessionSummary(records, settings.speedUnit);
 
   return (
     <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
@@ -121,12 +126,12 @@ function AICoachTab({ records }: { records: PitchResult[] }) {
           <Text style={styles.statLabel}>投球數</Text>
         </View>
         <View style={styles.statBox}>
-          <Text style={styles.statValue}>{avgMph ?? '—'}</Text>
-          <Text style={styles.statLabel}>均速 mph</Text>
+          <Text style={styles.statValue}>{avgSpeed ?? '—'}</Text>
+          <Text style={styles.statLabel}>均速 {unitLabel}</Text>
         </View>
         <View style={styles.statBox}>
-          <Text style={[styles.statValue, { color: Colors.accent }]}>{maxMph ?? '—'}</Text>
-          <Text style={styles.statLabel}>最高 mph</Text>
+          <Text style={[styles.statValue, { color: Colors.accent }]}>{maxSpeed ?? '—'}</Text>
+          <Text style={styles.statLabel}>最高 {unitLabel}</Text>
         </View>
       </View>
 
@@ -153,10 +158,10 @@ function AICoachTab({ records }: { records: PitchResult[] }) {
             const si = r.speed_info || {};
             const comment = generateCoachingComment(si);
             const type = si.pitch_type && si.pitch_type !== 'Unknown' ? si.pitch_type : null;
-            const mph = si.release_speed_kmh
-              ? (si.release_speed_kmh * KMH_TO_MPH).toFixed(1)
+            const speed = si.release_speed_kmh
+              ? formatSpeed(si.release_speed_kmh, settings.speedUnit)
               : si.initial_speed_kmh
-                ? (si.initial_speed_kmh * KMH_TO_MPH).toFixed(1)
+                ? formatSpeed(si.initial_speed_kmh, settings.speedUnit)
                 : null;
             return (
               <View key={r.job_id || i} style={styles.highlightItem}>
@@ -165,8 +170,8 @@ function AICoachTab({ records }: { records: PitchResult[] }) {
                 </View>
                 <View style={{ flex: 1 }}>
                   <View style={styles.highlightMeta}>
-                    {mph !== null && <Text style={styles.highlightSpeed}>{mph} mph</Text>}
-                    {type && <Text style={styles.highlightType}>{type}</Text>}
+                    {speed !== null && <Text style={styles.highlightSpeed}>{speed} {unitLabel}</Text>}
+                    {type && <Text style={styles.highlightType}>{pitchTypeLabel(type)}</Text>}
                   </View>
                   <Text style={styles.highlightComment}>{comment}</Text>
                 </View>
@@ -180,6 +185,8 @@ function AICoachTab({ records }: { records: PitchResult[] }) {
 }
 
 export default function SessionDetailScreen() {
+  const { settings } = useSettings();
+  const unitLabel = speedUnitLabel(settings.speedUnit);
   const route = useRoute<RouteProp<RouteParams, 'SessionDetail'>>();
   const { session } = route.params;
   const [activeTab, setActiveTab] = useState(TABS[0]);
@@ -187,11 +194,11 @@ export default function SessionDetailScreen() {
   const speeds = records
     .map(getSpeedKmh)
     .filter((v): v is number => v !== null)
-    .map((kmh) => kmh * KMH_TO_MPH);
-  const avgMph = speeds.length
-    ? (speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1)
+    .map((kmh) => kmh);
+  const avgSpeed = speeds.length
+    ? formatSpeed(speeds.reduce((a, b) => a + b, 0) / speeds.length, settings.speedUnit)
     : null;
-  const maxMph = speeds.length ? Math.max(...speeds).toFixed(1) : null;
+  const maxSpeed = speeds.length ? formatSpeed(Math.max(...speeds), settings.speedUnit) : null;
   const breakValues = records
     .map((r) => r.speed_info?.total_break_cm)
     .filter((v): v is number => v != null);
@@ -209,12 +216,12 @@ export default function SessionDetailScreen() {
       </View>
       <View style={styles.summaryStrip}>
         <View style={styles.summaryItem}>
-          <Text style={styles.summaryValue}>{avgMph ?? '-'}</Text>
-          <Text style={styles.summaryLabel}>均速 mph</Text>
+          <Text style={styles.summaryValue}>{avgSpeed ?? '-'}</Text>
+          <Text style={styles.summaryLabel}>均速 {unitLabel}</Text>
         </View>
         <View style={styles.summaryItem}>
-          <Text style={[styles.summaryValue, { color: Colors.accent }]}>{maxMph ?? '-'}</Text>
-          <Text style={styles.summaryLabel}>最高 mph</Text>
+          <Text style={[styles.summaryValue, { color: Colors.accent }]}>{maxSpeed ?? '-'}</Text>
+          <Text style={styles.summaryLabel}>最高 {unitLabel}</Text>
         </View>
         <View style={styles.summaryItem}>
           <Text style={styles.summaryValue}>{avgBreak ?? '-'}</Text>

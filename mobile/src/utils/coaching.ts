@@ -1,8 +1,17 @@
 import { SpeedInfo, PitchResult, Session } from '../types';
-import { KMH_TO_MPH, getSpeedKmh, toDateKey, pitchColor } from './conversions';
+import {
+  KMH_TO_MPH,
+  SpeedUnit,
+  formatSpeed,
+  getSpeedKmh,
+  pitchColor,
+  pitchTypeLabel,
+  speedUnitLabel,
+  toDateKey,
+} from './conversions';
 
 export function generateCoachingComment(si?: SpeedInfo): string {
-  if (!si) return 'Keep working on consistency and mechanics.';
+  if (!si) return '持續練習出手一致性與投球動作。';
 
   const mph = si.release_speed_kmh
     ? si.release_speed_kmh * KMH_TO_MPH
@@ -14,46 +23,46 @@ export function generateCoachingComment(si?: SpeedInfo): string {
   const parts: string[] = [];
 
   if (mph !== null) {
-    if (mph < 45) parts.push('Focus on building arm strength to increase velocity.');
-    else if (mph < 55) parts.push('Work on increasing velocity for more effectiveness.');
-    else if (mph < 65) parts.push('Decent velocity. Focus on consistent mechanics.');
-    else if (mph < 80) parts.push('Good velocity range. Work on command.');
-    else parts.push('Strong pitch velocity.');
+    if (mph < 45) parts.push('先穩定下肢發力與手臂路徑，再逐步提升球速。');
+    else if (mph < 55) parts.push('球速仍有成長空間，優先維持完整加速與隨揮。');
+    else if (mph < 65) parts.push('球速表現穩定，下一步可專注出手點一致性。');
+    else if (mph < 80) parts.push('球速表現良好，可以把練習重點轉向控球。');
+    else parts.push('本球球速具有壓制力，請持續維持動作效率。');
   }
 
   if (rpm !== null) {
-    if (rpm < 1000) parts.push('Very low spin — check grip and finger pressure at release.');
-    else if (rpm < 1500) parts.push('Spin rate is below average — focus on finger pressure at release.');
-    else if (rpm < 2000) parts.push('Moderate spin rate. Try to generate more finger action.');
-    else if (rpm < 2500) parts.push('Good spin rate detected.');
-    else parts.push('Excellent spin rate — great for movement.');
+    if (rpm < 1000) parts.push('轉速偏低，可檢查握球與出手瞬間的指尖壓力。');
+    else if (rpm < 1500) parts.push('轉速略低，練習讓手指完整通過球的後方。');
+    else if (rpm < 2000) parts.push('轉速中等，可加強出手時的指尖動作。');
+    else if (rpm < 2500) parts.push('轉速表現良好，持續維持相同握球與出手。');
+    else parts.push('轉速表現突出，有助於製造更明顯的球路位移。');
   }
 
   if (!parts[1]) {
     if (type === 'Fastball' || type === 'Four-Seam') {
-      parts.push('Maintain consistent four-seam grip for maximum ride.');
+      parts.push('維持四縫線握法與一致出手，讓球路保持上竄感。');
     } else if (type === 'Curveball') {
-      parts.push('Focus on consistent release point for a sharp break.');
+      parts.push('固定出手點，讓曲球的下墜更集中。');
     } else if (type === 'Slider') {
-      parts.push('Ensure a clean cut at release for sharp horizontal movement.');
+      parts.push('出手時保持乾淨的側向切球，強化水平位移。');
     } else if (type === 'Changeup') {
-      parts.push('Keep arm speed consistent to disguise the changeup effectively.');
+      parts.push('保持和快速球相同的手臂速度，提升變速效果。');
     } else if (type === 'Cutter') {
-      parts.push('Small wrist-side pressure at release creates the cut movement.');
+      parts.push('出手時維持輕微手套側壓力，建立卡特球位移。');
     } else if (type === 'Sinker') {
-      parts.push('Drive your fingers over the top to generate downward action.');
+      parts.push('讓手指從球上方完整通過，製造向下位移。');
     }
   }
 
   return parts.length > 0
     ? parts.slice(0, 2).join(' ')
-    : 'Keep working on consistency and mechanics.';
+    : '持續練習出手一致性與投球動作。';
 }
 
 export interface TypeStat {
   type: string;
   count: number;
-  avgMph: string | null;
+  avgKmh: number | null;
   color: string;
 }
 
@@ -72,8 +81,8 @@ export function buildTypeStats(records: PitchResult[]): TypeStat[] {
     .map(([type, d]) => ({
       type,
       count: d.count,
-      avgMph: d.speedsKmh.length
-        ? ((d.speedsKmh.reduce((a, b) => a + b, 0) / d.speedsKmh.length) * KMH_TO_MPH).toFixed(1)
+      avgKmh: d.speedsKmh.length
+        ? d.speedsKmh.reduce((a, b) => a + b, 0) / d.speedsKmh.length
         : null,
       color: pitchColor(type),
     }));
@@ -100,16 +109,15 @@ export function toStrikeZonePitches(records: PitchResult[]) {
     });
 }
 
-export function generateSessionSummary(records: PitchResult[]): string {
+export function generateSessionSummary(records: PitchResult[], speedUnit: SpeedUnit = 'mph'): string {
   const speeds = records
     .map(getSpeedKmh)
-    .filter((v): v is number => v !== null)
-    .map((kmh) => kmh * KMH_TO_MPH);
+    .filter((v): v is number => v !== null);
 
-  const avgMph = speeds.length
-    ? (speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1)
+  const avgKmh = speeds.length
+    ? speeds.reduce((a, b) => a + b, 0) / speeds.length
     : null;
-  const maxMph = speeds.length ? Math.max(...speeds).toFixed(1) : null;
+  const maxKmh = speeds.length ? Math.max(...speeds) : null;
 
   const typeCounts: Record<string, number> = {};
   records.forEach((r) => {
@@ -119,18 +127,21 @@ export function generateSessionSummary(records: PitchResult[]): string {
   const topType = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0];
 
   const lines: string[] = [
-    `This session: ${records.length} pitch${records.length !== 1 ? 'es' : ''}.`,
-    avgMph ? `Average velocity ${avgMph} mph, peak ${maxMph} mph.` : null,
-    topType ? `Primary pitch: ${topType[0]} (${topType[1]} pitches).` : null,
+    `本次練習共 ${records.length} 球。`,
+    avgKmh != null && maxKmh != null
+      ? `平均球速 ${formatSpeed(avgKmh, speedUnit)} ${speedUnitLabel(speedUnit)}，最高 ${formatSpeed(maxKmh, speedUnit)} ${speedUnitLabel(speedUnit)}。`
+      : null,
+    topType ? `主要球種為${pitchTypeLabel(topType[0])}，共 ${topType[1]} 球。` : null,
   ].filter((v): v is string => v !== null);
 
-  if (avgMph !== null) {
-    if (parseFloat(avgMph) < 50) {
-      lines.push('Work on arm strength and mechanics to build up velocity.');
-    } else if (parseFloat(avgMph) < 65) {
-      lines.push('Decent velocity for amateur competition. Focus on location and movement.');
+  if (avgKmh !== null) {
+    const avgMph = avgKmh * KMH_TO_MPH;
+    if (avgMph < 50) {
+      lines.push('下一次練習可先維持動作完整，再逐步提升球速。');
+    } else if (avgMph < 65) {
+      lines.push('球速已有基礎，建議把重點放在落點與球路位移的一致性。');
     } else {
-      lines.push('Good velocity output. Continue working on command and pitch variety.');
+      lines.push('球速輸出良好，可繼續加強控球與球種搭配。');
     }
   }
 

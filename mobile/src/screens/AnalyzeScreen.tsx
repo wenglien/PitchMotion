@@ -67,7 +67,7 @@ function applyAbsHeightToManualZone(
 export default function AnalyzeScreen() {
   const { width } = useWindowDimensions();
   const { settings } = useSettings();
-  const { setResult, addPitch, setAnalysisLogs } = useResult();
+  const { completeAnalysis } = useResult();
   const { analyze: analyzeOffline } = useOfflineAnalysis();
   const navigation = useNavigation<any>();
 
@@ -199,20 +199,16 @@ export default function AnalyzeScreen() {
           strikeZone: effectiveStrikeZone,
         },
         {
-          onStage: (stageId) => {
+          onProgress: ({ stageId, message, pct }) => {
             setCurrentStage(stageId);
-          },
-          onMessage: (msg) => {
             setStageMessages((prev) => {
               const last = prev[prev.length - 1];
-              if (last === msg) return prev;
-              return [...prev.slice(-20), msg];
+              if (last === message) return prev;
+              return [...prev.slice(-20), message];
             });
-            const newEntry = { msg, isError: false };
+            const newEntry = { msg: message, isError: false };
             rawLogsRef.current = [...rawLogsRef.current.slice(-200), newEntry];
             setRawLogs(rawLogsRef.current);
-          },
-          onProgress: (pct) => {
             setUploadPct(pct);
           },
         },
@@ -221,9 +217,7 @@ export default function AnalyzeScreen() {
       setCurrentStage('done');
       setStatusMsg('分析完成！');
       setStatusType('success');
-      setAnalysisLogs(rawLogsRef.current);
-      setResult(result);
-      addPitch(result);
+      completeAnalysis(result, rawLogsRef.current);
       navigation.navigate('Result');
     } catch (err: any) {
       if (isCancellation(err)) {
