@@ -155,11 +155,6 @@ export interface SessionPitch {
   plate_y_norm: number | null;
   pitch_type: string | null;
   speed_kmh: number | null;
-  // Measured break (cm) — used by StrikeZone to draw a Statcast-style trajectory
-  // shape derived from real data instead of a generic Bezier per pitch.
-  horizontal_break_cm?: number | null;
-  induced_vertical_break_cm?: number | null;
-  trajectory_points_norm?: TrajectoryPoint[];
 }
 
 export interface Session {

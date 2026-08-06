@@ -6,7 +6,7 @@ import TrajectoryVideoCompare from '../components/trajectory/TrajectoryVideoComp
 import { PitchResult } from '../types';
 import { Colors, FontSize, Layout, Radius, Shadows, Spacing, Surfaces } from '../theme';
 import { formatSpeed, pitchColor, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
-import { buildTrajectory3DModel } from '../utils/trajectory3d';
+import { buildPitchReplayModel } from '../utils/pitchReplay';
 import { useSettings } from '../context/SettingsContext';
 
 type RouteParams = {
@@ -23,16 +23,16 @@ export default function TrajectorySimulationScreen() {
   const { settings } = useSettings();
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const [showComparison, setShowComparison] = useState(!!comparePitch);
-  const model = useMemo(() => buildTrajectory3DModel(pitch), [pitch]);
-  const comparisonModel = useMemo(() => comparePitch ? buildTrajectory3DModel(comparePitch) : null, [comparePitch]);
+  const model = useMemo(() => buildPitchReplayModel(pitch), [pitch]);
+  const comparisonModel = useMemo(() => comparePitch ? buildPitchReplayModel(comparePitch) : null, [comparePitch]);
   const si = pitch.speed_info || {};
   const primaryKmh = si.release_speed_kmh ?? si.initial_speed_kmh ?? null;
   const unitLabel = speedUnitLabel(settings.speedUnit);
   const primarySpeed = primaryKmh != null ? formatSpeed(primaryKmh, settings.speedUnit) : null;
   const type = si.pitch_type && si.pitch_type !== 'Unknown' ? si.pitch_type : 'Unknown';
   const color = type !== 'Unknown' ? pitchColor(type) : Colors.accent;
-  const syntheticPct = model.syntheticRatio != null ? Math.round(model.syntheticRatio * 100) : null;
-  const duration = model.durationS ?? si.flight_time_s ?? null;
+  const syntheticPct = Math.round(model.estimatedRatio * 100);
+  const duration = model.durationS;
 
   const stats = [
     { label: '球速', value: primarySpeed ?? '-', unit: unitLabel },

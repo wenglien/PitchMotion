@@ -95,7 +95,7 @@ final class BallSpeedCalculator {
         lastBallTimeS: Double?,
         ballSizePreSeconds: Double? = nil,
         preDetectInfo: inout (sec: Double, source: String)?
-    ) -> (time: Double, source: String) {
+    ) -> (time: Double, source: String, clamped: Bool) {
         var rawTime: Double?
         var source = "point_count"
 
@@ -134,7 +134,8 @@ final class BallSpeedCalculator {
         }
 
         let time0 = rawTime ?? MIN_FLIGHT_TIME_SEC
-        return (clampFlightTime(time0, distance: effectiveDistance), source)
+        let result = clampFlightTime(time0, distance: effectiveDistance)
+        return (result.time, source, result.clamped)
     }
 
     private func shouldPreferEndpointTime(ttcTotalTime: Double, endpointTime: Double) -> Bool {
@@ -143,7 +144,7 @@ final class BallSpeedCalculator {
         return ttcTotalTime + tolerance < endpointTime
     }
 
-    private func clampFlightTime(_ raw: Double, distance: Double?) -> Double {
+    private func clampFlightTime(_ raw: Double, distance: Double?) -> (time: Double, clamped: Bool) {
         var time = max(raw, MIN_FLIGHT_TIME_SEC)
         if let dist = distance {
             let maxFlightTime = dist / MIN_REASONABLE_SPEED_MS
@@ -151,7 +152,7 @@ final class BallSpeedCalculator {
             if time > maxFlightTime { time = maxFlightTime }
             else if time < minFlightTime { time = minFlightTime }
         }
-        return time
+        return (time, time != raw)
     }
 
     // MARK: - Time-to-Contact (TTC) Estimation
@@ -357,6 +358,7 @@ final class BallSpeedCalculator {
         )
         let totalTime: Double
         let flightTimeSource: String
+        let flightTimeClamped: Bool
         let ttcTotalTime: Double?
         var resolvedTtcStatus = ttcStatus
         if let ttc = ttcTime {
@@ -368,20 +370,22 @@ final class BallSpeedCalculator {
                 ballSizePreSeconds: ballSizePreSeconds
             )
             let rawTime = ttc + preSeconds
-            let clampedTtcTime = clampFlightTime(rawTime, distance: distance)
-            ttcTotalTime = clampedTtcTime
+            let clampedTtc = clampFlightTime(rawTime, distance: distance)
+            ttcTotalTime = clampedTtc.time
 
             if endpointEstimate.source != "point_count",
-               shouldPreferEndpointTime(ttcTotalTime: clampedTtcTime, endpointTime: endpointEstimate.time) {
+               shouldPreferEndpointTime(ttcTotalTime: clampedTtc.time, endpointTime: endpointEstimate.time) {
                 totalTime = endpointEstimate.time
                 flightTimeSource = endpointEstimate.source
+                flightTimeClamped = endpointEstimate.clamped
                 preDetectInfo = endpointPreDetectInfo
                 resolvedTtcStatus = "rejected_short_vs_endpoint"
                 NSLog("[BallSpeedCalculator] Rejecting TTC: ttcTotal=%.3fs endpoint=%.3fs source=%@",
-                      clampedTtcTime, endpointEstimate.time, endpointEstimate.source)
+                      clampedTtc.time, endpointEstimate.time, endpointEstimate.source)
             } else {
-                totalTime = clampedTtcTime
+                totalTime = clampedTtc.time
                 flightTimeSource = "ttc"
+                flightTimeClamped = clampedTtc.clamped
                 preDetectInfo = (preSeconds, preSource)
                 NSLog("[BallSpeedCalculator] Using TTC: %.3fs + pre=%.3fs (%@) → total=%.3fs",
                       ttc, preSeconds, preSource, totalTime)
@@ -390,6 +394,7 @@ final class BallSpeedCalculator {
             ttcTotalTime = nil
             totalTime = endpointEstimate.time
             flightTimeSource = endpointEstimate.source
+            flightTimeClamped = endpointEstimate.clamped
             preDetectInfo = endpointPreDetectInfo
         }
 
@@ -404,7 +409,7 @@ final class BallSpeedCalculator {
         var releaseSpeedMs = (exp(k * distance) - 1.0) / (k * totalTime)
         var releaseSpeedKmh = releaseSpeedMs * MS_TO_KMH
 
-        var physicsClamped = false
+        var physicsClamped = flightTimeClamped
         if releaseSpeedKmh > MAX_REASONABLE_SPEED_KMH {
             releaseSpeedKmh = MAX_REASONABLE_SPEED_KMH
             releaseSpeedMs = releaseSpeedKmh / MS_TO_KMH

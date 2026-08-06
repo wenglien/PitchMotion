@@ -6,38 +6,21 @@ type ProjectedScene = ReturnType<typeof import('../../utils/trajectoryProjection
 
 interface Props {
   scene: ProjectedScene;
+  challenge?: boolean;
 }
 
-function TrajectorySceneStatic({ scene }: Props) {
+function TrajectorySceneStatic({ scene, challenge = false }: Props) {
   return (
     <>
-      <Polygon
-        points={polygonPoints(scene.lane)}
-        fill="url(#groundGradient)"
-        stroke="#1e3a5f"
-        strokeWidth={1.2}
-      />
+      {!challenge ? (
+        <>
+          <Polygon points={polygonPoints(scene.lane)} fill="url(#groundGradient)" stroke="#1e3a5f" strokeWidth={1.2} />
+          <Line x1={scene.laneNearLeft.x} y1={scene.laneNearLeft.y} x2={scene.laneFarLeft.x} y2={scene.laneFarLeft.y} stroke="#38bdf8" strokeWidth={1.2} opacity={0.24} />
+          <Line x1={scene.laneNearRight.x} y1={scene.laneNearRight.y} x2={scene.laneFarRight.x} y2={scene.laneFarRight.y} stroke="#38bdf8" strokeWidth={1.2} opacity={0.24} />
+        </>
+      ) : null}
 
-      <Line
-        x1={scene.laneNearLeft.x}
-        y1={scene.laneNearLeft.y}
-        x2={scene.laneFarLeft.x}
-        y2={scene.laneFarLeft.y}
-        stroke="#38bdf8"
-        strokeWidth={1.2}
-        opacity={0.24}
-      />
-      <Line
-        x1={scene.laneNearRight.x}
-        y1={scene.laneNearRight.y}
-        x2={scene.laneFarRight.x}
-        y2={scene.laneFarRight.y}
-        stroke="#38bdf8"
-        strokeWidth={1.2}
-        opacity={0.24}
-      />
-
-      {scene.xGrid.map((line) => (
+      {!challenge && scene.xGrid.map((line) => (
         <Line
           key={`xgrid-${line.x}`}
           x1={line.near.x}
@@ -51,7 +34,7 @@ function TrajectorySceneStatic({ scene }: Props) {
         />
       ))}
 
-      {scene.zTicks.map((tick) => (
+      {!challenge && scene.zTicks.map((tick) => (
         <G key={`ztick-${tick.ratio}`}>
           <Line
             x1={tick.left.x}
@@ -68,38 +51,44 @@ function TrajectorySceneStatic({ scene }: Props) {
         </G>
       ))}
 
-      <Ellipse
-        cx={scene.moundPt.x}
-        cy={scene.moundPt.y + 4}
-        rx={26 * scene.moundPt.scale}
-        ry={10 * scene.moundPt.scale}
-        fill="#475569"
-        opacity={0.6}
-      />
-      <Circle cx={scene.moundPt.x} cy={scene.moundPt.y - 4} r={7 * scene.moundPt.scale} fill="#94a3b8" opacity={0.5} />
-      <SvgText x={scene.moundPt.x} y={scene.moundPt.y - 18} fill="#94a3b8" fontSize={11} fontWeight="700" textAnchor="middle">
-        投手端
-      </SvgText>
+      {!challenge ? (
+        <>
+          <Ellipse
+            cx={scene.moundPt.x}
+            cy={scene.moundPt.y + 4}
+            rx={26 * scene.moundPt.scale}
+            ry={10 * scene.moundPt.scale}
+            fill="#475569"
+            opacity={0.6}
+          />
+          <Circle cx={scene.moundPt.x} cy={scene.moundPt.y - 4} r={7 * scene.moundPt.scale} fill="#94a3b8" opacity={0.5} />
+          <SvgText x={scene.moundPt.x} y={scene.moundPt.y - 18} fill="#94a3b8" fontSize={11} fontWeight="700" textAnchor="middle">
+            投手端
+          </SvgText>
+        </>
+      ) : null}
 
       <Polygon
         points={polygonPoints(scene.homePlate)}
-        fill="#e2e8f0"
-        opacity={0.94}
-        stroke="#f8fafc"
-        strokeWidth={1}
+        fill="#f8fafc"
+        opacity={challenge ? 0.78 : 0.94}
+        stroke="#fff"
+        strokeWidth={challenge ? 1.4 : 1}
       />
-      <SvgText x={scene.platePt.x} y={scene.platePt.y + 22} fill="#cbd5e1" fontSize={11} fontWeight="700" textAnchor="middle">
-        本壘板
-      </SvgText>
+      {!challenge ? (
+        <SvgText x={scene.platePt.x} y={scene.platePt.y + 22} fill="#cbd5e1" fontSize={11} fontWeight="700" textAnchor="middle">
+          本壘板
+        </SvgText>
+      ) : null}
 
       <Polygon
         points={polygonPoints(scene.strikeZone)}
         fill="url(#zoneGradient)"
-        stroke="#38bdf8"
-        strokeWidth={2}
-        opacity={0.92}
+        stroke={challenge ? '#f8fafc' : '#38bdf8'}
+        strokeWidth={challenge ? 1.4 : 2}
+        opacity={challenge ? 0.72 : 0.92}
       />
-      {scene.zoneHLines.map((line, index) => (
+      {!challenge && scene.zoneHLines.map((line, index) => (
         <Line
           key={`zone-h-${index}`}
           x1={line.left.x}
@@ -111,7 +100,7 @@ function TrajectorySceneStatic({ scene }: Props) {
           opacity={0.36}
         />
       ))}
-      {scene.zoneVLines.map((line, index) => (
+      {!challenge && scene.zoneVLines.map((line, index) => (
         <Line
           key={`zone-v-${index}`}
           x1={line.bottom.x}

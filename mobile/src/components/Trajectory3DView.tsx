@@ -1,34 +1,24 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { useIsFocused } from '@react-navigation/native';
 import Svg, { Circle, Defs, G, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import { Colors, Radius, Spacing } from '../theme';
 import { useTrajectoryCamera } from '../hooks/useTrajectoryCamera';
+import { usePitchReplayClock } from '../hooks/usePitchReplayClock';
 import { useTrajectoryProjection } from '../hooks/useTrajectoryProjection';
-import { Trajectory3DModel } from '../utils/trajectory3d';
+import { PitchReplayModel } from '../utils/pitchReplay';
 import { VIEW_H, VIEW_PRESETS, VIEW_W } from '../utils/trajectoryProjection';
 import TrajectorySceneDynamic from './trajectory/TrajectorySceneDynamic';
 import TrajectorySceneStatic from './trajectory/TrajectorySceneStatic';
 
-const MIN_ANIM_MS = 700;
-const MAX_ANIM_MS = 2800;
-const DEFAULT_ANIM_MS = 1450;
-
 interface Props {
-  model: Trajectory3DModel;
+  model: PitchReplayModel;
   pitchColor?: string;
-  comparisonModel?: Trajectory3DModel | null;
+  comparisonModel?: PitchReplayModel | null;
   comparisonColor?: string;
   comparisonLabel?: string;
   onGestureActiveChange?: (active: boolean) => void;
-}
-
-function animDurationMs(model: Trajectory3DModel) {
-  if (model.durationS != null && model.durationS > 0) {
-    return Math.round(Math.min(MAX_ANIM_MS, Math.max(MIN_ANIM_MS, model.durationS * 1000)));
-  }
-  return DEFAULT_ANIM_MS;
 }
 
 export default function Trajectory3DView({
@@ -40,12 +30,6 @@ export default function Trajectory3DView({
   onGestureActiveChange,
 }: Props) {
   const isFocused = useIsFocused();
-  const [playing, setPlaying] = useState(true);
-  const [progress, setProgress] = useState(0);
-  const rafRef = useRef<number | null>(null);
-  const startedAtRef = useRef(Date.now());
-  const pausedAtRef = useRef(0);
-  const animMs = animDurationMs(model);
 
   const {
     camera,
@@ -56,66 +40,26 @@ export default function Trajectory3DView({
     adjustZoom,
     resetView,
   } = useTrajectoryCamera({ onGestureActiveChange });
+  const { playing, progress, rate, setRate, replay, toggle } = usePitchReplayClock(
+    model.durationS,
+    isFocused && !gesturing,
+  );
 
   const {
     scene,
-    path,
-    shadowPath,
-    actualPath,
-    trajectorySegments,
+    timeline,
     projected,
     shadowProjected,
     landingProjected,
     landingShadow,
   } = useTrajectoryProjection(model, camera);
   const comparisonProjection = useTrajectoryProjection(comparisonModel ?? model, camera);
-  const curvePoints = model.smoothPoints?.length ? model.smoothPoints : model.points;
+  const curvePoints = model.points;
   const releaseProjected = projected[0] ?? null;
   const apexIndex = curvePoints.reduce((best, point, index) => (
     !curvePoints[best] || point.y > curvePoints[best].y ? index : best
   ), 0);
   const apexProjected = projected[apexIndex] ?? null;
-
-  useEffect(() => {
-    if (!playing || !isFocused || gesturing) return;
-    let cancelled = false;
-    startedAtRef.current = Date.now() - pausedAtRef.current;
-
-    const tick = () => {
-      if (cancelled) return;
-      const elapsed = Date.now() - startedAtRef.current;
-      const next = Math.min(1, elapsed / animMs);
-      setProgress(next);
-      pausedAtRef.current = elapsed;
-      if (next < 1) {
-        rafRef.current = requestAnimationFrame(tick);
-      } else {
-        setPlaying(false);
-      }
-    };
-
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      cancelled = true;
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    };
-  }, [playing, isFocused, gesturing, animMs]);
-
-  const toggle = () => {
-    if (progress >= 1) {
-      pausedAtRef.current = 0;
-      setProgress(0);
-      setPlaying(true);
-      return;
-    }
-    setPlaying((value) => !value);
-  };
-
-  const replay = () => {
-    pausedAtRef.current = 0;
-    setProgress(0);
-    setPlaying(true);
-  };
 
   return (
     <View style={styles.wrap}>
@@ -146,7 +90,6 @@ export default function Trajectory3DView({
                 d={comparisonProjection.path}
                 stroke={comparisonColor}
                 strokeWidth={4}
-                strokeDasharray="8 7"
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 fill="none"
@@ -169,7 +112,7 @@ export default function Trajectory3DView({
               ) : null}
               {landingProjected ? (
                 <>
-                  <Circle cx={landingProjected.x} cy={landingProjected.y} r={4} fill="none" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="3 2" />
+                  <Circle cx={landingProjected.x} cy={landingProjected.y} r={4} fill="none" stroke="#94a3b8" strokeWidth={1.5} />
                   <SvgText x={landingProjected.x + 8} y={landingProjected.y + 13} fill="#cbd5e1" fontSize={9} fontWeight="800">本壘板</SvgText>
                 </>
               ) : null}
@@ -178,10 +121,7 @@ export default function Trajectory3DView({
             <TrajectorySceneDynamic
               pitchColor={pitchColor}
               progress={progress}
-              path={path}
-              shadowPath={shadowPath}
-              actualPath={actualPath}
-              trajectorySegments={trajectorySegments}
+              timeline={timeline}
               projected={projected}
               shadowProjected={shadowProjected}
               landingProjected={landingProjected}
@@ -214,6 +154,14 @@ export default function Trajectory3DView({
         </TouchableOpacity>
         <TouchableOpacity style={styles.secondaryBtn} onPress={replay} accessibilityRole="button">
           <Text style={styles.secondaryBtnText}>從頭播放</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.secondaryBtn}
+          onPress={() => setRate(rate === 0.5 ? 1 : 0.5)}
+          accessibilityRole="button"
+          accessibilityLabel={`目前播放速度 ${rate} 倍`}
+        >
+          <Text style={styles.secondaryBtnText}>{rate}×</Text>
         </TouchableOpacity>
       </View>
 
@@ -252,13 +200,12 @@ export default function Trajectory3DView({
         {comparisonModel && (
           <View style={styles.legendItem}>
             <View style={[styles.legendSwatch, { backgroundColor: comparisonColor }]} />
-            <Text style={styles.legendText}>{comparisonLabel}（虛線）</Text>
+            <Text style={styles.legendText}>{comparisonLabel}</Text>
           </View>
         )}
       </View>
       <View style={styles.legendRow}>
-        <Text style={styles.legendText}>實線：高信心軌跡</Text>
-        <Text style={styles.legendText}>虛線：低信心/補點</Text>
+        <Text style={styles.legendText}>{model.isEstimated ? '部分估算 · 實線顯示' : '實測軌跡'}</Text>
         <Text style={styles.legendText}>
           {model.isStrike === true ? '好球' : model.isStrike === false ? '壞球' : '落點'}標記
         </Text>

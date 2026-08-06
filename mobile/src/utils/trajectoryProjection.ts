@@ -1,5 +1,5 @@
-import { StrikeZoneGeometry } from './trajectory3d';
-import { TrajectoryWorldPoint } from '../types';
+import type { StrikeZoneGeometry } from './pitchReplay';
+import type { TrajectoryWorldPoint } from '../types';
 
 export const VIEW_W = 340;
 export const VIEW_H = 430;
@@ -11,7 +11,7 @@ export const CAM_DIST = 14;
 export const BASE_F = FOCAL / CAM_DIST;
 export const HALF_DEPTH = 3.6;
 export const LAT_SCALE = 1.7;
-export const HEIGHT_SCALE = 1.5;
+export const HEIGHT_SCALE = 1.75;
 export const PIVOT_HEIGHT_M = 1.0;
 export const LANE_HALF_M = 0.85;
 
@@ -147,22 +147,38 @@ export function projectPoints(
 
 export function pathFrom(points: ScreenPoint[]) {
   if (!points.length) return '';
-  return points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-    .join(' ');
+  if (points.length === 1) return `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+  const commands = [`M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`];
+  for (let index = 1; index < points.length - 1; index++) {
+    const point = points[index];
+    const next = points[index + 1];
+    commands.push(
+      `Q ${point.x.toFixed(1)} ${point.y.toFixed(1)} ${((point.x + next.x) / 2).toFixed(1)} ${((point.y + next.y) / 2).toFixed(1)}`,
+    );
+  }
+  const last = points[points.length - 1];
+  commands.push(`Q ${last.x.toFixed(1)} ${last.y.toFixed(1)} ${last.x.toFixed(1)} ${last.y.toFixed(1)}`);
+  return commands.join(' ');
 }
 
 export function polygonPoints(points: ScreenPoint[]) {
   return points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
 }
 
-export function sampleAtProgress(points: ScreenPoint[], progress: number): ScreenPoint {
+export function sampleAtProgress(
+  points: ScreenPoint[],
+  timeline: Array<{ t: number }>,
+  progress: number,
+): ScreenPoint {
   if (points.length === 0) return { x: CENTER_X, y: CENTER_Y, depth: 0, scale: 1 };
   if (points.length === 1) return points[0];
-  const raw = clamp(progress, 0, 1) * (points.length - 1);
-  const i = Math.floor(raw);
-  const next = Math.min(points.length - 1, i + 1);
-  const local = raw - i;
+  const target = clamp(progress, 0, 1);
+  let next = timeline.findIndex((point) => point.t >= target);
+  if (next <= 0) return points[0];
+  if (next < 0) return points[points.length - 1];
+  const i = next - 1;
+  const span = timeline[next].t - timeline[i].t;
+  const local = span > 0 ? (target - timeline[i].t) / span : 0;
   const a = points[i];
   const b = points[next];
   return {
@@ -173,36 +189,16 @@ export function sampleAtProgress(points: ScreenPoint[], progress: number): Scree
   };
 }
 
-export function buildTrajectorySegments(
-  projected: ScreenPoint[],
-  curvePoints: Array<{ confidence?: number; is_synthetic?: boolean }>,
-  maxSegments = 20,
+export function pathUntilProgress(
+  points: ScreenPoint[],
+  timeline: Array<{ t: number }>,
+  progress: number,
 ) {
-  const segments: Array<{ d: string; width: number; opacity: number; dashed: boolean }> = [];
-  if (projected.length < 2) return segments;
-  const step = Math.max(1, Math.ceil((projected.length - 1) / maxSegments));
-  for (let i = 0; i < projected.length - 1; i += step) {
-    const end = Math.min(projected.length - 1, i + step);
-    let scaleSum = 0;
-    let count = 0;
-    let lowConf = 0;
-    let d = `M ${projected[i].x.toFixed(1)} ${projected[i].y.toFixed(1)}`;
-    for (let j = i + 1; j <= end; j++) {
-      d += ` L ${projected[j].x.toFixed(1)} ${projected[j].y.toFixed(1)}`;
-      scaleSum += projected[j].scale;
-      count += 1;
-      const conf = curvePoints[j]?.confidence ?? (curvePoints[j]?.is_synthetic ? 0.45 : 1);
-      if (conf < 0.7) lowConf += 1;
-    }
-    const scale = count ? scaleSum / count : projected[i].scale;
-    segments.push({
-      d,
-      width: 2.0 + scale * 2.2,
-      opacity: 0.42 + clamp(scale, 0.3, 1.4) * 0.4,
-      dashed: lowConf > count / 2,
-    });
-  }
-  return segments;
+  if (!points.length) return '';
+  const target = clamp(progress, 0, 1);
+  const visible = points.filter((_, index) => (timeline[index]?.t ?? 0) <= target);
+  const ball = sampleAtProgress(points, timeline, target);
+  return pathFrom([...visible, ball]);
 }
 
 export interface StaticWorldScene {

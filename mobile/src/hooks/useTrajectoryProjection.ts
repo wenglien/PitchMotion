@@ -1,10 +1,9 @@
 import { useMemo } from 'react';
-import { Trajectory3DModel } from '../utils/trajectory3d';
+import { PitchReplayModel } from '../utils/pitchReplay';
 import {
   Camera,
   buildCameraBasis,
   buildStaticWorldScene,
-  buildTrajectorySegments,
   ground,
   pathFrom,
   projectPoints,
@@ -12,9 +11,9 @@ import {
   projectWorld,
 } from '../utils/trajectoryProjection';
 
-export function useTrajectoryProjection(model: Trajectory3DModel, camera: Camera) {
+export function useTrajectoryProjection(model: PitchReplayModel, camera: Camera) {
   const distanceM = model.distanceM;
-  const curvePoints = model.smoothPoints?.length ? model.smoothPoints : model.points;
+  const curvePoints = model.points;
 
   const staticWorld = useMemo(
     () => buildStaticWorldScene(distanceM, model.strikeZone),
@@ -49,16 +48,6 @@ export function useTrajectoryProjection(model: Trajectory3DModel, camera: Camera
   const path = useMemo(() => pathFrom(projected), [projected]);
   const shadowPath = useMemo(() => pathFrom(shadowProjected), [shadowProjected]);
 
-  const trajectorySegments = useMemo(
-    () => buildTrajectorySegments(projected, curvePoints),
-    [projected, curvePoints],
-  );
-
-  const actualPath = useMemo(
-    () => pathFrom(projected.filter((_, index) => !curvePoints[index]?.is_synthetic)),
-    [curvePoints, projected],
-  );
-
   const landingProjected = useMemo(
     () => (model.landingPoint ? projectWorld(model.landingPoint, distanceM, cameraBasis) : null),
     [model.landingPoint, distanceM, cameraBasis],
@@ -75,8 +64,7 @@ export function useTrajectoryProjection(model: Trajectory3DModel, camera: Camera
     scene,
     path,
     shadowPath,
-    actualPath,
-    trajectorySegments,
+    timeline: curvePoints,
     projected,
     shadowProjected,
     landingProjected,

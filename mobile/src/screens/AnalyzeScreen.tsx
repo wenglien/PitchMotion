@@ -248,7 +248,7 @@ export default function AnalyzeScreen() {
       return;
     }
     if (!hasValidBatterHeight) {
-      setStatusMsg('請先輸入打者身高（公尺），系統會依 MLB ABS 規則計算好球帶。');
+      setStatusMsg('請先輸入打者身高（公尺），系統會依 ABS 規則計算好球帶。');
       setStatusType('error');
       return;
     }

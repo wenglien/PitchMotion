@@ -5,7 +5,7 @@ import { Colors, Spacing, Radius, FontSize, Layout, Shadows, Surfaces } from '..
 import VideoPlayer from '../components/VideoPlayer';
 import { useResult } from '../context/ResultContext';
 import { formatSpeed, pitchColor, pitchTypeLabel, shortMethod, speedUnitLabel } from '../utils/conversions';
-import StrikeZone from '../components/StrikeZone';
+import PitchReplay from '../components/PitchReplay';
 import BreakChart from '../components/BreakChart';
 import { friendlyError } from '../utils/errors';
 import SegmentedTabs from '../components/SegmentedTabs';
@@ -33,7 +33,7 @@ function resolveUriHelper(url: string | undefined): string | null {
 
 export default function ResultScreen() {
   const { width } = useWindowDimensions();
-  const { result, sessionPitches, clearPitches, analysisLogs } = useResult();
+  const { result, sessionResults, clearPitches, analysisLogs } = useResult();
   const { settings } = useSettings();
   const navigation = useNavigation<any>();
   const [showLogs, setShowLogs] = useState(false);
@@ -78,7 +78,7 @@ export default function ResultScreen() {
   const panelWidth = Math.min(width - 32, Layout.maxWidth);
   const speedFontSize = width < 380 ? 66 : 82;
 
-  // Stable identity so StrikeZone / VideoPlayer don't see new prop refs on
+  // Stable identity so replay / VideoPlayer don't see new prop refs on
   // unrelated re-renders (e.g. log toggle, tab switch).
   const overlayUrl = useMemo(
     () => resolveUriHelper(analysis.overlay_uri || analysis.overlay_url),
@@ -169,21 +169,19 @@ export default function ResultScreen() {
     },
   ];
 
-  const plateZone = si.plate_zone ?? null;
-  const zoneOverride = useMemo(
-    () => plateZone
-      ? { xMin: plateZone.x_min, xMax: plateZone.x_max, yMin: plateZone.y_min, yMax: plateZone.y_max }
-      : null,
-    [plateZone?.x_min, plateZone?.x_max, plateZone?.y_min, plateZone?.y_max],
+  const previousPitch = useMemo(
+    () => [...sessionResults].reverse().find((pitch) => pitch.job_id !== analysis.job_id) ?? null,
+    [analysis.job_id, sessionResults],
   );
 
   const handleOpenTrajectory = useCallback(() => {
     if (!result) return;
     navigation.navigate('TrajectorySimulation', {
       pitch: result,
+      comparePitch: previousPitch ?? undefined,
       title: '本球 3D 軌跡',
     });
-  }, [navigation, result]);
+  }, [navigation, previousPitch, result]);
 
   const handleDownload = useCallback(async () => {
     const target = activeVideoUrl;
@@ -412,30 +410,30 @@ export default function ResultScreen() {
       </View>
 
 
-      {/* ── Strike Zone ───────────────────────────────────── */}
+      {/* ── Pitch replay ──────────────────────────────────── */}
       <View style={[styles.card, { width: panelWidth }]}>
         <View style={styles.cardHeader}>
-          <Text style={styles.cardTitle}>好球帶落點</Text>
+          <Text style={styles.cardTitle}>進壘回放</Text>
           <Text style={styles.cardSub}>
-            {batterHeight !== null ? `打者 ${batterHeight.toFixed(2)} m` : `本次練習 ${sessionPitches.length} 球`}
+            {batterHeight !== null ? `打者 ${batterHeight.toFixed(2)} m` : `本次練習 ${sessionResults.length} 球`}
           </Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.visualWrap}>
-          <StrikeZone pitches={sessionPitches} zoneOverride={zoneOverride} />
+          <PitchReplay pitch={analysis} previousPitch={previousPitch} />
         </View>
         {zoneWidthCm !== null && zoneHeightCm !== null && (
           <Text style={styles.zoneRuleText}>
-            MLB ABS：寬 {zoneWidthCm.toFixed(1)} cm，高 {zoneHeightCm.toFixed(1)} cm
+            好球帶：寬 {zoneWidthCm.toFixed(1)} cm，高 {zoneHeightCm.toFixed(1)} cm
           </Text>
         )}
-        {sessionPitches.length > 0 && (
+        {sessionResults.length > 0 && (
           <TouchableOpacity
             style={styles.clearBtn}
             onPress={() => {
               Alert.alert(
                 '清除本次投球記錄？',
-                `將從本次練習中移除 ${sessionPitches.length} 球的好球帶軌跡，但歷史紀錄仍會保留。`,
+                `將從本次練習中移除 ${sessionResults.length} 球的回放記錄，但歷史紀錄仍會保留。`,
                 [
                   { text: '取消', style: 'cancel' },
                   { text: '清除', style: 'destructive', onPress: clearPitches },

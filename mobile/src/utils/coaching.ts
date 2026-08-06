@@ -102,9 +102,6 @@ export function toStrikeZonePitches(records: PitchResult[]) {
         plate_y_norm: si.plate_y_norm ?? null,
         pitch_type: si.pitch_type || null,
         speed_kmh: getSpeedKmh(r),
-        horizontal_break_cm: si.horizontal_break_cm ?? null,
-        induced_vertical_break_cm: si.induced_vertical_break_cm ?? null,
-        trajectory_points_norm: r.trajectory_points_norm,
       };
     });
 }
