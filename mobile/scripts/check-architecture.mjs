@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { toPitchResult } from '../src/adapters/nativeAnalysis.ts';
 import { normalizePipelineProgress } from '../src/utils/pipelineStages.ts';
-import { buildChallengeCallout, buildPitchReplayModel } from '../src/utils/pitchReplay.ts';
+import { BASEBALL_RADIUS_M, buildChallengeCallout, buildPitchReplayModel } from '../src/utils/pitchReplay.ts';
 import {
   buildCameraBasis,
   buildStaticWorldScene,
@@ -64,6 +64,23 @@ const otherTypeReplay = buildPitchReplayModel({
 });
 assert.deepEqual(replay.points, otherTypeReplay.points);
 
+const jaggedReplay = buildPitchReplayModel({
+  job_id: 'jagged',
+  speed_info: { plate_x_norm: 0.55, plate_y_norm: 0.72, release_time_s: 0, catch_time_s: 0.5 },
+  trajectory_samples: [
+    { frame_index: 0, t_s: 0, x_norm: 0.5, y_norm: 0.36, is_synthetic: false },
+    { frame_index: 1, t_s: 0.1, x_norm: 0.7, y_norm: 0.5, is_synthetic: false },
+    { frame_index: 2, t_s: 0.2, x_norm: 0.3, y_norm: 0.42, is_synthetic: false },
+    { frame_index: 3, t_s: 0.3, x_norm: 0.68, y_norm: 0.65, is_synthetic: false },
+    { frame_index: 4, t_s: 0.4, x_norm: 0.35, y_norm: 0.58, is_synthetic: false },
+    { frame_index: 5, t_s: 0.5, x_norm: 0.55, y_norm: 0.72, is_synthetic: false },
+  ],
+});
+const roughness = (axis) => jaggedReplay.points.slice(1, -1).reduce((sum, point, index) => (
+  sum + Math.abs(jaggedReplay.points[index][axis] - 2 * point[axis] + jaggedReplay.points[index + 2][axis])
+), 0);
+assert.ok(roughness('x') < 0.3 && roughness('y') < 0.3);
+
 const landingOnly = buildPitchReplayModel({
   job_id: 'landing-only',
   speed_info: { plate_x_norm: 0.5, plate_y_norm: 0.7, flight_time_s: 0.5 },
@@ -73,7 +90,20 @@ assert.equal(landingOnly.points.length, 24);
 assert.equal(landingOnly.isEstimated, true);
 const challengeCallout = buildChallengeCallout(landingOnly);
 assert.equal(challengeCallout.point.z, 0);
-assert.ok(challengeCallout.clearanceCm >= 0);
+assert.equal(challengeCallout.inside, true);
+
+const outsideReplay = buildPitchReplayModel({
+  job_id: 'outside-zone',
+  speed_info: { plate_x_norm: 0.95, plate_y_norm: 0.7, flight_time_s: 0.5 },
+});
+const outsideCallout = buildChallengeCallout(outsideReplay);
+assert.equal(outsideCallout.inside, false);
+assert.ok(outsideCallout.clearanceCm > 0);
+const outsideCenterClearanceM = Math.hypot(
+  outsideCallout.point.x - outsideReplay.landingPoint.x,
+  outsideCallout.point.y - outsideReplay.landingPoint.y,
+);
+assert.ok(Math.abs(outsideCallout.clearanceCm - (outsideCenterClearanceM - BASEBALL_RADIUS_M) * 100) < 1e-9);
 
 const challengeScene = projectStaticScene(
   buildStaticWorldScene(landingOnly.distanceM, landingOnly.strikeZone),

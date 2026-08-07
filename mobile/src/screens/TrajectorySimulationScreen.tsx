@@ -54,9 +54,9 @@ export default function TrajectorySimulationScreen() {
     >
       <View style={styles.hero}>
         <View style={styles.heroText}>
-          <Text style={styles.eyebrow}>軌跡模擬</Text>
-          <Text style={styles.title}>3D 軌跡模擬</Text>
-          <Text style={styles.subtitle}>投手丘到本壘板的近似世界座標重建</Text>
+          <Text style={styles.eyebrow}>進壘回放</Text>
+          <Text style={styles.title}>3D 進壘軌跡</Text>
+          <Text style={styles.subtitle}>與進壘動畫共用同一份實測／補點軌跡</Text>
         </View>
         {type !== 'Unknown' && (
           <View style={[styles.typePill, { backgroundColor: color }]}>
@@ -127,7 +127,7 @@ export default function TrajectorySimulationScreen() {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>模擬資料</Text>
+        <Text style={styles.cardTitle}>軌跡資料</Text>
         <Text style={styles.cardSub}>以偵測軌跡、好球帶比例尺與投打距離重建</Text>
         <View style={styles.statGrid}>
           {stats.map((item) => (

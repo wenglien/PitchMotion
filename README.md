@@ -16,7 +16,8 @@ SpeedGun 是一款 **iOS 離線棒球投球分析 App**。影片會在裝置端�
 | 軌跡補點 | 支援 | YOLO 中途漏偵時會補出連續軌跡，避免 overlay 斷線 |
 | 角度容錯 | 支援 | 強化偏斜拍攝時的追蹤選球與 plate/catcher 估計 |
 | MLB ABS 好球帶 | 支援 | 依打者身高計算，亦支援外部 2D / 3D 相機校正資料 |
-| 好球帶落點 | 支援 | 2D 平面顯示，軌跡線保留 3D 視覺厚度與光影 |
+| MLB ABS 進壘回放 | 支援 | 實測／補點軌跡、近框旋轉、壞球邊緣距離與重新播放 |
+| 3D 進壘軌跡 | 支援 | 與進壘回放共用軌跡模型，可旋轉、縮放及比較上一球 |
 | 位移量 Break | 支援 | 顯示水平位移、Induced Vertical Break、可信度與來源 |
 | 分析品質 | 支援 | 結果頁顯示偵測覆蓋率、實測軌跡比例、落點與位移信心 |
 | Overlay 影片 | 支援 | 原影片上疊加軌跡、球速與好球帶資訊 |
@@ -56,6 +57,8 @@ speedgun-mobile/
 │   │   │   └── SettingsScreen.tsx          # 設定
 │   │   ├── components/
 │   │   │   ├── StrikeZone.tsx              # 好球帶落點與 3D 視覺軌跡線
+│   │   │   ├── PitchReplay.tsx              # MLB ABS 風格進壘動畫
+│   │   │   ├── Trajectory3DView.tsx         # 可操作的 3D 進壘軌跡
 │   │   │   ├── BreakChart.tsx              # MLB 風格 X/Y 位移圖
 │   │   │   ├── PitchCard.tsx               # 單球資訊卡片
 │   │   │   └── AnalysisProgress.tsx        # 分析進度
@@ -77,7 +80,7 @@ speedgun-mobile/
 ### 環境需求
 
 - macOS 13+
-- Xcode 15+
+- Xcode 26+
 - Node.js 20+
 - CocoaPods
 
@@ -284,7 +287,10 @@ Break Chart 採用 MLB 風格 X/Y 顯示：
 - 新增分析品質分數。
 - 顯示偵測覆蓋率、實測軌跡比例、落點信心、位移信心。
 - 分析詳情包含補幀設定、落點來源、plate error、距離來源。
-- 好球帶動畫改為 2D 平面，軌跡線保留 3D 厚度、陰影與高光。
+- 進壘動畫採 MLB ABS 挑戰風格，球到達落點後保留，鏡頭貼近好球帶等速旋轉。
+- 壞球只顯示球體邊緣到好球帶邊緣的距離；好球不顯示距離數字。
+- 軌跡會先補點並平滑化，旋轉結束後才隱藏；支援暫停、慢速與重新播放。
+- 3D 軌跡與進壘動畫共用同一份實測／補點資料，並支援比較上一球。
 
 ---
 
@@ -317,6 +323,15 @@ xcodebuild \
   -destination 'generic/platform=iOS Simulator' \
   build
 ```
+
+### 上架前檢查
+
+```bash
+cd mobile
+npm run check:release
+```
+
+App Store 文案、審查說明與人工待辦請見 [docs/app-store-submission.md](docs/app-store-submission.md)，隱私權政策請見 [docs/privacy-policy.md](docs/privacy-policy.md)。正式上傳前仍須用 Xcode Organizer 驗證 Archive，並完成 TestFlight 實機測試。
 
 ### Shell Script 語法
 

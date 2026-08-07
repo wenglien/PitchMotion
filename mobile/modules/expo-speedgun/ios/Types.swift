@@ -270,7 +270,7 @@ struct SpeedInfo {
     var estimatedDistanceM: Double?   // non-nil when auto-estimated from pose
     var distanceSource: String?       // "manual" | "pose_estimated" | "default"
     var distanceWarning: String?      // user-facing warning when distance was auto-guessed
-    var ttcStatus: String?            // "used" | "fallback_growth" | "fallback_samples" | "fallback_slope" | "fallback_range"
+    var ttcStatus: String?            // "used" | "rejected_clamped" | "rejected_short_vs_endpoint" | "fallback_*"
     var flightTimeSource: String?     // "ttc" | "visual_endpoint" | "release_endpoint" | "point_count"
     var ttcFlightTimeS: Double?
     var visualFlightTimeS: Double?

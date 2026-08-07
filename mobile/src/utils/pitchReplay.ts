@@ -12,6 +12,8 @@ const DEFAULT_ZONE_WIDTH_M = 0.4318;
 const DEFAULT_ZONE_HEIGHT_M = 0.58;
 const DEFAULT_RELEASE_HEIGHT_M = 1.8;
 const PLATE_ZONE_CENTER_M = 0.9;
+export const PITCH_REPLAY_SCALE = 3;
+export const BASEBALL_RADIUS_M = 0.037;
 
 export interface StrikeZoneGeometry {
   halfWidthM: number;
@@ -40,11 +42,11 @@ export function buildChallengeCallout(model: PitchReplayModel) {
   const right = model.strikeZone.halfWidthM;
   const bottom = model.strikeZone.centerYM - model.strikeZone.halfHeightM;
   const top = model.strikeZone.centerYM + model.strikeZone.halfHeightM;
-  const inside = landing.x >= left && landing.x <= right && landing.y >= bottom && landing.y <= top;
+  const centerInside = landing.x >= left && landing.x <= right && landing.y >= bottom && landing.y <= top;
   let x = Math.max(left, Math.min(right, landing.x));
   let y = Math.max(bottom, Math.min(top, landing.y));
 
-  if (inside) {
+  if (centerInside) {
     const edges = [
       { x: left, y: landing.y },
       { x: right, y: landing.y },
@@ -57,9 +59,13 @@ export function buildChallengeCallout(model: PitchReplayModel) {
     )));
   }
 
+  const centerClearanceM = Math.hypot(x - landing.x, y - landing.y);
+  const inside = centerInside || centerClearanceM <= BASEBALL_RADIUS_M;
+
   return {
     point: { x, y, z: 0 },
-    clearanceCm: Math.hypot(x - landing.x, y - landing.y) * 100,
+    clearanceCm: inside ? 0 : (centerClearanceM - BASEBALL_RADIUS_M) * 100,
+    inside,
   };
 }
 
@@ -200,6 +206,22 @@ function fillFrameGaps(samples: SourceSample[]): SourceSample[] {
   return filled;
 }
 
+function smoothReplayPoints(points: TrajectoryWorldPoint[]) {
+  let smoothed = points;
+  for (let pass = 0; pass < 3; pass++) {
+    smoothed = smoothed.map((point, index, current) => (
+      index === 0 || index === current.length - 1
+        ? point
+        : {
+          ...point,
+          x: (current[index - 1].x + 2 * point.x + current[index + 1].x) / 4,
+          y: (current[index - 1].y + 2 * point.y + current[index + 1].y) / 4,
+        }
+    ));
+  }
+  return smoothed;
+}
+
 function landingOnlySamples(pitch: PitchResult, plateX: number, plateY: number, durationS: number): SourceSample[] {
   const release = normalisedRelease(pitch) ?? { x: 0.5, y: 0.36 };
   return Array.from({ length: 24 }, (_, index) => {
@@ -284,7 +306,7 @@ export function buildPitchReplayModel(pitch: PitchResult): PitchReplayModel {
   const lateralFromNorm = (xNorm: number) => ((xNorm - zoneCenterX) / zoneNormW) * zoneWidthM;
   const heightFromNorm = (yNorm: number) => PLATE_ZONE_CENTER_M + ((zoneCenterY - yNorm) / zoneNormH) * zoneHeightM;
 
-  const points = samples.map((sample, index): TrajectoryWorldPoint => {
+  let points = samples.map((sample, index): TrajectoryWorldPoint => {
     const t = progressFor(sample, index, samples, meta);
     return {
       x: lateralFromNorm(sample.x_norm),
@@ -314,6 +336,7 @@ export function buildPitchReplayModel(pitch: PitchResult): PitchReplayModel {
       is_synthetic: last.is_synthetic || landingAdjusted,
     };
   }
+  points = smoothReplayPoints(points);
 
   const estimatedCount = points.filter((point) => point.is_synthetic).length;
   const estimatedRatio = points.length ? estimatedCount / points.length : 1;

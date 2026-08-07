@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, ScrollView, TouchableOpacity,
-  KeyboardAvoidingView, Platform, StyleSheet,
+  KeyboardAvoidingView, Linking, Platform, StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, FontSize, Radius, Shadows, Spacing, Surfaces, TouchTarget } from '../theme';
@@ -21,6 +21,9 @@ const SETTINGS_TABS = [BASIC_TAB, ADVANCED_TAB];
 
 const MOUND_PRESETS = [5, 7, 14, 18.44];
 const STRIDE_PRESETS = [0, 1.5, 1.8];
+const PRIVACY_URL = 'https://github.com/wenglien/Baseball-Trajectory-Analysis/blob/main/docs/privacy-policy.md';
+const SUPPORT_URL = 'https://github.com/wenglien/Baseball-Trajectory-Analysis/issues';
+const BACKGROUND_CREDIT_URL = 'https://commons.wikimedia.org/wiki/File:FldofDrmsPtcrMound051904.jpg';
 const DEFAULT_ZONE: StrikeZoneCalibration = { xMin: 0.33, xMax: 0.67, yMin: 0.56, yMax: 0.86 };
 const DETECTION_MODES = [
   { label: '靈敏', value: '0.03', description: '弱光或球較小' },
@@ -409,8 +412,24 @@ export default function SettingsScreen() {
                 <Ionicons name="information-circle-outline" size={20} color={Colors.textMuted} />
               </View>
               <Text style={styles.aboutText}>
-                AI 棒球球速與球路分析工具，整合 YOLO 棒球偵測、姿勢估測與物理模型。
+                AI 棒球球速與球路分析工具。影片與分析資料只在裝置端處理，不會上傳伺服器。
               </Text>
+              {([
+                ['shield-checkmark-outline', '隱私權政策', PRIVACY_URL],
+                ['help-circle-outline', '支援與問題回報', SUPPORT_URL],
+                ['image-outline', '球場背景圖片授權', BACKGROUND_CREDIT_URL],
+              ] as const).map(([icon, label, url]) => (
+                <TouchableOpacity
+                  key={label}
+                  style={styles.secondaryBtn}
+                  onPress={() => Linking.openURL(url)}
+                  accessibilityRole="link"
+                  accessibilityLabel={label}
+                >
+                  <Ionicons name={icon} size={17} color={Colors.text} />
+                  <Text style={styles.secondaryBtnText}>{label}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
           </>
         )}

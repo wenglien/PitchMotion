@@ -17,10 +17,11 @@ import Svg, {
 import { PitchResult } from '../types';
 import { Colors, Radius, Spacing } from '../theme';
 import { formatSpeed, pitchColor, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
-import { buildChallengeCallout, buildPitchReplayModel } from '../utils/pitchReplay';
+import { PITCH_REPLAY_SCALE, buildChallengeCallout, buildPitchReplayModel } from '../utils/pitchReplay';
 import {
   buildCameraBasis,
   CENTER_X,
+  CENTER_Y,
   DEFAULT_CAMERA,
   lerpYaw,
   projectWorld,
@@ -32,11 +33,11 @@ import { useSettings } from '../context/SettingsContext';
 import TrajectorySceneDynamic from './trajectory/TrajectorySceneDynamic';
 import TrajectorySceneStatic from './trajectory/TrajectorySceneStatic';
 
-const POST_FLIGHT_S = 1.1;
+const CAMERA_ROTATION_S = 1.6;
+const RESULT_REVEAL_S = 1.1;
 const CHALLENGE_TRAIL = '#ec4899';
 const CHALLENGE_H = 378;
 const HOME_PLATE_ANCHOR_Y = 360;
-const FLIGHT_REPLAY_SCALE = 3;
 const BASEBALL_STITCHES = [-0.58, -0.3, 0, 0.3, 0.58];
 const STADIUM_BACKGROUND = require('../../assets/replay/mound-to-home-plate.jpg');
 
@@ -69,33 +70,51 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
     () => previousPitch ? buildPitchReplayModel(previousPitch) : null,
     [previousPitch],
   );
-  const flightDurationS = model.durationS * FLIGHT_REPLAY_SCALE;
-  const totalDurationS = flightDurationS + POST_FLIGHT_S;
+  const flightDurationS = model.durationS * PITCH_REPLAY_SCALE;
+  const totalDurationS = flightDurationS + CAMERA_ROTATION_S + RESULT_REVEAL_S;
   const clock = usePitchReplayClock(totalDurationS, isFocused);
-  const flightFraction = flightDurationS / totalDurationS;
-  const ballProgress = clamp01(clock.progress / flightFraction);
-  const resultProgress = smooth((clock.progress - flightFraction) / (1 - flightFraction));
+  const elapsedS = clock.progress * totalDurationS;
+  const ballProgress = clamp01(elapsedS / flightDurationS);
+  const cameraRotationProgress = clamp01((elapsedS - flightDurationS) / CAMERA_ROTATION_S);
+  const resultProgress = smooth((elapsedS - flightDurationS - CAMERA_ROTATION_S) / RESULT_REVEAL_S);
   const edge = useMemo(() => buildChallengeCallout(model), [model]);
 
   const camera = useMemo(() => {
-    const pitcherTurn = smooth((ballProgress - 0.58) / 0.42);
-    const orbitT = clamp01((ballProgress - 0.38) / 0.48);
-    const orbit = Math.sin(Math.PI * orbitT) * (1 - pitcherTurn);
+    const approachFocus = smooth((ballProgress - 0.72) / 0.28);
+    const zoneFocus = approachFocus * (1 - resultProgress);
+    const outside = edge && !edge.inside && model.landingPoint
+      ? { edge: edge.point, landing: model.landingPoint }
+      : null;
+    const centerClearanceM = outside
+      ? Math.hypot(outside.edge.x - outside.landing.x, outside.edge.y - outside.landing.y)
+      : 0;
+    const closeZoom = 2.05 + ballProgress * 0.2 + approachFocus * 1.6;
+    const outcomeZoom = outside ? Math.max(8, Math.min(24, 3.6 / centerClearanceM)) : 10;
     const base = {
       ...DEFAULT_CAMERA,
-      yaw: lerpYaw(-55 * orbit, 180, pitcherTurn),
-      pitch: 5 + orbit * 5 - resultProgress * 2,
-      zoom: 2.05 + ballProgress * 0.2 + resultProgress * 7.75,
+      yaw: lerpYaw(0, 180, cameraRotationProgress),
+      pitch: 5 - resultProgress * 2,
+      zoom: closeZoom + resultProgress * (outcomeZoom - closeZoom),
       panX: 0,
       panY: 0,
     };
-    const projectedPlate = projectWorld({ x: 0, y: 0, z: 0 }, model.distanceM, buildCameraBasis(base));
+    const basis = buildCameraBasis(base);
+    const projectedZone = projectWorld({ x: 0, y: model.strikeZone.centerYM, z: 0 }, model.distanceM, basis);
+    const projectedPlate = projectWorld({ x: 0, y: 0, z: 0 }, model.distanceM, basis);
+    const projectedOutcome = outside
+      ? projectWorld({
+        x: (outside.edge.x + outside.landing.x) / 2,
+        y: (outside.edge.y + outside.landing.y) / 2,
+        z: 0,
+      }, model.distanceM, basis)
+      : projectedPlate;
     return {
       ...base,
-      panX: (CENTER_X - projectedPlate.x) * pitcherTurn,
-      panY: (HOME_PLATE_ANCHOR_Y - projectedPlate.y) * pitcherTurn,
+      panX: (CENTER_X - projectedZone.x) * zoneFocus + (CENTER_X - projectedOutcome.x) * resultProgress,
+      panY: (CENTER_Y - projectedZone.y) * zoneFocus
+        + ((outside ? CENTER_Y : HOME_PLATE_ANCHOR_Y) - projectedOutcome.y) * resultProgress,
     };
-  }, [ballProgress, model, resultProgress]);
+  }, [ballProgress, cameraRotationProgress, edge, model, resultProgress]);
 
   const projection = useTrajectoryProjection(model, camera);
   const previousProjection = useTrajectoryProjection(previousModel ?? model, camera);
@@ -115,11 +134,13 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
   const measureUy = measureLength > 0 ? measureDy / measureLength : -1;
   const resultOpacity = clamp01((resultProgress - 0.25) / 0.45);
   const ballRadius = 4.5 + resultProgress * 9.5;
-  const measureStartOffset = Math.min(ballRadius * 0.92, measureLength * 0.42);
+  const measureStartOffset = ballRadius;
   const measureStartX = (landing?.x ?? 0) + measureUx * measureStartOffset;
   const measureStartY = (landing?.y ?? 0) + measureUy * measureStartOffset;
-  const measureLabelX = (measureStartX + (edgeProjected?.x ?? 0)) / 2 - measureUy * 20;
-  const measureLabelY = (measureStartY + (edgeProjected?.y ?? 0)) / 2 + measureUx * 20 + 4;
+  const measureLabelX = Math.max(34, Math.min(VIEW_W - 34,
+    (measureStartX + (edgeProjected?.x ?? 0)) / 2 - measureUy * 26));
+  const measureLabelY = Math.max(22, Math.min(CHALLENGE_H - 18,
+    (measureStartY + (edgeProjected?.y ?? 0)) / 2 + measureUx * 26 + 5));
   return (
     <View style={styles.wrap}>
       <View style={styles.hud}>
@@ -175,10 +196,11 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
           landingShadow={projection.landingShadow}
           isStrike={model.isStrike}
           showLandingResult={false}
+          showPath={cameraRotationProgress < 1}
           challenge
         />
 
-        {resultProgress > 0 && landing ? (
+        {ballProgress >= 1 && landing ? (
           <G>
             <Circle cx={landing.x + 3} cy={landing.y + 5} r={ballRadius + 2} fill="#020617" opacity={0.24} />
             <Circle cx={landing.x} cy={landing.y} r={ballRadius} fill="url(#ballFill)" stroke="#e2e8f0" strokeWidth={1.2} />
@@ -227,16 +249,19 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
           </G>
         ) : null}
 
-        {resultOpacity > 0 && landing && edgeProjected && edge ? (
+        {resultOpacity > 0 && landing && edgeProjected && edge && !edge.inside ? (
           <G opacity={resultOpacity}>
+            <Line x1={measureStartX} y1={measureStartY} x2={edgeProjected.x} y2={edgeProjected.y} stroke="#020617" strokeWidth={5} opacity={0.72} />
             <Line x1={measureStartX} y1={measureStartY} x2={edgeProjected.x} y2={edgeProjected.y} stroke="#fff" strokeWidth={2.2} />
-            <Polygon points={arrowHead(measureStartX, measureStartY, -measureUx, -measureUy)} fill="#fff" />
-            <Polygon points={arrowHead(edgeProjected.x, edgeProjected.y, measureUx, measureUy)} fill="#fff" />
+            <Polygon points={arrowHead(measureStartX, measureStartY, -measureUx, -measureUy)} fill="#fff" stroke="#020617" strokeWidth={1.2} />
+            <Polygon points={arrowHead(edgeProjected.x, edgeProjected.y, measureUx, measureUy)} fill="#fff" stroke="#020617" strokeWidth={1.2} />
             <SvgText
-              x={measureLabelX + 1}
-              y={measureLabelY + 1}
-              fill="#020617"
-              fontSize={14}
+              x={measureLabelX}
+              y={measureLabelY}
+              fill="#fff"
+              stroke="#020617"
+              strokeWidth={4}
+              fontSize={16}
               fontWeight="900"
               textAnchor="middle"
             >
@@ -246,7 +271,7 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
               x={measureLabelX}
               y={measureLabelY}
               fill="#fff"
-              fontSize={14}
+              fontSize={16}
               fontWeight="900"
               textAnchor="middle"
             >

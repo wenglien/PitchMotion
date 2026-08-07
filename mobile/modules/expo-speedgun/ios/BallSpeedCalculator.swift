@@ -341,9 +341,9 @@ final class BallSpeedCalculator {
 
         // Try TTC (optical looming), but cross-check it against the explicit
         // first-ball→endpoint timing. A single merged/blurred bbox near the
-        // glove can make area growth look too steep, producing a too-short TTC
-        // and inflated speed. Endpoint time is conservative because it is tied
-        // to audio/visual frame anchors.
+        // glove can make area growth too steep (short TTC), while weak growth
+        // produces a long TTC that collapses different pitches onto the same
+        // speed boundary. Endpoint time is tied to audio/visual frame anchors.
         let (ttcTime, ttcStatus) = estimateTTCWithStatus(frameInfos: frameInfos)
 
         var preDetectInfo: (sec: Double, source: String)? = nil
@@ -374,12 +374,16 @@ final class BallSpeedCalculator {
             ttcTotalTime = clampedTtc.time
 
             if endpointEstimate.source != "point_count",
-               shouldPreferEndpointTime(ttcTotalTime: clampedTtc.time, endpointTime: endpointEstimate.time) {
+               !endpointEstimate.clamped,
+               clampedTtc.clamped || shouldPreferEndpointTime(
+                   ttcTotalTime: clampedTtc.time,
+                   endpointTime: endpointEstimate.time
+               ) {
                 totalTime = endpointEstimate.time
                 flightTimeSource = endpointEstimate.source
                 flightTimeClamped = endpointEstimate.clamped
                 preDetectInfo = endpointPreDetectInfo
-                resolvedTtcStatus = "rejected_short_vs_endpoint"
+                resolvedTtcStatus = clampedTtc.clamped ? "rejected_clamped" : "rejected_short_vs_endpoint"
                 NSLog("[BallSpeedCalculator] Rejecting TTC: ttcTotal=%.3fs endpoint=%.3fs source=%@",
                       clampedTtc.time, endpointEstimate.time, endpointEstimate.source)
             } else {

@@ -1,14 +1,14 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { useIsFocused } from '@react-navigation/native';
-import Svg, { Circle, Defs, G, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import { Colors, Radius, Spacing } from '../theme';
 import { useTrajectoryCamera } from '../hooks/useTrajectoryCamera';
 import { usePitchReplayClock } from '../hooks/usePitchReplayClock';
 import { useTrajectoryProjection } from '../hooks/useTrajectoryProjection';
-import { PitchReplayModel } from '../utils/pitchReplay';
-import { VIEW_H, VIEW_PRESETS, VIEW_W } from '../utils/trajectoryProjection';
+import { PITCH_REPLAY_SCALE, PitchReplayModel, buildChallengeCallout } from '../utils/pitchReplay';
+import { VIEW_H, VIEW_PRESETS, VIEW_W, buildCameraBasis, projectWorld } from '../utils/trajectoryProjection';
 import TrajectorySceneDynamic from './trajectory/TrajectorySceneDynamic';
 import TrajectorySceneStatic from './trajectory/TrajectorySceneStatic';
 
@@ -41,7 +41,7 @@ export default function Trajectory3DView({
     resetView,
   } = useTrajectoryCamera({ onGestureActiveChange });
   const { playing, progress, rate, setRate, replay, toggle } = usePitchReplayClock(
-    model.durationS,
+    model.durationS * PITCH_REPLAY_SCALE,
     isFocused && !gesturing,
   );
 
@@ -54,6 +54,13 @@ export default function Trajectory3DView({
     landingShadow,
   } = useTrajectoryProjection(model, camera);
   const comparisonProjection = useTrajectoryProjection(comparisonModel ?? model, camera);
+  const challengeCallout = useMemo(() => buildChallengeCallout(model), [model]);
+  const challengeEdgeProjected = useMemo(
+    () => challengeCallout
+      ? projectWorld(challengeCallout.point, model.distanceM, buildCameraBasis(camera))
+      : null,
+    [camera, challengeCallout, model.distanceM],
+  );
   const curvePoints = model.points;
   const releaseProjected = projected[0] ?? null;
   const apexIndex = curvePoints.reduce((best, point, index) => (
@@ -128,6 +135,29 @@ export default function Trajectory3DView({
               landingShadow={landingShadow}
               isStrike={model.isStrike}
             />
+
+            {progress >= 1 && landingProjected && challengeEdgeProjected && challengeCallout && !challengeCallout.inside ? (
+              <G>
+                <Line
+                  x1={landingProjected.x}
+                  y1={landingProjected.y}
+                  x2={challengeEdgeProjected.x}
+                  y2={challengeEdgeProjected.y}
+                  stroke="#f8fafc"
+                  strokeWidth={1.8}
+                />
+                <SvgText
+                  x={(landingProjected.x + challengeEdgeProjected.x) / 2}
+                  y={(landingProjected.y + challengeEdgeProjected.y) / 2 - 6}
+                  fill="#f8fafc"
+                  fontSize={10}
+                  fontWeight="900"
+                  textAnchor="middle"
+                >
+                  {`${(challengeCallout.clearanceCm / 2.54).toFixed(1)}"`}
+                </SvgText>
+              </G>
+            ) : null}
           </Svg>
         </View>
       </GestureDetector>

@@ -17,6 +17,7 @@ interface Props {
   landingShadow: ScreenPoint | null;
   isStrike: boolean | null;
   showLandingResult?: boolean;
+  showPath?: boolean;
   challenge?: boolean;
 }
 
@@ -30,6 +31,7 @@ function TrajectorySceneDynamic({
   landingShadow,
   isStrike,
   showLandingResult = true,
+  showPath = true,
   challenge = false,
 }: Props) {
   if (!projected.length) return null;
@@ -45,10 +47,12 @@ function TrajectorySceneDynamic({
   return (
     <>
       {!challenge ? <Path d={shadowPath} stroke="#020617" strokeWidth={9} opacity={0.26} fill="none" strokeLinecap="round" strokeLinejoin="round" /> : null}
-      <G>
-        <Path d={path} stroke={pitchColor} strokeWidth={challenge ? 7 : 11} opacity={challenge ? 0.2 : 0.14} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-        <Path d={path} stroke={pitchColor} strokeWidth={challenge ? 4.5 : 4} opacity={challenge ? 1 : 0.9} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      </G>
+      {showPath ? (
+        <G>
+          <Path d={path} stroke={pitchColor} strokeWidth={challenge ? 7 : 11} opacity={challenge ? 0.2 : 0.14} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <Path d={path} stroke={pitchColor} strokeWidth={challenge ? 4.5 : 4} opacity={challenge ? 1 : 0.9} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </G>
+      ) : null}
 
       {!landed ? (
         <>
