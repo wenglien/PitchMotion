@@ -409,6 +409,33 @@ final class SORTTracker {
         let nd = dets.count, nt = trks.count
         let iouMatrix = iouBatch(dets: dets, trks: trks)
 
+        func distanceMatches(detIndices: [Int], trkIndices: [Int]) -> [(Int, Int)] {
+            var candidates: [(distance: Double, det: Int, trk: Int)] = []
+            for i in detIndices {
+                let (dx1, dy1, dx2, dy2, _) = dets[i]
+                let dcx = (dx1 + dx2) / 2, dcy = (dy1 + dy2) / 2
+                let dDiag = hypot(dx2 - dx1, dy2 - dy1)
+                for j in trkIndices {
+                    let (tx1, ty1, tx2, ty2) = trks[j]
+                    let tcx = (tx1 + tx2) / 2, tcy = (ty1 + ty2) / 2
+                    let tDiag = hypot(tx2 - tx1, ty2 - ty1)
+                    let maxDist = max(max(dDiag, tDiag) * 6.0, maxCenterDistance ?? 50.0)
+                    let distance = hypot(dcx - tcx, dcy - tcy)
+                    if distance <= maxDist { candidates.append((distance, i, j)) }
+                }
+            }
+            candidates.sort { $0.distance < $1.distance }
+            var usedDets = Set<Int>()
+            var usedTrks = Set<Int>()
+            return candidates.compactMap { candidate in
+                guard !usedDets.contains(candidate.det),
+                      !usedTrks.contains(candidate.trk) else { return nil }
+                usedDets.insert(candidate.det)
+                usedTrks.insert(candidate.trk)
+                return (candidate.det, candidate.trk)
+            }
+        }
+
         // Check if IOU-based matching is viable (any IOU > threshold)
         let maxIOU = iouMatrix.flatMap { $0 }.max() ?? 0
         var matchedIndices: [(Int, Int)]
@@ -453,54 +480,21 @@ final class SORTTracker {
                     matchedTrks.insert(t)
                 }
             }
+            let remainingDets = (0..<nd).filter { !matchedDets.contains($0) }
+            let remainingTrks = (0..<nt).filter { !matchedTrks.contains($0) }
+            for match in distanceMatches(detIndices: remainingDets, trkIndices: remainingTrks) {
+                matches.append(match)
+                matchedDets.insert(match.0)
+                matchedTrks.insert(match.1)
+            }
             let unmatchedDets = (0..<nd).filter { !matchedDets.contains($0) }
             let unmatchedTrks = (0..<nt).filter { !matchedTrks.contains($0) }
             return (matches, unmatchedDets, unmatchedTrks)
 
         } else {
-            // IOU all zero (tiny ball, angled camera, or low-fps/high-speed
-            // motion). Fall back to centre-distance matching; otherwise a ball
-            // that moved more than its own box width starts a new track every
-            // frame.
-            var distMatrix = Array(repeating: Array(repeating: Double.infinity, count: nt), count: nd)
-            for i in 0..<nd {
-                let (dx1, dy1, dx2, dy2, _) = dets[i]
-                let dcx = (dx1 + dx2) / 2, dcy = (dy1 + dy2) / 2
-                let dDiag = sqrt((dx2-dx1)*(dx2-dx1) + (dy2-dy1)*(dy2-dy1))
-                for j in 0..<nt {
-                    let (tx1, ty1, tx2, ty2) = trks[j]
-                    let tcx = (tx1 + tx2) / 2, tcy = (ty1 + ty2) / 2
-                    let tDiag = sqrt((tx2-tx1)*(tx2-tx1) + (ty2-ty1)*(ty2-ty1))
-                    let boxBasedDistance = max(dDiag, tDiag) * 6.0
-                    let maxDist = max(boxBasedDistance, maxCenterDistance ?? 50.0)
-                    let dist = sqrt((dcx-tcx)*(dcx-tcx) + (dcy-tcy)*(dcy-tcy))
-                    distMatrix[i][j] = dist <= maxDist ? dist : Double.infinity
-                }
-            }
-
-            // Greedy nearest-neighbour assignment (sufficient for 1–3 dets/trks)
-            var matchedDets = Set<Int>()
-            var matchedTrks = Set<Int>()
-            var matches: [(Int, Int)] = []
-
-            // Flatten & sort by distance
-            var candidates: [(Double, Int, Int)] = []
-            for i in 0..<nd {
-                for j in 0..<nt {
-                    if distMatrix[i][j] < Double.infinity {
-                        candidates.append((distMatrix[i][j], i, j))
-                    }
-                }
-            }
-            candidates.sort { $0.0 < $1.0 }
-            for (_, d, t) in candidates {
-                if !matchedDets.contains(d) && !matchedTrks.contains(t) {
-                    matches.append((d, t))
-                    matchedDets.insert(d)
-                    matchedTrks.insert(t)
-                }
-            }
-
+            let matches = distanceMatches(detIndices: Array(0..<nd), trkIndices: Array(0..<nt))
+            let matchedDets = Set(matches.map(\.0))
+            let matchedTrks = Set(matches.map(\.1))
             let unmatchedDets = (0..<nd).filter { !matchedDets.contains($0) }
             let unmatchedTrks = (0..<nt).filter { !matchedTrks.contains($0) }
             return (matches, unmatchedDets, unmatchedTrks)

@@ -206,6 +206,25 @@ function fillFrameGaps(samples: SourceSample[]): SourceSample[] {
   return filled;
 }
 
+function filterReplayOutliers(samples: SourceSample[]): SourceSample[] {
+  if (samples.length < 3) return samples;
+  return samples.filter((sample, index) => {
+    if (index === 0 || index === samples.length - 1) return true;
+    const previous = samples[index - 1];
+    const next = samples[index + 1];
+    const previousOrder = previous.time_s ?? previous.frame_index;
+    const currentOrder = sample.time_s ?? sample.frame_index;
+    const nextOrder = next.time_s ?? next.frame_index;
+    if (!finite(previousOrder) || !finite(currentOrder) || !finite(nextOrder) || nextOrder <= previousOrder) return true;
+    const t = clamp((currentOrder - previousOrder) / (nextOrder - previousOrder), 0, 1);
+    const expectedX = previous.x_norm + (next.x_norm - previous.x_norm) * t;
+    const expectedY = previous.y_norm + (next.y_norm - previous.y_norm) * t;
+    const deviation = Math.hypot(sample.x_norm - expectedX, sample.y_norm - expectedY);
+    const neighborTravel = Math.hypot(next.x_norm - previous.x_norm, next.y_norm - previous.y_norm);
+    return deviation <= Math.max(0.035, neighborTravel * 0.75);
+  });
+}
+
 function smoothReplayPoints(points: TrajectoryWorldPoint[]) {
   let smoothed = points;
   for (let pass = 0; pass < 3; pass++) {
@@ -271,6 +290,7 @@ export function buildPitchReplayModel(pitch: PitchResult): PitchReplayModel {
     source = 'legacy_points';
     samples = legacySamples(pitch);
   }
+  samples = filterReplayOutliers(samples);
 
   let durationS = durationFor(meta, samples, pitch);
   if (samples.length < 2) {

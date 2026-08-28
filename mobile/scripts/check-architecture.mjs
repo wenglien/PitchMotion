@@ -81,6 +81,34 @@ const roughness = (axis) => jaggedReplay.points.slice(1, -1).reduce((sum, point,
 ), 0);
 assert.ok(roughness('x') < 0.3 && roughness('y') < 0.3);
 
+const outlierReplay = buildPitchReplayModel({
+  job_id: 'single-outlier',
+  speed_info: { plate_x_norm: 0.52, plate_y_norm: 0.7, flight_time_s: 0.5 },
+  trajectory_samples: Array.from({ length: 21 }, (_, index) => ({
+    frame_index: index,
+    t_s: index / 40,
+    x_norm: index === 10 ? 0.98 : 0.48 + index * 0.002,
+    y_norm: index === 10 ? 0.18 : 0.34 + index * 0.018,
+    is_synthetic: false,
+  })),
+});
+const cleanReplay = buildPitchReplayModel({
+  job_id: 'clean-reference',
+  speed_info: { plate_x_norm: 0.52, plate_y_norm: 0.7, flight_time_s: 0.5 },
+  trajectory_samples: Array.from({ length: 21 }, (_, index) => ({
+    frame_index: index,
+    t_s: index / 40,
+    x_norm: 0.48 + index * 0.002,
+    y_norm: 0.34 + index * 0.018,
+    is_synthetic: false,
+  })),
+});
+const maxOutlierDeviation = Math.max(...outlierReplay.points.map((point, index) => Math.hypot(
+  point.x - cleanReplay.points[index].x,
+  point.y - cleanReplay.points[index].y,
+)));
+assert.ok(maxOutlierDeviation < 0.15, `single detection outlier bent replay by ${maxOutlierDeviation.toFixed(3)}m`);
+
 const landingOnly = buildPitchReplayModel({
   job_id: 'landing-only',
   speed_info: { plate_x_norm: 0.5, plate_y_norm: 0.7, flight_time_s: 0.5 },

@@ -7,7 +7,8 @@
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "check:architecture": "node --experimental-strip-types scripts/check-architecture.mjs",
-    "check:release": "npm run typecheck && npm run check:architecture && npx expo-doctor && expo export --platform ios"
+    "check:speed": "xcrun swiftc modules/expo-speedgun/ios/Types.swift modules/expo-speedgun/ios/SORTTracker.swift modules/expo-speedgun/ios/TrackSelection.swift modules/expo-speedgun/ios/BallSpeedCalculator.swift scripts/check-speed-calculator.swift -o /tmp/speedgun-check-speed && /tmp/speedgun-check-speed",
+    "check:release": "npm run typecheck && npm run check:architecture && npm run check:speed && npx expo-doctor && expo export --platform ios"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -18,10 +19,10 @@
     "babel-preset-expo": "~55.0.8",
     "expo": "~55.0.28",
     "expo-font": "~55.0.8",
-    "expo-image-picker": "~55.0.22",
+    "expo-image-picker": "~55.0.24",
     "expo-sharing": "~55.0.22",
     "expo-status-bar": "~55.0.6",
-    "expo-video": "~55.0.19",
+    "expo-video": "~55.0.21",
     "react": "19.2.0",
     "react-native": "0.83.10",
     "react-native-gesture-handler": "~2.30.0",
@@ -36,14 +37,6 @@
     "typescript": "~5.9.2"
   },
   "private": true,
-  "overrides": {
-    "react-native-worklets": "0.7.4",
-    "@react-native/codegen": "0.83.2",
-    "@react-native/babel-plugin-codegen": "0.83.2",
-    "@react-native/babel-preset": "0.83.2",
-    "@react-native/metro-babel-transformer": "0.83.2",
-    "@react-native/metro-config": "0.83.2"
-  },
   "expo": {
     "autolinking": {
       "nativeModulesDir": "./modules"

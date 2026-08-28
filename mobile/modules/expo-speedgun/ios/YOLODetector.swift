@@ -173,9 +173,9 @@ final class YOLODetector {
         return detections
     }
 
-    // MARK: - High-resolution detection (flight mode, 1280px input)
+    // MARK: - Letterboxed detection
 
-    /// Letterbox-resize pixelBuffer to targetSize×targetSize (preserving aspect ratio),
+    /// Letterbox-resize pixelBuffer to the model input (preserving aspect ratio),
     /// run YOLO detection, then unpad coordinates back to display space.
     /// This matches Python YOLO's imgsz letterbox behaviour exactly.
     func detectHighRes(
@@ -183,9 +183,9 @@ final class YOLODetector {
         frameIndex: Int,
         displayWidth: Int,
         displayHeight: Int,
-        confThreshold: Double = 0.05,
-        targetSize: Int = 1280
+        confThreshold: Double = 0.05
     ) -> [BallDetection] {
+        let targetSize = modelInputSize
         // Compute letterbox scale & padding (same as Python's letterbox())
         let srcW = Double(displayWidth)
         let srcH = Double(displayHeight)

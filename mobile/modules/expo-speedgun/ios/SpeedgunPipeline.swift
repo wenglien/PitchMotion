@@ -224,18 +224,8 @@ final class SpeedgunPipeline {
         let dynamicStaticMinPersist = max(HC_STATIC_MIN_PERSIST,
             Int(round(Double(HC_STATIC_MIN_PERSIST) * Double(effectiveCaptureFps) / 60.0)))
 
-        // 4K detection target size: larger canvas so the ball isn't sub-pixel after scaling.
-        // 1080p portrait (1080×1920): scale=0.667, ball ~30px in letterbox — good at 1280.
-        // 4K portrait (2160×3840):    letterbox scale at 2560 = 2560/3840 = 0.667 → ball ~30px.
-        //                             (was 1920 → scale 0.5 → ball ~20px, borderline sub-pixel for YOLO.)
-        // 4K landscape (3840×2160):   also 2560 → equal treatment.
-        let is4K = displayWidth > 2000 || displayHeight > 2000
-        let yoloTargetSize = is4K ? 2560 : 1280
-        if is4K {
-            NSLog("[SpeedgunPipeline] 4K video detected (%dx%d) — using YOLO targetSize=%d",
-                  displayWidth, displayHeight, yoloTargetSize)
-        }
-
+        // The Core ML model has a fixed 640×640 input. Larger temporary canvases
+        // are resized back to 640 by Vision and only increase memory/latency.
         /// Process one CVPixelBuffer (real or interpolated) through pose + YOLO
         func processFrame(
             _ pixelBuffer: CVPixelBuffer,
@@ -274,8 +264,7 @@ final class SpeedgunPipeline {
                     frameIndex: frameIndex,
                     displayWidth: displayWidth,
                     displayHeight: displayHeight,
-                    confThreshold: confThreshold,
-                    targetSize: yoloTargetSize
+                    confThreshold: confThreshold
                 )
                 dets = filterStaticFP(dets: dets, staticTracker: &staticDetections,
                                       frameIndex: frameIndex, staticRadius: dynamicStaticRadius,
@@ -321,7 +310,7 @@ final class SpeedgunPipeline {
                   readerStatus.rawValue, totalFrames, effectiveTotalFrames)
         }
 
-        // Always use 1280px high-res detection (full flight mode from frame 0)
+        // Use letterboxed full-flight detection from frame 0.
         while let decodedFrame = decoder.nextFrame() {
             autoreleasepool {
                 let currentTimeline = resolveRealTimeline(decodedFrame.presentationTimeS)
@@ -440,12 +429,10 @@ final class SpeedgunPipeline {
         // Find best track. Use 2D motion instead of vertical-only movement so
         // a slightly off-axis camera does not reject a valid diagonal/horizontal
         // pitch path.
-        let minTrackPoints = effectiveFps >= 60 ? 1 : 3
-        let bestTrack = selectBestTrack(
+        let bestTrack = selectBestPitchTrack(
             tracks: tracks,
             frameWidth: displayWidth,
-            frameHeight: displayHeight,
-            minPoints: minTrackPoints
+            frameHeight: displayHeight
         )
 
         // Update frameInfos from best track.
@@ -530,16 +517,6 @@ final class SpeedgunPipeline {
         /// Timing must be anchored to decoded camera samples only. Interpolated
         /// frames and polynomial gap fills may improve the drawn trajectory, but
         /// neither represents a new observation of the ball in the real world.
-        func isTimingObservation(_ frame: FrameInfo) -> Bool {
-            frame.ballInFrame && !frame.ballLostTracking && !frame.isInterpolated
-        }
-
-        func currentTimingTrajectoryPoints() -> [CGPoint] {
-            frameInfos
-                .filter(isTimingObservation)
-                .map { $0.ballCenter }
-        }
-
         func captureTime(for frameIndex: Int?) -> Double? {
             guard let frameIndex,
                   frameIndex >= 0,
@@ -584,11 +561,13 @@ final class SpeedgunPipeline {
 
         // The visual overlay can use a continuous trajectory, but all timing
         // anchors use only real, non-gap-filled camera observations.
-        let firstBallFrame = frameInfos.firstIndex(where: isTimingObservation)
-        let timingLastBallFrame = frameInfos.lastIndex(where: isTimingObservation)
+        let timingObservationFrames = selectTimingObservations(frameInfos)
+        let usesInterpolatedTimingFallback = timingObservationFrames.contains(where: { $0.isInterpolated })
+        let firstBallFrame = timingObservationFrames.first?.frameIndex
+        let timingLastBallFrame = timingObservationFrames.last?.frameIndex
         var lastBallFrame = timingLastBallFrame
         var trajectoryPoints = currentTrajectoryPoints()
-        var timingTrajectoryPoints = currentTimingTrajectoryPoints()
+        let timingTrajectoryPoints = timingObservationFrames.map { $0.ballCenter }
         var trajectorySamples = currentTrajectorySamples()
 
         // Detect release point from pose signals, constrained by the first
@@ -712,6 +691,10 @@ final class SpeedgunPipeline {
                 lastBallTimeS: captureTime(for: validatedCatchFrame ?? timingLastBallFrame),
                 ballSizePreSeconds: ballSizePreSeconds
             )
+            if usesInterpolatedTimingFallback {
+                speedInfo.trajectoryQualityWarning = true
+                NSLog("[SpeedgunPipeline] Speed timing used optical-flow detections because fewer than two decoded frames saw the ball")
+            }
 
             if !manualStrikeZone {
                 resolvedStrikeZone = estimateAutoStrikeZone(
@@ -1853,68 +1836,6 @@ final class SpeedgunPipeline {
         let tempDir = FileManager.default.temporaryDirectory
         let filename = "speedgun_overlay_\(Int(Date().timeIntervalSince1970)).mp4"
         return tempDir.appendingPathComponent(filename)
-    }
-
-    /// Select best SORT track: longest coherent moving track.
-    ///
-    /// Earlier versions scored only y-axis movement, which assumed a nearly
-    /// centered catcher-view camera. Slight horizontal camera angle changes can
-    /// make a valid pitch move diagonally or mostly sideways in image space, so
-    /// score the full 2D path instead.
-    private func selectBestTrack(
-        tracks: [Int: [TrackPoint]],
-        frameWidth: Int,
-        frameHeight: Int,
-        minPoints: Int = 3
-    ) -> [TrackPoint]? {
-        guard !tracks.isEmpty else { return nil }
-
-        var bestTrack: [TrackPoint]?
-        var bestScore = 0.0
-        let diag = Double(frameWidth * frameWidth + frameHeight * frameHeight).squareRoot()
-
-        for (_, points) in tracks {
-            guard points.count >= minPoints else { continue }
-            let sorted = points.sorted { $0.frameIndex < $1.frameIndex }
-            guard let first = sorted.first, let last = sorted.last else { continue }
-
-            let displacement = hypot(last.cx - first.cx, last.cy - first.cy)
-            var pathLength = 0.0
-            var jumpPenalty = 0.0
-            for i in 1..<sorted.count {
-                let prev = sorted[i - 1]
-                let cur = sorted[i]
-                let gap = max(1, cur.frameIndex - prev.frameIndex)
-                let step = hypot(cur.cx - prev.cx, cur.cy - prev.cy)
-                pathLength += step
-                let stepRatio = step / Double(gap) / max(1.0, diag)
-                if stepRatio > 0.08 {
-                    jumpPenalty += (stepRatio - 0.08) * 8.0
-                }
-            }
-
-            let span = max(1, last.frameIndex - first.frameIndex + 1)
-            let coverage = clamp(Double(sorted.count) / Double(span), min: 0.15, max: 1.0)
-            let displacementRatio = displacement / max(1.0, diag)
-            let pathRatio = pathLength / max(1.0, diag)
-            let straightness = pathLength > 1 ? clamp(displacement / pathLength, min: 0.25, max: 1.0) : 0.25
-            let motionScore = max(displacementRatio, pathRatio * 0.55)
-            let staticPenalty = motionScore < 0.012 ? 0.25 : 1.0
-
-            let score = Double(sorted.count)
-                * max(motionScore, 0.01)
-                * (0.55 + 0.45 * coverage)
-                * (0.65 + 0.35 * straightness)
-                * staticPenalty
-                / max(1.0, 1.0 + jumpPenalty)
-
-            if score > bestScore {
-                bestScore = score
-                bestTrack = sorted
-            }
-        }
-
-        return bestTrack
     }
 
     /// Filter high-confidence static false positives.
