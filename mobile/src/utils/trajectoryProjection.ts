@@ -19,6 +19,8 @@ export const MIN_ZOOM = 0.55;
 export const MAX_ZOOM = 4.5;
 export const YAW_SENS = 0.42;
 export const PITCH_SENS = 0.34;
+const MAX_GESTURE_VELOCITY = 2500;
+const INERTIA_DECAY_PER_60HZ_FRAME = 0.88;
 
 export interface WorldPoint {
   x: number;
@@ -83,6 +85,27 @@ export function normalizeYaw(yaw: number) {
   if (y > 180) y -= 360;
   if (y < -180) y += 360;
   return y;
+}
+
+export function normalizeCamera(camera: Camera): Camera {
+  return {
+    yaw: normalizeYaw(camera.yaw),
+    pitch: clamp(camera.pitch, -8, 88),
+    zoom: clamp(camera.zoom, MIN_ZOOM, MAX_ZOOM),
+    panX: clamp(camera.panX, -VIEW_W, VIEW_W),
+    panY: clamp(camera.panY, -VIEW_H, VIEW_H),
+  };
+}
+
+export function cameraVelocityFromGesture(velocityX: number, velocityY: number) {
+  return {
+    yaw: clamp(velocityX, -MAX_GESTURE_VELOCITY, MAX_GESTURE_VELOCITY) * YAW_SENS / 1000,
+    pitch: -clamp(velocityY, -MAX_GESTURE_VELOCITY, MAX_GESTURE_VELOCITY) * PITCH_SENS / 1000,
+  };
+}
+
+export function decayCameraVelocity(value: number, elapsedMs: number) {
+  return value * Math.pow(INERTIA_DECAY_PER_60HZ_FRAME, clamp(elapsedMs, 0, 50) / (1000 / 60));
 }
 
 /** Shortest arc interpolation — catcher→pitcher goes through ±180, not 540°. */

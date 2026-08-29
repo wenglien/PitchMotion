@@ -9,16 +9,20 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   PITCH_SENS,
+  VIEW_H,
   VIEW_PRESETS,
+  VIEW_W,
   ViewPreset,
   YAW_SENS,
+  cameraVelocityFromGesture,
   clamp,
+  decayCameraVelocity,
   lerpYaw,
-  normalizeYaw,
+  normalizeCamera,
   zoomAroundFocal,
 } from '../utils/trajectoryProjection';
 
-const PRESET_TRANSITION_MS = 300;
+const PRESET_TRANSITION_MS = 420;
 
 interface Options {
   onGestureActiveChange?: (active: boolean) => void;
@@ -38,7 +42,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
   const inertiaVelRef = useRef({ yaw: 0, pitch: 0 });
   const gestureStartRef = useRef<Camera>(DEFAULT_CAMERA);
   const pinchStartZoomRef = useRef(1);
-  const pinchFocalRef = useRef({ x: CENTER_X, y: CENTER_Y });
+  const viewportRef = useRef({ width: VIEW_W, height: VIEW_H });
   const gesturingRef = useRef(false);
   const transitionRafRef = useRef<number | null>(null);
   const gestureModeRef = useRef<'none' | 'pan' | 'pinch'>('none');
@@ -46,7 +50,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
   cameraRef.current = camera;
 
   const publishCamera = useCallback((next: Camera) => {
-    const normalized: Camera = { ...next, yaw: normalizeYaw(next.yaw) };
+    const normalized = normalizeCamera(next);
     cameraRef.current = normalized;
     setCamera(normalized);
   }, []);
@@ -63,7 +67,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
 
   // Batched updates for inertia / preset transitions (not finger tracking).
   const commitCamera = useCallback((next: Camera) => {
-    const normalized: Camera = { ...next, yaw: normalizeYaw(next.yaw) };
+    const normalized = normalizeCamera(next);
     cameraRef.current = normalized;
     pendingCameraRef.current = normalized;
     if (cameraRafRef.current != null) return;
@@ -78,7 +82,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
   // Coalesce high-frequency touch events to one React update per display frame.
   const applyCameraLive = useCallback(
     (next: Camera) => {
-      const normalized: Camera = { ...next, yaw: normalizeYaw(next.yaw) };
+      const normalized = normalizeCamera(next);
       cameraRef.current = normalized;
       livePendingRef.current = normalized;
       if (liveRafRef.current != null) return;
@@ -137,23 +141,27 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
   }, [flushLiveCamera, setGestureActive]);
 
   const startInertia = useCallback(
-    (vyaw: number, vpitch: number) => {
-      if (Math.abs(vyaw) < 0.35 && Math.abs(vpitch) < 0.35) return;
-      inertiaVelRef.current = { yaw: vyaw, pitch: vpitch };
-      const tick = () => {
+    (velocityX: number, velocityY: number) => {
+      const initial = cameraVelocityFromGesture(velocityX, velocityY);
+      if (Math.abs(initial.yaw) < 0.03 && Math.abs(initial.pitch) < 0.03) return;
+      inertiaVelRef.current = initial;
+      let previous = performance.now();
+      const tick = (now: number) => {
+        const elapsedMs = clamp(now - previous, 1, 34);
+        previous = now;
         const vel = inertiaVelRef.current;
-        vel.yaw *= 0.88;
-        vel.pitch *= 0.88;
-        if (Math.abs(vel.yaw) < 0.08 && Math.abs(vel.pitch) < 0.08) {
+        if (Math.abs(vel.yaw * elapsedMs) < 0.02 && Math.abs(vel.pitch * elapsedMs) < 0.02) {
           inertiaRafRef.current = null;
           return;
         }
         const current = cameraRef.current;
         commitCamera({
           ...current,
-          yaw: current.yaw + vel.yaw,
-          pitch: clamp(current.pitch + vel.pitch, -8, 88),
+          yaw: current.yaw + vel.yaw * elapsedMs,
+          pitch: current.pitch + vel.pitch * elapsedMs,
         });
+        vel.yaw = decayCameraVelocity(vel.yaw, elapsedMs);
+        vel.pitch = decayCameraVelocity(vel.pitch, elapsedMs);
         inertiaRafRef.current = requestAnimationFrame(tick);
       };
       inertiaRafRef.current = requestAnimationFrame(tick);
@@ -177,6 +185,9 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
           ...from,
           yaw: lerpYaw(from.yaw, targetYaw, ease),
           pitch: from.pitch + (targetPitch - from.pitch) * ease,
+          zoom: from.zoom + (1 - from.zoom) * ease,
+          panX: from.panX * (1 - ease),
+          panY: from.panY * (1 - ease),
         });
         if (t < 1) {
           transitionRafRef.current = requestAnimationFrame(tick);
@@ -235,7 +246,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
   const onPanEnd = useCallback(
     (vx: number, vy: number) => {
       if (gestureModeRef.current !== 'pan') return;
-      startInertia(vx * 8, -vy * 6.5);
+      startInertia(vx, vy);
       endGesture();
     },
     [endGesture, startInertia],
@@ -247,11 +258,9 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
 
   const onPinchBegin = useCallback(
     (focalX: number, focalY: number) => {
-      if (gestureModeRef.current === 'pan') return;
       beginGesture('pinch');
       gestureStartRef.current = cameraRef.current;
       pinchStartZoomRef.current = cameraRef.current.zoom;
-      pinchFocalRef.current = { x: focalX, y: focalY };
     },
     [beginGesture],
   );
@@ -261,7 +270,10 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
       if (gestureModeRef.current !== 'pinch') return;
       const start = gestureStartRef.current;
       const nextZoom = pinchStartZoomRef.current * Math.pow(scale, 1.02);
-      const partial = zoomAroundFocal(start, nextZoom, focalX, focalY);
+      const viewport = viewportRef.current;
+      const viewFocalX = focalX * VIEW_W / Math.max(1, viewport.width);
+      const viewFocalY = focalY * VIEW_H / Math.max(1, viewport.height);
+      const partial = zoomAroundFocal(start, nextZoom, viewFocalX, viewFocalY);
       applyCameraLive({ ...start, ...partial });
     },
     [applyCameraLive],
@@ -293,7 +305,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
       .minDistance(4)
       .activeOffsetX([-8, 8])
       .activeOffsetY([-8, 8])
-      .onBegin(() => {
+      .onStart(() => {
         runOnJS(onPanBegin)();
       })
       .onUpdate((e) => {
@@ -307,7 +319,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
       });
 
     const pinch = Gesture.Pinch()
-      .onBegin((e) => {
+      .onStart((e) => {
         runOnJS(onPinchBegin)(e.focalX, e.focalY);
       })
       .onUpdate((e) => {
@@ -321,7 +333,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
       });
 
     // Double-tap runs in parallel so it doesn't block single-finger pan recognition.
-    return Gesture.Simultaneous(Gesture.Exclusive(pan, pinch), doubleTap);
+    return Gesture.Simultaneous(pan, pinch, doubleTap);
   }, [
     onDoubleTap,
     onPanBegin,
@@ -353,5 +365,8 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
     adjustZoom,
     resetView,
     stopInertia,
+    setViewportSize: (width: number, height: number) => {
+      viewportRef.current = { width: Math.max(1, width), height: Math.max(1, height) };
+    },
   };
 };

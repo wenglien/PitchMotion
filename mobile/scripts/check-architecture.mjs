@@ -5,9 +5,12 @@ import { BASEBALL_RADIUS_M, buildChallengeCallout, buildPitchReplayModel } from 
 import {
   buildCameraBasis,
   buildStaticWorldScene,
+  cameraVelocityFromGesture,
+  decayCameraVelocity,
   pathFrom,
   projectStaticScene,
   DEFAULT_CAMERA,
+  normalizeCamera,
 } from '../src/utils/trajectoryProjection.ts';
 
 const result = toPitchResult({
@@ -63,6 +66,23 @@ const otherTypeReplay = buildPitchReplayModel({
   speed_info: { ...measuredPitch.speed_info, pitch_type: 'Curveball' },
 });
 assert.deepEqual(replay.points, otherTypeReplay.points);
+
+const calibratedReplay = buildPitchReplayModel({
+  ...measuredPitch,
+  job_id: 'calibrated-world-endpoints',
+  trajectory_metadata: {
+    release_point_x_m: 0.22,
+    release_point_y_m: 1.92,
+    release_point_z_m: 18.1,
+    plate_crossing_x_m: -0.08,
+    plate_crossing_y_m: 0.76,
+  },
+});
+assert.ok(Math.abs(calibratedReplay.points[0].x - 0.22) < 1e-9);
+assert.ok(Math.abs(calibratedReplay.points[0].y - 1.92) < 1e-9);
+assert.ok(Math.abs(calibratedReplay.points[0].z - 18.1) < 1e-9);
+assert.ok(Math.abs(calibratedReplay.landingPoint.x + 0.08) < 1e-9);
+assert.ok(Math.abs(calibratedReplay.landingPoint.y - 0.76) < 1e-9);
 
 const jaggedReplay = buildPitchReplayModel({
   job_id: 'jagged',
@@ -151,5 +171,15 @@ const smoothPath = pathFrom([
   { x: 20, y: 10, depth: 0, scale: 1 },
 ]);
 assert.equal(smoothPath, 'M 0.0 0.0 Q 10.0 16.0 15.0 13.0 Q 20.0 10.0 20.0 10.0');
+
+assert.deepEqual(
+  normalizeCamera({ yaw: 725, pitch: 120, zoom: 99, panX: 999, panY: -999 }),
+  { yaw: 5, pitch: 88, zoom: 4.5, panX: 340, panY: -430 },
+);
+const velocity = cameraVelocityFromGesture(10_000, -10_000);
+assert.ok(Math.abs(velocity.yaw - 1.05) < 1e-9 && Math.abs(velocity.pitch - 0.85) < 1e-9);
+const fullFrameDecay = decayCameraVelocity(1, 1000 / 60);
+const twoHalfFrameDecay = decayCameraVelocity(decayCameraVelocity(1, 1000 / 120), 1000 / 120);
+assert.ok(Math.abs(fullFrameDecay - twoHalfFrameDecay) < 1e-12);
 
 console.log('architecture checks passed');

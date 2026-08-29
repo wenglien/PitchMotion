@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo } from 'react-native';
 
-export type ReplayRate = 0.5 | 1;
+export type ReplayRate = 0.25 | 0.5 | 1;
 
 export function usePitchReplayClock(durationS: number, active = true) {
   const [playing, setPlaying] = useState(false);
@@ -31,10 +31,10 @@ export function usePitchReplayClock(durationS: number, active = true) {
   useEffect(() => {
     if (!playing || !active) return;
     let frame = 0;
-    let previous = Date.now();
+    let previous = performance.now();
     const durationMs = Math.max(1, durationS * 1000);
     const tick = () => {
-      const now = Date.now();
+      const now = performance.now();
       elapsedRef.current += (now - previous) * rate;
       previous = now;
       const next = Math.min(1, elapsedRef.current / durationMs);
@@ -57,5 +57,12 @@ export function usePitchReplayClock(durationS: number, active = true) {
     else setPlaying((value) => !value);
   }, [progress, replay]);
 
-  return { playing, progress, rate, setRate, replay, toggle, reduceMotion };
+  const seek = useCallback((nextProgress: number) => {
+    const next = Math.min(1, Math.max(0, nextProgress));
+    elapsedRef.current = next * Math.max(1, durationS * 1000);
+    setProgress(next);
+    setPlaying(false);
+  }, [durationS]);
+
+  return { playing, progress, rate, setRate, replay, toggle, seek, reduceMotion };
 }

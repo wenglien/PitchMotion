@@ -10,7 +10,6 @@ const DEFAULT_DISTANCE_M = 18.44;
 const DEFAULT_DURATION_S = 0.45;
 const DEFAULT_ZONE_WIDTH_M = 0.4318;
 const DEFAULT_ZONE_HEIGHT_M = 0.58;
-const DEFAULT_RELEASE_HEIGHT_M = 1.8;
 const PLATE_ZONE_CENTER_M = 0.9;
 export const PITCH_REPLAY_SCALE = 3;
 export const BASEBALL_RADIUS_M = 0.037;
@@ -31,6 +30,7 @@ export interface PitchReplayModel {
   durationS: number;
   estimatedRatio: number;
   isEstimated: boolean;
+  endpointCalibrated: boolean;
   confidenceLabel: string;
   warning: string;
 }
@@ -326,12 +326,56 @@ export function buildPitchReplayModel(pitch: PitchResult): PitchReplayModel {
   const lateralFromNorm = (xNorm: number) => ((xNorm - zoneCenterX) / zoneNormW) * zoneWidthM;
   const heightFromNorm = (yNorm: number) => PLATE_ZONE_CENTER_M + ((zoneCenterY - yNorm) / zoneNormH) * zoneHeightM;
 
+  const firstSample = samples[0];
+  const lastSample = samples[samples.length - 1];
+  const endpointCalibrated = finite(meta.release_point_x_m)
+    && finite(meta.release_point_y_m)
+    && finite(meta.plate_crossing_x_m)
+    && finite(meta.plate_crossing_y_m);
+  const releaseX = clamp(
+    finite(meta.release_point_x_m) ? meta.release_point_x_m : lateralFromNorm(firstSample.x_norm),
+    -3,
+    3,
+  );
+  const releaseY = clamp(
+    finite(meta.release_point_y_m) ? meta.release_point_y_m : heightFromNorm(firstSample.y_norm),
+    0.5,
+    3.2,
+  );
+  const releaseZ = clamp(
+    finite(meta.release_point_z_m) ? meta.release_point_z_m : distanceM,
+    0.5,
+    distanceM,
+  );
+  const crossingX = clamp(
+    finite(meta.plate_crossing_x_m) ? meta.plate_crossing_x_m : lateralFromNorm(plateX),
+    -2,
+    2,
+  );
+  const crossingY = clamp(
+    finite(meta.plate_crossing_y_m) ? meta.plate_crossing_y_m : heightFromNorm(plateY),
+    0.15,
+    2.2,
+  );
+
   let points = samples.map((sample, index): TrajectoryWorldPoint => {
     const t = progressFor(sample, index, samples, meta);
+    const expectedXNorm = firstSample.x_norm + (lastSample.x_norm - firstSample.x_norm) * t;
+    const expectedYNorm = firstSample.y_norm + (lastSample.y_norm - firstSample.y_norm) * t;
+    const lateralResidualM = clamp(
+      ((sample.x_norm - expectedXNorm) / zoneNormW) * zoneWidthM,
+      -zoneWidthM * 1.5,
+      zoneWidthM * 1.5,
+    );
+    const verticalResidualM = clamp(
+      ((expectedYNorm - sample.y_norm) / zoneNormH) * zoneHeightM,
+      -zoneHeightM * 1.5,
+      zoneHeightM * 1.5,
+    );
     return {
-      x: lateralFromNorm(sample.x_norm),
-      y: DEFAULT_RELEASE_HEIGHT_M * (1 - t) + heightFromNorm(sample.y_norm) * t,
-      z: distanceM * (1 - t),
+      x: releaseX + (crossingX - releaseX) * t + lateralResidualM,
+      y: releaseY + (crossingY - releaseY) * t + verticalResidualM,
+      z: releaseZ * (1 - t),
       t,
       time_s: t * durationS,
       frame_index: sample.frame_index,
@@ -341,8 +385,8 @@ export function buildPitchReplayModel(pitch: PitchResult): PitchReplayModel {
   });
 
   const landing = {
-    x: lateralFromNorm(plateX),
-    y: heightFromNorm(plateY),
+    x: crossingX,
+    y: crossingY,
   };
   const last = points[points.length - 1];
   const landingAdjusted = !!last && (Math.abs(last.x - landing.x) > 0.001 || Math.abs(last.y - landing.y) > 0.001 || last.t < 0.999);
@@ -360,12 +404,14 @@ export function buildPitchReplayModel(pitch: PitchResult): PitchReplayModel {
 
   const estimatedCount = points.filter((point) => point.is_synthetic).length;
   const estimatedRatio = points.length ? estimatedCount / points.length : 1;
-  const isEstimated = source !== 'native_samples' || landingAdjusted || estimatedCount > 0;
+  const isEstimated = !endpointCalibrated || source !== 'native_samples' || landingAdjusted || estimatedCount > 0;
   const isStrike = pitch.speed_info?.is_strike ?? meta.is_strike ?? null;
   const landingPoint = points.length ? { ...points[points.length - 1] } : null;
-  const confidenceLabel = !isEstimated ? '實測軌跡' : source === 'native_samples' ? '混合實測／補點' : source === 'legacy_points' ? '舊資料重建' : '落點重建';
-  const warning = source === 'native_samples'
-    ? '單鏡頭深度為視覺重建；實測時間與畫面軌跡優先。'
+  const confidenceLabel = !isEstimated ? '端點校正實測' : source === 'native_samples' ? '混合實測／補點' : source === 'legacy_points' ? '舊資料重建' : '落點重建';
+  const warning = endpointCalibrated
+    ? '已用原生出手點與進壘點校正；單鏡頭中段深度仍為視覺重建。'
+    : source === 'native_samples'
+      ? '缺少世界座標端點，深度由畫面與投打距離重建。'
     : '缺少完整逐幀資料，畫面已補足供回放參考。';
 
   return {
@@ -382,6 +428,7 @@ export function buildPitchReplayModel(pitch: PitchResult): PitchReplayModel {
     durationS,
     estimatedRatio,
     isEstimated,
+    endpointCalibrated,
     confidenceLabel,
     warning,
   };

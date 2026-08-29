@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useMemo, useRef } from 'react';
+import { Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { useIsFocused } from '@react-navigation/native';
 import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
@@ -39,11 +39,13 @@ export default function Trajectory3DView({
     applyPreset,
     adjustZoom,
     resetView,
+    setViewportSize,
   } = useTrajectoryCamera({ onGestureActiveChange });
-  const { playing, progress, rate, setRate, replay, toggle } = usePitchReplayClock(
+  const { playing, progress, rate, setRate, replay, toggle, seek } = usePitchReplayClock(
     model.durationS * PITCH_REPLAY_SCALE,
     isFocused && !gesturing,
   );
+  const timelineWidthRef = useRef(VIEW_W);
 
   const {
     scene,
@@ -71,7 +73,11 @@ export default function Trajectory3DView({
   return (
     <View style={styles.wrap}>
       <GestureDetector gesture={gesture}>
-        <View style={styles.gestureArea} collapsable={false}>
+        <View
+          style={styles.gestureArea}
+          collapsable={false}
+          onLayout={(event) => setViewportSize(event.nativeEvent.layout.width, event.nativeEvent.layout.height)}
+        >
           <Svg width="100%" height={VIEW_H} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}>
             <Defs>
               <LinearGradient id="trajectorySky" x1="0" y1="0" x2="0" y2="1">
@@ -178,6 +184,26 @@ export default function Trajectory3DView({
         ))}
       </View>
 
+      <View style={styles.timelineRow}>
+        <Pressable
+          style={styles.timelineHitArea}
+          onLayout={(event) => { timelineWidthRef.current = event.nativeEvent.layout.width; }}
+          onPress={(event) => seek(event.nativeEvent.locationX / timelineWidthRef.current)}
+          onTouchMove={(event) => seek(event.nativeEvent.locationX / timelineWidthRef.current)}
+          accessibilityRole="adjustable"
+          accessibilityLabel="3D 軌跡播放位置"
+          accessibilityValue={{ min: 0, max: 100, now: Math.round(progress * 100) }}
+          accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+          onAccessibilityAction={(event) => seek(progress + (event.nativeEvent.actionName === 'increment' ? 0.1 : -0.1))}
+        >
+          <View style={styles.timelineTrack}>
+            <View style={[styles.timelineFill, { width: `${progress * 100}%` }]} />
+            <View style={[styles.timelineThumb, { left: `${progress * 100}%` }]} />
+          </View>
+        </Pressable>
+        <Text style={styles.timelineText}>{Math.round(progress * 100)}%</Text>
+      </View>
+
       <View style={styles.controls}>
         <TouchableOpacity style={styles.primaryBtn} onPress={toggle} accessibilityRole="button">
           <Text style={styles.primaryBtnText}>{progress >= 1 ? '重新播放' : playing ? '暫停' : '播放'}</Text>
@@ -187,7 +213,7 @@ export default function Trajectory3DView({
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.secondaryBtn}
-          onPress={() => setRate(rate === 0.5 ? 1 : 0.5)}
+          onPress={() => setRate(rate === 0.25 ? 0.5 : rate === 0.5 ? 1 : 0.25)}
           accessibilityRole="button"
           accessibilityLabel={`目前播放速度 ${rate} 倍`}
         >
@@ -292,6 +318,47 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.sm,
     backgroundColor: Colors.panel,
+  },
+  timelineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.sm,
+    backgroundColor: Colors.panel,
+  },
+  timelineHitArea: {
+    flex: 1,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  timelineTrack: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#334155',
+  },
+  timelineFill: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: Colors.accent,
+  },
+  timelineThumb: {
+    position: 'absolute',
+    top: -6,
+    width: 17,
+    height: 17,
+    marginLeft: -8.5,
+    borderRadius: 9,
+    backgroundColor: '#f8fafc',
+    borderWidth: 3,
+    borderColor: Colors.accent,
+  },
+  timelineText: {
+    width: 38,
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '700',
+    textAlign: 'right',
   },
   primaryBtn: {
     flex: 1,

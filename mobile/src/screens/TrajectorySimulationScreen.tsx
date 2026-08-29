@@ -42,6 +42,7 @@ export default function TrajectorySimulationScreen() {
     { label: '補點', value: syntheticPct != null ? `${syntheticPct}%` : '-', unit: '' },
     { label: '橫移', value: fmt(si.horizontal_break_cm, 1), unit: 'cm' },
     { label: '垂直位移', value: fmt(si.induced_vertical_break_cm, 1), unit: 'cm' },
+    { label: '3D 校正', value: model.endpointCalibrated ? '端點校正' : '畫面估算', unit: '' },
     { label: '來源', value: model.confidenceLabel, unit: '', wide: true },
   ];
 
@@ -145,7 +146,9 @@ export default function TrajectorySimulationScreen() {
         <Text style={styles.noteTitle}>精準度說明</Text>
         <Text style={styles.noteText}>{model.warning}</Text>
         <Text style={styles.noteText}>
-          目前深度軸由投打距離建立，左右與高度由畫面座標、好球帶寬高與 break 估算；若要提升成校正級 3D，需要相機內參或額外場地校正。
+          {model.endpointCalibrated
+            ? '3D 起點與終點採原生分析的世界座標校正，中段曲線保留畫面實測形變；單鏡頭無法觀測的深度仍依飛行時間重建。'
+            : '本次資料缺少世界座標端點，3D 會以好球帶比例尺和投打距離重建；完成場地或相機校正後可提高絕對位置精度。'}
         </Text>
       </View>
     </ScrollView>
