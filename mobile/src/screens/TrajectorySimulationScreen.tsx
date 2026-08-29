@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { RouteProp, useRoute } from '@react-navigation/native';
-import Trajectory3DView from '../components/Trajectory3DView';
+import PitchReplay from '../components/PitchReplay';
 import TrajectoryVideoCompare from '../components/trajectory/TrajectoryVideoCompare';
 import { PitchResult } from '../types';
 import { Colors, FontSize, Layout, Radius, Shadows, Spacing, Surfaces } from '../theme';
@@ -22,9 +22,8 @@ export default function TrajectorySimulationScreen() {
   const { pitch, comparePitch } = route.params;
   const { settings } = useSettings();
   const [scrollEnabled, setScrollEnabled] = useState(true);
-  const [showComparison, setShowComparison] = useState(!!comparePitch);
+  const handleGestureActiveChange = useCallback((active: boolean) => setScrollEnabled(!active), []);
   const model = useMemo(() => buildPitchReplayModel(pitch), [pitch]);
-  const comparisonModel = useMemo(() => comparePitch ? buildPitchReplayModel(comparePitch) : null, [comparePitch]);
   const si = pitch.speed_info || {};
   const primaryKmh = si.release_speed_kmh ?? si.initial_speed_kmh ?? null;
   const unitLabel = speedUnitLabel(settings.speedUnit);
@@ -56,8 +55,8 @@ export default function TrajectorySimulationScreen() {
       <View style={styles.hero}>
         <View style={styles.heroText}>
           <Text style={styles.eyebrow}>進壘回放</Text>
-          <Text style={styles.title}>3D 進壘軌跡</Text>
-          <Text style={styles.subtitle}>與進壘動畫共用同一份實測／補點軌跡</Text>
+          <Text style={styles.title}>互動 3D 進壘回放</Text>
+          <Text style={styles.subtitle}>暫停動畫後可自由旋轉與縮放查看球路</Text>
         </View>
         {type !== 'Unknown' && (
           <View style={[styles.typePill, { backgroundColor: color }]}>
@@ -67,61 +66,13 @@ export default function TrajectorySimulationScreen() {
       </View>
 
       <View style={styles.viewerCard}>
-        <Trajectory3DView
-          model={model}
-          pitchColor={color}
-          comparisonModel={showComparison ? comparisonModel : null}
-          comparisonColor={comparePitch ? pitchColor(comparePitch.speed_info?.pitch_type ?? '') : Colors.accent2}
-          comparisonLabel="上一球"
-          onGestureActiveChange={(active) => setScrollEnabled(!active)}
+        <PitchReplay
+          pitch={pitch}
+          previousPitch={comparePitch}
+          interactive
+          onGestureActiveChange={handleGestureActiveChange}
         />
       </View>
-
-      {comparePitch && comparisonModel && (
-        <View style={styles.compareCard}>
-          <View style={styles.compareHeader}>
-            <View style={styles.compareHeaderCopy}>
-              <Text style={styles.cardTitle}>球路比較</Text>
-              <Text style={styles.cardSub}>將上一球疊加在相同視角</Text>
-            </View>
-            <TouchableOpacity
-              style={[styles.compareToggle, showComparison && styles.compareToggleActive]}
-              onPress={() => setShowComparison((value) => !value)}
-              accessibilityRole="switch"
-              accessibilityState={{ checked: showComparison }}
-            >
-              <Text style={[styles.compareToggleText, showComparison && styles.compareToggleTextActive]}>
-                {showComparison ? '已顯示' : '已隱藏'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.compareGrid}>
-            {[
-              {
-                label: '本球',
-                type: pitchTypeLabel(type),
-                speed: primarySpeed,
-                color,
-              },
-              {
-                label: '上一球',
-                type: pitchTypeLabel(comparePitch.speed_info?.pitch_type),
-                speed: formatSpeed(comparePitch.speed_info?.release_speed_kmh ?? comparePitch.speed_info?.initial_speed_kmh, settings.speedUnit),
-                color: pitchColor(comparePitch.speed_info?.pitch_type ?? ''),
-              },
-            ].map((item) => (
-              <View key={item.label} style={styles.compareColumn}>
-                <View style={styles.compareLabelRow}>
-                  <View style={[styles.compareDot, { backgroundColor: item.color }]} />
-                  <Text style={styles.compareLabel}>{item.label}</Text>
-                </View>
-                <Text style={styles.compareType}>{item.type}</Text>
-                <Text style={styles.compareSpeed}>{item.speed} <Text style={styles.compareUnit}>{unitLabel}</Text></Text>
-              </View>
-            ))}
-          </View>
-        </View>
-      )}
 
       <View style={styles.card}>
         <TrajectoryVideoCompare pitch={pitch} pitchColor={color} />
@@ -212,50 +163,6 @@ const styles = StyleSheet.create({
     borderRadius: Radius.xxl,
     ...Shadows.card,
   },
-  compareCard: {
-    ...Surfaces.card,
-    width: '100%',
-    maxWidth: Layout.maxWidth,
-    marginBottom: Spacing.md,
-    ...Shadows.soft,
-  },
-  compareHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.sm,
-    marginBottom: Spacing.md,
-  },
-  compareHeaderCopy: { flex: 1 },
-  compareToggle: {
-    minHeight: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.md,
-    backgroundColor: Colors.surface2,
-  },
-  compareToggleActive: { borderColor: Colors.accent, backgroundColor: Colors.accentSubtle },
-  compareToggleText: { color: Colors.textMuted, fontSize: FontSize.sm, fontWeight: '800' },
-  compareToggleTextActive: { color: Colors.accent },
-  compareGrid: { flexDirection: 'row', gap: Spacing.sm },
-  compareColumn: {
-    flex: 1,
-    minHeight: 94,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface2,
-    padding: Spacing.md,
-  },
-  compareLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  compareDot: { width: 8, height: 8, borderRadius: 4 },
-  compareLabel: { color: Colors.textMuted, fontSize: FontSize.sm, fontWeight: '800' },
-  compareType: { color: Colors.text, fontSize: FontSize.md, fontWeight: '900', marginTop: Spacing.sm },
-  compareSpeed: { color: Colors.text, fontSize: FontSize.xl, fontWeight: '900', marginTop: 3 },
-  compareUnit: { color: Colors.textMuted, fontSize: FontSize.sm, fontWeight: '700' },
   card: {
     ...Surfaces.card,
     width: '100%',

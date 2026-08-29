@@ -41,7 +41,7 @@ function ListTab({ records }: { records: PitchResult[] }) {
           onViewTrajectory={() => navigation.navigate('TrajectorySimulation', {
             pitch: item,
             comparePitch: records[index + 1] ?? records[index - 1],
-            title: `第 ${records.length - index} 球 3D 軌跡`,
+            title: `第 ${records.length - index} 球互動 3D 回放`,
           })}
         />
       )}

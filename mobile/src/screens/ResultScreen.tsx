@@ -179,7 +179,7 @@ export default function ResultScreen() {
     navigation.navigate('TrajectorySimulation', {
       pitch: result,
       comparePitch: previousPitch ?? undefined,
-      title: '本球 3D 軌跡',
+      title: '本球互動 3D 回放',
     });
   }, [navigation, previousPitch, result]);
 
@@ -321,10 +321,10 @@ export default function ResultScreen() {
           style={styles.trajectoryHeroBtn}
           onPress={handleOpenTrajectory}
           accessibilityRole="button"
-          accessibilityLabel="查看本球 3D 軌跡模擬"
+          accessibilityLabel="查看本球互動 3D 進壘回放"
           activeOpacity={0.78}
         >
-          <Text style={styles.trajectoryHeroBtnText}>查看 3D 軌跡模擬</Text>
+          <Text style={styles.trajectoryHeroBtnText}>查看互動 3D 回放</Text>
         </TouchableOpacity>
       </View>
 

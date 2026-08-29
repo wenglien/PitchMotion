@@ -26,12 +26,15 @@ const PRESET_TRANSITION_MS = 420;
 
 interface Options {
   onGestureActiveChange?: (active: boolean) => void;
+  initialCamera?: Camera;
+  enabled?: boolean;
 }
 
-export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
-  const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA);
+export function useTrajectoryCamera({ onGestureActiveChange, initialCamera, enabled = true }: Options = {}) {
+  const initialCameraRef = useRef(normalizeCamera(initialCamera ?? DEFAULT_CAMERA));
+  const [camera, setCamera] = useState<Camera>(initialCameraRef.current);
   const [gesturing, setGesturing] = useState(false);
-  const [activePreset, setActivePreset] = useState<string | null>(VIEW_PRESETS[0].id);
+  const [activePreset, setActivePreset] = useState<string | null>(initialCamera ? null : VIEW_PRESETS[0].id);
 
   const cameraRef = useRef(camera);
   const cameraRafRef = useRef<number | null>(null);
@@ -40,8 +43,8 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
   const livePendingRef = useRef<Camera | null>(null);
   const inertiaRafRef = useRef<number | null>(null);
   const inertiaVelRef = useRef({ yaw: 0, pitch: 0 });
-  const gestureStartRef = useRef<Camera>(DEFAULT_CAMERA);
-  const pinchStartZoomRef = useRef(1);
+  const gestureStartRef = useRef<Camera>(initialCameraRef.current);
+  const pinchStartZoomRef = useRef(initialCameraRef.current.zoom);
   const viewportRef = useRef({ width: VIEW_W, height: VIEW_H });
   const gesturingRef = useRef(false);
   const transitionRafRef = useRef<number | null>(null);
@@ -221,9 +224,9 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
     stopInertia();
     stopTransition();
     flushLiveCamera();
-    publishCamera({ ...DEFAULT_CAMERA });
-    setActivePreset(VIEW_PRESETS[0].id);
-  }, [flushLiveCamera, publishCamera, stopInertia, stopTransition]);
+    publishCamera(initialCameraRef.current);
+    setActivePreset(initialCamera ? null : VIEW_PRESETS[0].id);
+  }, [flushLiveCamera, initialCamera, publishCamera, stopInertia, stopTransition]);
 
   const onPanBegin = useCallback(() => {
     if (gestureModeRef.current === 'pinch') return;
@@ -294,6 +297,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
 
   const gesture = useMemo(() => {
     const doubleTap = Gesture.Tap()
+      .enabled(enabled)
       .numberOfTaps(2)
       .maxDuration(280)
       .onEnd(() => {
@@ -301,6 +305,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
       });
 
     const pan = Gesture.Pan()
+      .enabled(enabled)
       .maxPointers(1)
       .minDistance(4)
       .activeOffsetX([-8, 8])
@@ -319,6 +324,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
       });
 
     const pinch = Gesture.Pinch()
+      .enabled(enabled)
       .onStart((e) => {
         runOnJS(onPinchBegin)(e.focalX, e.focalY);
       })
@@ -335,6 +341,7 @@ export function useTrajectoryCamera({ onGestureActiveChange }: Options = {}) {
     // Double-tap runs in parallel so it doesn't block single-finger pan recognition.
     return Gesture.Simultaneous(pan, pinch, doubleTap);
   }, [
+    enabled,
     onDoubleTap,
     onPanBegin,
     onPanEnd,

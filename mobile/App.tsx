@@ -56,7 +56,7 @@ export default function App() {
                   name="TrajectorySimulation"
                   component={TrajectorySimulationScreen}
                   options={({ route }) => ({
-                    title: route.params.title ?? '3D 軌跡模擬',
+                    title: route.params.title ?? '互動 3D 進壘回放',
                     presentation: 'card',
                   })}
                 />

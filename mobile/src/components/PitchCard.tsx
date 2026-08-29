@@ -108,10 +108,10 @@ export default function PitchCard({ pitch, index, onViewTrajectory }: Props) {
           style={styles.trajectoryBtn}
           onPress={onViewTrajectory}
           accessibilityRole="button"
-          accessibilityLabel={`查看第 ${index} 球的 3D 軌跡模擬`}
+          accessibilityLabel={`查看第 ${index} 球的互動 3D 進壘回放`}
           activeOpacity={0.75}
         >
-          <Text style={styles.trajectoryBtnText}>查看 3D 軌跡</Text>
+          <Text style={styles.trajectoryBtnText}>查看互動 3D 回放</Text>
         </TouchableOpacity>
       )}
     </View>

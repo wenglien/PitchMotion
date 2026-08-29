@@ -52,6 +52,8 @@ export function usePitchReplayClock(durationS: number, active = true) {
     setPlaying(true);
   }, []);
 
+  const pause = useCallback(() => setPlaying(false), []);
+
   const toggle = useCallback(() => {
     if (progress >= 1) replay();
     else setPlaying((value) => !value);
@@ -64,5 +66,5 @@ export function usePitchReplayClock(durationS: number, active = true) {
     setPlaying(false);
   }, [durationS]);
 
-  return { playing, progress, rate, setRate, replay, toggle, seek, reduceMotion };
+  return { playing, progress, rate, setRate, replay, pause, toggle, seek, reduceMotion };
 }

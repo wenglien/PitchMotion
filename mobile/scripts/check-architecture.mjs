@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
 import { toPitchResult } from '../src/adapters/nativeAnalysis.ts';
 import { normalizePipelineProgress } from '../src/utils/pipelineStages.ts';
 import { BASEBALL_RADIUS_M, buildChallengeCallout, buildPitchReplayModel } from '../src/utils/pitchReplay.ts';
@@ -181,5 +182,9 @@ assert.ok(Math.abs(velocity.yaw - 1.05) < 1e-9 && Math.abs(velocity.pitch - 0.85
 const fullFrameDecay = decayCameraVelocity(1, 1000 / 60);
 const twoHalfFrameDecay = decayCameraVelocity(decayCameraVelocity(1, 1000 / 120), 1000 / 120);
 assert.ok(Math.abs(fullFrameDecay - twoHalfFrameDecay) < 1e-12);
+
+const trajectoryScreen = readFileSync(new URL('../src/screens/TrajectorySimulationScreen.tsx', import.meta.url), 'utf8');
+assert.match(trajectoryScreen, /<PitchReplay[\s\S]*?interactive/);
+assert.equal(existsSync(new URL('../src/components/Trajectory3DView.tsx', import.meta.url)), false);
 
 console.log('architecture checks passed');

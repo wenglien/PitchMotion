@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
-import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Image, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
+import { GestureDetector } from 'react-native-gesture-handler';
 import Svg, {
   Circle,
   Defs,
@@ -28,6 +29,7 @@ import {
   VIEW_W,
 } from '../utils/trajectoryProjection';
 import { usePitchReplayClock } from '../hooks/usePitchReplayClock';
+import { useTrajectoryCamera } from '../hooks/useTrajectoryCamera';
 import { useTrajectoryProjection } from '../hooks/useTrajectoryProjection';
 import { useSettings } from '../context/SettingsContext';
 import TrajectorySceneDynamic from './trajectory/TrajectorySceneDynamic';
@@ -40,10 +42,13 @@ const CHALLENGE_H = 378;
 const HOME_PLATE_ANCHOR_Y = 360;
 const BASEBALL_STITCHES = [-0.58, -0.3, 0, 0.3, 0.58];
 const STADIUM_BACKGROUND = require('../../assets/replay/mound-to-home-plate.jpg');
+const INTERACTIVE_CAMERA = { ...DEFAULT_CAMERA, pitch: 5, zoom: 2.05 };
 
 interface Props {
   pitch: PitchResult;
   previousPitch?: PitchResult | null;
+  interactive?: boolean;
+  onGestureActiveChange?: (active: boolean) => void;
 }
 
 function clamp01(value: number) {
@@ -61,25 +66,40 @@ function arrowHead(x: number, y: number, dx: number, dy: number, size = 7) {
   return `${x},${y} ${x - dx * size + px * size * 0.45},${y - dy * size + py * size * 0.45} ${x - dx * size - px * size * 0.45},${y - dy * size - py * size * 0.45}`;
 }
 
-export default function PitchReplay({ pitch, previousPitch = null }: Props) {
+export default function PitchReplay({
+  pitch,
+  previousPitch = null,
+  interactive = false,
+  onGestureActiveChange,
+}: Props) {
   const isFocused = useIsFocused();
   const { settings } = useSettings();
   const [showPrevious, setShowPrevious] = useState(false);
+  const timelineWidthRef = useRef(VIEW_W);
   const model = useMemo(() => buildPitchReplayModel(pitch), [pitch]);
   const previousModel = useMemo(
     () => previousPitch ? buildPitchReplayModel(previousPitch) : null,
     [previousPitch],
   );
   const flightDurationS = model.durationS * PITCH_REPLAY_SCALE;
-  const totalDurationS = flightDurationS + CAMERA_ROTATION_S + RESULT_REVEAL_S;
+  const totalDurationS = flightDurationS + (interactive ? 0 : CAMERA_ROTATION_S) + RESULT_REVEAL_S;
   const clock = usePitchReplayClock(totalDurationS, isFocused);
+  const handleGestureActiveChange = useCallback((active: boolean) => {
+    if (active) clock.pause();
+    onGestureActiveChange?.(active);
+  }, [clock.pause, onGestureActiveChange]);
+  const trajectoryCamera = useTrajectoryCamera({
+    enabled: interactive,
+    initialCamera: interactive ? INTERACTIVE_CAMERA : undefined,
+    onGestureActiveChange: handleGestureActiveChange,
+  });
   const elapsedS = clock.progress * totalDurationS;
   const ballProgress = clamp01(elapsedS / flightDurationS);
-  const cameraRotationProgress = clamp01((elapsedS - flightDurationS) / CAMERA_ROTATION_S);
-  const resultProgress = smooth((elapsedS - flightDurationS - CAMERA_ROTATION_S) / RESULT_REVEAL_S);
+  const cameraRotationProgress = interactive ? 0 : clamp01((elapsedS - flightDurationS) / CAMERA_ROTATION_S);
+  const resultProgress = smooth((elapsedS - flightDurationS - (interactive ? 0 : CAMERA_ROTATION_S)) / RESULT_REVEAL_S);
   const edge = useMemo(() => buildChallengeCallout(model), [model]);
 
-  const camera = useMemo(() => {
+  const animatedCamera = useMemo(() => {
     const approachFocus = smooth((ballProgress - 0.72) / 0.28);
     const zoneFocus = approachFocus * (1 - resultProgress);
     const outside = edge && !edge.inside && model.landingPoint
@@ -115,6 +135,7 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
         + ((outside ? CENTER_Y : HOME_PLATE_ANCHOR_Y) - projectedOutcome.y) * resultProgress,
     };
   }, [ballProgress, cameraRotationProgress, edge, model, resultProgress]);
+  const camera = interactive ? trajectoryCamera.camera : animatedCamera;
 
   const projection = useTrajectoryProjection(model, camera);
   const previousProjection = useTrajectoryProjection(previousModel ?? model, camera);
@@ -145,7 +166,7 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
     <View style={styles.wrap}>
       <View style={styles.hud}>
         <View>
-          <Text style={styles.hudLabel}>{resultProgress > 0.65 ? `挑戰判定 · ${verdict}` : '進壘挑戰回放'}</Text>
+          <Text style={styles.hudLabel}>{interactive ? '互動 3D 進壘回放' : resultProgress > 0.65 ? `挑戰判定 · ${verdict}` : '進壘挑戰回放'}</Text>
           <Text style={styles.hudValue}>
             {pitchTypeLabel(type)}{speedKmh != null ? ` · ${formatSpeed(speedKmh, settings.speedUnit)} ${speedUnitLabel(settings.speedUnit)}` : ''}
           </Text>
@@ -157,7 +178,12 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
         ) : null}
       </View>
 
-      <View style={styles.stage}>
+      <GestureDetector gesture={trajectoryCamera.gesture}>
+      <View
+        style={styles.stage}
+        collapsable={false}
+        onLayout={(event) => trajectoryCamera.setViewportSize(event.nativeEvent.layout.width, event.nativeEvent.layout.height)}
+      >
       <Image
         source={STADIUM_BACKGROUND}
         style={styles.stadiumBackground}
@@ -196,7 +222,7 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
           landingShadow={projection.landingShadow}
           isStrike={model.isStrike}
           showLandingResult={false}
-          showPath={cameraRotationProgress < 1}
+          showPath={interactive || cameraRotationProgress < 1}
           challenge
         />
 
@@ -281,17 +307,46 @@ export default function PitchReplay({ pitch, previousPitch = null }: Props) {
         ) : null}
       </Svg>
       </View>
+      </GestureDetector>
+
+      {interactive ? (
+        <View style={styles.interactionRow}>
+          <Text style={styles.interactionHint}>觸碰即暫停 · 單指旋轉 · 雙指縮放 · 雙擊重設</Text>
+          <TouchableOpacity style={styles.resetButton} onPress={trajectoryCamera.resetView} accessibilityRole="button" accessibilityLabel="重設 3D 視角">
+            <Text style={styles.resetText}>重設視角</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {interactive ? (
+        <Pressable
+          style={styles.timelineHitArea}
+          onLayout={(event) => { timelineWidthRef.current = event.nativeEvent.layout.width; }}
+          onPress={(event) => clock.seek(event.nativeEvent.locationX / timelineWidthRef.current)}
+          onTouchMove={(event) => clock.seek(event.nativeEvent.locationX / timelineWidthRef.current)}
+          accessibilityRole="adjustable"
+          accessibilityLabel="3D 進壘回放位置"
+          accessibilityValue={{ min: 0, max: 100, now: Math.round(clock.progress * 100) }}
+          accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+          onAccessibilityAction={(event) => clock.seek(clock.progress + (event.nativeEvent.actionName === 'increment' ? 0.1 : -0.1))}
+        >
+          <View style={styles.timelineTrack}>
+            <View style={[styles.timelineFill, { width: `${clock.progress * 100}%` }]} />
+            <View style={[styles.timelineThumb, { left: `${clock.progress * 100}%` }]} />
+          </View>
+        </Pressable>
+      ) : null}
 
       <View style={styles.controls}>
-        <TouchableOpacity style={styles.primaryButton} onPress={clock.toggle} accessibilityRole="button">
+        <TouchableOpacity style={styles.primaryButton} onPress={() => { trajectoryCamera.stopInertia(); clock.toggle(); }} accessibilityRole="button">
           <Text style={styles.primaryText}>{clock.progress >= 1 ? '重新播放' : clock.playing ? '暫停' : '播放'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.button} onPress={clock.replay} accessibilityRole="button">
+        <TouchableOpacity style={styles.button} onPress={() => { trajectoryCamera.stopInertia(); clock.replay(); }} accessibilityRole="button">
           <Text style={styles.buttonText}>從頭播放</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.button}
-          onPress={() => clock.setRate(clock.rate === 0.5 ? 1 : 0.5)}
+          onPress={() => clock.setRate(clock.rate === 0.25 ? 0.5 : clock.rate === 0.5 ? 1 : 0.25)}
           accessibilityRole="button"
           accessibilityLabel={`目前播放速度 ${clock.rate} 倍`}
         >
@@ -326,6 +381,14 @@ const styles = StyleSheet.create({
   estimatedBadge: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 99, backgroundColor: 'rgba(245,158,11,0.14)', borderWidth: 1, borderColor: '#f59e0b' },
   estimatedText: { color: '#fbbf24', fontSize: 10, fontWeight: '800' },
   controls: { flexDirection: 'row', gap: Spacing.sm, padding: Spacing.md },
+  interactionRow: { minHeight: 44, paddingHorizontal: Spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.sm },
+  interactionHint: { flex: 1, color: '#7dd3fc', fontSize: 10, fontWeight: '700' },
+  resetButton: { minWidth: 72, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  resetText: { color: '#f9a8d4', fontSize: 11, fontWeight: '800' },
+  timelineHitArea: { minHeight: 44, marginHorizontal: Spacing.md, justifyContent: 'center' },
+  timelineTrack: { height: 5, borderRadius: 3, backgroundColor: '#334155' },
+  timelineFill: { height: 5, borderRadius: 3, backgroundColor: CHALLENGE_TRAIL },
+  timelineThumb: { position: 'absolute', top: -6, width: 17, height: 17, marginLeft: -8.5, borderRadius: 9, backgroundColor: '#fff', borderWidth: 3, borderColor: CHALLENGE_TRAIL },
   primaryButton: { flex: 1.2, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: Radius.lg, backgroundColor: CHALLENGE_TRAIL },
   primaryText: { color: '#fff', fontSize: 13, fontWeight: '800' },
   button: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: Radius.lg, borderWidth: 1, borderColor: '#334155' },
