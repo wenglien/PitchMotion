@@ -1,6 +1,15 @@
-# SpeedGun
+<p align="center">
+  <img src="docs/assets/readme-header.svg" alt="SpeedGun — on-device pitch lab" width="920">
+</p>
+
+<p align="center">
+  <strong>把每一球，變成看得懂的軌跡。</strong><br>
+  <sub>iPhone 上的全裝置端棒球投球分析 App</sub>
+</p>
 
 SpeedGun 是一款全程在 iPhone 裝置端執行的棒球投球分析 App。它使用 Swift、Core ML、AVFoundation 與 Metal 分析影片，再由 Expo React Native 呈現球速、球種、落點、位移與進壘軌跡；影片不需上傳伺服器。
+
+<p align="center"><img src="docs/assets/readme-divider.svg" alt="" width="920"></p>
 
 ## 核心功能
 
@@ -10,6 +19,8 @@ SpeedGun 是一款全程在 iPhone 裝置端執行的棒球投球分析 App。�
 - **互動進壘回放**：以 MLB ABS 風格呈現球路；支援播放、暫停、慢速、時間軸、自由旋轉、縮放與上一球比較。
 - **分析結果**：顯示偵測覆蓋率、實測／補點比例、分析品質及疊加軌跡影片。
 - **本機資料**：保存投球紀錄與設定，不需要帳號、後端服務或網路連線。
+
+<p align="center"><img src="docs/assets/readme-divider.svg" alt="" width="920"></p>
 
 ## 架構
 
