@@ -4,7 +4,7 @@ import CoreGraphics
 import UIKit
 
 /// Generates overlay video with ball trajectory, speed info, and strike zone.
-/// Port of src/generate_overlay.py
+/// Port of research/vision/generate_overlay.py
 final class OverlayGenerator {
     let outputScale: Double
 

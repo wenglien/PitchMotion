@@ -14,9 +14,9 @@ import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
 
-from src.SORT_tracker.sort import Sort
-from src.release_point_detector import ReleasePointDetector
-from src.get_pitch_frames_yolov8 import (
+from research.vision.SORT_tracker.sort import Sort
+from research.vision.release_point_detector import ReleasePointDetector
+from research.vision.get_pitch_frames_yolov8 import (
     _get_video_rotation,
     _get_raw_video_dims_ffprobe,
     _infer_ball_class_ids,

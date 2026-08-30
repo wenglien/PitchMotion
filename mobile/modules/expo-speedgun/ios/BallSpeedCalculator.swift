@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 /// Computes ball speed from trajectory data with air resistance model.
-/// Port of src/ball_speed_calculator.py
+/// Port of research/vision/ball_speed_calculator.py
 final class BallSpeedCalculator {
     let fps: Int
     let videoWidth: Int

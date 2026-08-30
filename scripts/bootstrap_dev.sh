@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Usage:
 #   ./scripts/bootstrap_dev.sh
-#   REQ_FILE=requirements-yolov8.txt ./scripts/bootstrap_dev.sh
+#   REQ_FILE=path/to/requirements.txt ./scripts/bootstrap_dev.sh
 #
 # Notes:
 # - This script is intentionally non-destructive: it creates/uses .venv in repo root.
@@ -22,7 +22,7 @@ fi
 
 if [[ ! -f "${REQ_FILE}" ]]; then
   echo "ERROR 找不到 requirements 檔案：${REQ_FILE}" >&2
-  echo "   你可以改用：REQ_FILE=requirements-yolov8.txt ./scripts/bootstrap_dev.sh" >&2
+  echo "   可用 REQ_FILE 指定其他 requirements 檔案。" >&2
   exit 1
 fi
 

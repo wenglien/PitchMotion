@@ -33,6 +33,7 @@ env/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
@@ -54,16 +55,13 @@ model/yolov4-tiny-baseball-416/variables/
 !mobile/modules/expo-speedgun/android/src/main/assets/**/*.tflite
 !mobile/modules/expo-speedgun/Resources/**/*.mlmodel
 
-# Training outputs (yolov8/runs/ 已納入版控以保留訓練權重)
-# yolov8/runs/
+# Local research data and generated training outputs
+research/yolo/datasets/
+research/yolo/runs/
 *.csv
 *.png
 *.jpg
 !mobile/android/app/src/main/res/**/*.png
-!yolov8/datasets/**/*.jpg
-!yolov8/datasets/**/*.txt
-!yolov26n/datasets/**/*.jpg
-!yolov26n/datasets/**/*.txt
 
 # Video files — tracked via Git LFS in ver.2
 # videos/

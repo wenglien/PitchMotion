@@ -10,7 +10,7 @@ let MIN_MANUAL_MOUND_DISTANCE_M: Double = 3.0
 let MAX_MANUAL_MOUND_DISTANCE_M: Double = 30.0
 
 // Strike-zone bounds in display-normalized coordinates for MLB-style umpire POV.
-// Keep these in sync with src/get_pitch_frames_yolov8.py and the React
+// Keep these in sync with research/vision/get_pitch_frames_yolov8.py and the React
 // StrikeZone defaults so analysis, overlay, and result charts agree.
 let STRIKE_ZONE_X_MIN: Double = 0.33
 let STRIKE_ZONE_X_MAX: Double = 0.67
@@ -29,7 +29,7 @@ let DEFAULT_STRIKE_ZONE: [String: Double] = [
     "y_max": STRIKE_ZONE_Y_MAX,
 ]
 
-// MARK: - Detection Filter Constants (from get_pitch_frames_yolov8.py)
+// MARK: - Detection Filter Constants (from research/vision/get_pitch_frames_yolov8.py)
 
 let MAX_AREA_RATIO: Double = 0.015
 let MAX_ASPECT_RATIO: Double = 4.0

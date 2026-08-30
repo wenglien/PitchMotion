@@ -5,7 +5,7 @@ import Foundation
 import Vision
 
 /// Main pipeline orchestrator. Wires all stages together.
-/// Port of src/pipelines/yolov8_pipeline.py + get_pitch_frames_yolov8.py
+/// Port of research/vision/pipelines/yolov8_pipeline.py + get_pitch_frames_yolov8.py
 final class SpeedgunPipeline {
     private let progressCallback: (PipelineProgress) -> Void
     private let AUDIO_CATCH_MIN_OFFSET_SEC = 0.10
@@ -1891,7 +1891,7 @@ final class SpeedgunPipeline {
     }
 
     /// Fill missing ball positions using polynomial interpolation.
-    /// Port of src/utils.py fill_lost_tracking()
+    /// Port of research/vision/utils.py fill_lost_tracking()
     private func fillLostTracking(frameInfos: inout [FrameInfo], maxGapFrames: Int, fps: Int) {
         var maxGap = maxGapFrames
         if fps > 0 {

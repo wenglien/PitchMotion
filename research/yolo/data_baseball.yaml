@@ -1,0 +1,4 @@
+train: datasets/baseball/images/train
+val: datasets/baseball/images/val
+names:
+  0: ball

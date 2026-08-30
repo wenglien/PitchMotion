@@ -20,7 +20,7 @@ SpeedGun 是一款全程在 iPhone 裝置端執行的棒球投球分析 App。�
 | 資料轉接 | `mobile/src/adapters/nativeAnalysis.ts` | 將原生結果正規化為 `PitchResult` |
 | Native Bridge | `mobile/modules/expo-speedgun/src` | React Native 與 iOS 分析核心的型別化介面 |
 | iOS 分析核心 | `mobile/modules/expo-speedgun/ios` | 影片解碼、模型推論、追蹤、球速、球種、落點與 overlay |
-| 模型與研究 | `yolov26n`、`pitch_classifier`、`src` | YOLO、球種分類與電腦視覺研究工具 |
+| 模型與研究 | `research` | YOLO、球種分類與電腦視覺研究工具；不進入 App 執行路徑 |
 
 ### 分析流程
 
@@ -53,7 +53,10 @@ speedgun-mobile/
 │       ├── src/                     # TypeScript bridge
 │       ├── ios/                     # Swift／Metal 分析核心
 │       └── Resources/               # Core ML 與姿勢模型
-├── pitch_classifier/                # 球種分類研究
-├── src/                             # Python CV 研究工具
-└── yolov26n/                        # YOLO 訓練資產
+├── research/
+│   ├── vision/                      # Python 電腦視覺參考實作
+│   ├── pitch_classifier/            # 球種分類研究
+│   └── yolo/                        # YOLO 訓練腳本與模型
+├── scripts/                         # 開發、診斷與資料處理工具
+└── docs/                            # 技術文件
 ```

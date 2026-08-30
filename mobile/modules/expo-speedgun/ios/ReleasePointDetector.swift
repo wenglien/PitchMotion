@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 /// Multi-signal release point detector.
-/// Simplified port of src/release_point_detector.py
+/// Simplified port of research/vision/release_point_detector.py
 /// Uses: S0 (release pose template), S1 (wrist speed peak), S2 (elbow extension), S3 (foot contact), S4 (arm angular velocity)
 final class ReleasePointDetector {
     let fps: Int

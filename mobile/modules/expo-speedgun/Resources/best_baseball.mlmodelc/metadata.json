@@ -190,7 +190,7 @@
       "Conv" : 88,
       "Pad" : 1
     },
-    "shortDescription" : "Ultralytics YOLO11n model trained on \/Users\/wenglien\/speedgun-mobile\/yolov8\/data_baseball.yaml",
+    "shortDescription" : "Ultralytics YOLO11n baseball detection model",
     "license" : "AGPL-3.0 License (https:\/\/ultralytics.com\/license)",
     "generatedClassName" : "best_baseball",
     "author" : "Ultralytics",

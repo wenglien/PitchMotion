@@ -57,9 +57,9 @@ def main() -> int:
     # ── Project imports ──────────────────────────────────────────────────────
     print("\n== project modules ==")
     project_modules = [
-        "src.get_pitch_frames_yolov8",
-        "src.pipelines.yolov8_pipeline",
-        "pitch_classifier",
+        "research.vision.get_pitch_frames_yolov8",
+        "research.vision.pipelines.yolov8_pipeline",
+        "research.pitch_classifier",
     ]
     for name in project_modules:
         mod, err = _try_import(name)
