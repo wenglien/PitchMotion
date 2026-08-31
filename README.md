@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <sub><a href="#核心功能">核心功能</a> · <a href="#架構">架構</a> · <a href="#分析流程">分析流程</a> · <a href="#架構邊界">架構邊界</a> · <a href="#專案結構">專案結構</a></sub>
+  <sub><a href="#安裝到-iphone">安裝到 iPhone</a> · <a href="#核心功能">核心功能</a> · <a href="#架構">架構</a> · <a href="#分析流程">分析流程</a> · <a href="#架構邊界">架構邊界</a> · <a href="#專案結構">專案結構</a></sub>
 </p>
 
 <table>
@@ -25,6 +25,23 @@
     </td>
   </tr>
 </table>
+
+<a id="安裝到-iphone"></a>
+<p align="center"><img src="docs/assets/readme-section-install.svg" alt="00 安裝到 iPhone" width="920"></p>
+
+> [!IMPORTANT]
+> PitchMotion 目前只開放 iOS。請使用 Mac、Xcode 與自己的 Apple Account 簽署安裝；不提供 Android 版本，也不提供可直接安裝的未簽署 IPA。
+
+```bash
+git clone https://github.com/wenglien/PitchMotion.git
+cd PitchMotion/mobile
+npm ci
+npx expo prebuild --platform ios
+npx pod-install
+open ios/PitchMotion.xcworkspace
+```
+
+在 Xcode 選擇自己的 Team、設定唯一的 Bundle Identifier，連接 iPhone 並以 `Release` configuration 執行。完整需求、簽署步驟與疑難排解請見 **[iPhone 安裝指南](docs/install-ios.md)**。
 
 <a id="核心功能"></a>
 <p align="center"><img src="docs/assets/readme-section-features.svg" alt="01 核心功能" width="920"></p>
@@ -125,8 +142,8 @@ speedgun-mobile/                     # ROOT
 │   ├── src/                         # APP · UI、狀態與資料轉接
 │   └── modules/expo-speedgun/
 │       ├── src/                     # BRIDGE · TypeScript 介面
-│       ├── ios/                     # CORE · Swift／Metal 分析核心
-│       └── Resources/               # MODELS · App 使用的模型與參數
+│       └── ios/                     # CORE · Swift／Metal 分析核心
+│           └── Resources/           # MODELS · App 使用的模型與參數
 ├── research/
 │   ├── vision/                      # R&D · 電腦視覺參考實作
 │   └── pitch_classifier/            # R&D · 規則式球種分類

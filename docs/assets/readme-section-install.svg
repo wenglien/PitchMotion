@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 150" role="img" aria-labelledby="title desc">
+  <title id="title">00 安裝到 iPhone</title>
+  <desc id="desc">Hand-drawn installation section banner with three connected steps.</desc>
+
+  <path d="M18 20 Q160 12 302 20 T600 18 T902 22
+           Q908 72 902 130
+           Q742 138 585 131 T284 136 T18 130
+           Q12 76 18 20Z"
+        fill="#eef6ff" stroke="#17324d" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="52" y="63" fill="#5f7890" font-family="ui-rounded, system-ui, sans-serif" font-size="16" font-weight="700" letter-spacing="3">00 / INSTALL</text>
+  <text x="52" y="105" fill="#17324d" font-family="'Bradley Hand', 'Comic Sans MS', cursive" font-size="39" font-weight="700">安裝到 iPhone</text>
+
+  <path d="M555 76 Q625 56 694 76 T836 74" fill="none" stroke="#75a7a1" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="570" cy="72" r="9" fill="#fff8e8" stroke="#ef6a62" stroke-width="3"/>
+  <circle cx="698" cy="75" r="9" fill="#fff8e8" stroke="#ef6a62" stroke-width="3"/>
+  <circle cx="826" cy="72" r="9" fill="#fff8e8" stroke="#ef6a62" stroke-width="3"/>
+  <text x="570" y="111" text-anchor="middle" fill="#52687b" font-family="ui-rounded, system-ui, sans-serif" font-size="12" font-weight="700" letter-spacing="1">MAC</text>
+  <text x="698" y="111" text-anchor="middle" fill="#52687b" font-family="ui-rounded, system-ui, sans-serif" font-size="12" font-weight="700" letter-spacing="1">XCODE</text>
+  <text x="826" y="111" text-anchor="middle" fill="#52687b" font-family="ui-rounded, system-ui, sans-serif" font-size="12" font-weight="700" letter-spacing="1">IPHONE</text>
+</svg>

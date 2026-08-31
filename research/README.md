@@ -5,4 +5,4 @@
 - `vision/`：Python 電腦視覺參考實作。
 - `pitch_classifier/`：規則式球種分類與特徵工具。
 
-App 使用的模型與參數統一放在 `mobile/modules/expo-speedgun/Resources/`。
+App 使用的模型與參數統一放在 `mobile/modules/expo-speedgun/ios/Resources/`。

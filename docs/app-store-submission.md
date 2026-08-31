@@ -1,5 +1,7 @@
 # PitchMotion App Store 上架資料
 
+> 目前未透過 App Store 發佈。現階段使用者請依 [iPhone 安裝指南](install-ios.md)，從 GitHub 下載原始碼並使用自己的 Apple Account 簽署安裝；本文件保留供未來重新送審使用。
+
 ## App 基本資料
 
 - App 名稱：PitchMotion

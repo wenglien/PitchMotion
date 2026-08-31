@@ -61,6 +61,9 @@ research/yolo/runs/
 *.csv
 *.png
 *.jpg
+!mobile/assets/icon.png
+!mobile/assets/splash-icon.png
+!mobile/assets/replay/mound-to-home-plate.jpg
 !mobile/android/app/src/main/res/**/*.png
 
 # Video files — tracked via Git LFS in ver.2
