@@ -1,15 +1,15 @@
-# SpeedGun App Store 上架資料
+# PitchMotion App Store 上架資料
 
 ## App 基本資料
 
-- App 名稱：SpeedGun
+- App 名稱：PitchMotion
 - Bundle ID：`com.wenglien.speedgun.mobile`
 - 版本：`1.0.0`
 - 主要語言：繁體中文
 - 建議主分類：運動
 - 建議副分類：健康與健身
 - Subtitle（30 字內）：`離線棒球球速與球路分析`
-- SKU 建議：`speedgun-ios-001`
+- SKU 建議：`pitchmotion-ios-001`
 - Support URL：`https://github.com/wenglien/Baseball-Trajectory-Analysis/issues`
 - Privacy Policy URL：`https://github.com/wenglien/Baseball-Trajectory-Analysis/blob/main/docs/privacy-policy.md`
 
@@ -19,7 +19,7 @@
 
 ## App 描述
 
-SpeedGun 是專為棒球投手、教練與球迷設計的裝置端投球分析工具。
+PitchMotion 是專為棒球投手、教練與球迷設計的裝置端投球分析工具。
 
 選取一段投球影片，即可在 iPhone 上分析球速、球種、好球帶落點、水平與垂直位移，並以進壘回放和 3D 軌跡檢視完整球路。分析使用 Core ML、球體偵測、姿勢估測與物理模型，全程在裝置上完成，影片與結果不需上傳伺服器。
 
@@ -40,7 +40,7 @@ SpeedGun 是專為棒球投手、教練與球迷設計的裝置端投球分析�
 
 ## App Review Notes
 
-SpeedGun does not require an account or network connection. To test: open the Analyze tab, choose a local baseball pitch video, enter batter height, configure the measured mound-to-plate distance in Settings, then start analysis. Processing may take several minutes because Core ML and MediaPipe run entirely on device. Photo-library access is used only to select a video. Audio from the selected video is processed locally to estimate catch timing; the app does not request microphone access.
+PitchMotion does not require an account or network connection. To test: open the Analyze tab, choose a local baseball pitch video, enter batter height, configure the measured mound-to-plate distance in Settings, then start analysis. Processing may take several minutes because Core ML and MediaPipe run entirely on device. Photo-library access is used only to select a video. Audio from the selected video is processed locally to estimate catch timing; the app does not request microphone access.
 
 ## App Store Connect 待填
 

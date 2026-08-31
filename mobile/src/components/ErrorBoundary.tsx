@@ -37,7 +37,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     const { error, info } = this.state;
     if (!error) return;
     const payload = [
-      `SpeedGun crash report`,
+      `PitchMotion crash report`,
       `Platform: ${Platform.OS} ${Platform.Version}`,
       `Time: ${new Date().toISOString()}`,
       ``,

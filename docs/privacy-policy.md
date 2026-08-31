@@ -1,8 +1,8 @@
-# SpeedGun 隱私權政策
+# PitchMotion 隱私權政策
 
 生效日期：2026 年 8 月 7 日
 
-SpeedGun 是離線棒球投球分析工具。本政策說明 App 如何處理使用者選擇的影片與分析資料。
+PitchMotion 是離線棒球投球分析工具。本政策說明 App 如何處理使用者選擇的影片與分析資料。
 
 ## 資料處理方式
 
@@ -13,7 +13,7 @@ SpeedGun 是離線棒球投球分析工具。本政策說明 App 如何處理使
 
 ## 權限
 
-SpeedGun 會要求照片圖庫權限，以便使用者選取要分析的投球影片。App 不會要求相機或麥克風權限；所選影片中的音軌只在裝置端用於辨識接球時點。
+PitchMotion 會要求照片圖庫權限，以便使用者選取要分析的投球影片。App 不會要求相機或麥克風權限；所選影片中的音軌只在裝置端用於辨識接球時點。
 
 ## 分享與保存
 
@@ -21,7 +21,7 @@ SpeedGun 會要求照片圖庫權限，以便使用者選取要分析的投球�
 
 ## 第三方元件
 
-SpeedGun 使用 Apple 系統框架、Expo、React Native 與 MediaPipe 執行裝置端功能。這些元件未被設定用來向開發者蒐集使用者資料。
+PitchMotion 使用 Apple 系統框架、Expo、React Native 與 MediaPipe 執行裝置端功能。這些元件未被設定用來向開發者蒐集使用者資料。
 
 ## 政策變更
 
@@ -29,4 +29,4 @@ SpeedGun 使用 Apple 系統框架、Expo、React Native 與 MediaPipe 執行裝
 
 ## 聯絡方式
 
-如有隱私或資料處理問題，請透過 [SpeedGun 支援頁面](https://github.com/wenglien/Baseball-Trajectory-Analysis/issues) 聯絡開發者。
+如有隱私或資料處理問題，請透過 [PitchMotion 支援頁面](https://github.com/wenglien/Baseball-Trajectory-Analysis/issues) 聯絡開發者。

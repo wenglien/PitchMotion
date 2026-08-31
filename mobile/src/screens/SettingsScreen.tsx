@@ -407,7 +407,7 @@ export default function SettingsScreen() {
               <View style={styles.cardHeader}>
                 <View>
                   <Text style={styles.sectionTitle}>關於</Text>
-                  <Text style={styles.sectionSub}>SpeedGun</Text>
+                  <Text style={styles.sectionSub}>PitchMotion</Text>
                 </View>
                 <Ionicons name="information-circle-outline" size={20} color={Colors.textMuted} />
               </View>

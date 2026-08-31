@@ -26,7 +26,7 @@ if [[ ! -f "${REQ_FILE}" ]]; then
   exit 1
 fi
 
-echo "== Speedgun bootstrap =="
+echo "== PitchMotion bootstrap =="
 echo "Repo: ${ROOT_DIR}"
 echo "Requirements: ${REQ_FILE}"
 

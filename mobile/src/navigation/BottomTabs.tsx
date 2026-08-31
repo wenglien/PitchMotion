@@ -77,7 +77,7 @@ export default function BottomTabs() {
       <Tab.Screen
         name="Analyze"
         component={AnalyzeScreen}
-        options={{ title: 'SpeedGun', tabBarLabel: TAB_LABELS.Analyze }}
+        options={{ title: 'PitchMotion', tabBarLabel: TAB_LABELS.Analyze }}
       />
       <Tab.Screen
         name="Result"

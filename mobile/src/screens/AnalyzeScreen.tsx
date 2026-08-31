@@ -110,7 +110,7 @@ export default function AnalyzeScreen() {
       setStatusType('error');
       Alert.alert(
         '權限未開啟',
-        '請到「設定 → SpeedGun → 照片」開啟相簿存取權。',
+        '請到「設定 → PitchMotion → 照片」開啟相簿存取權。',
         [
           { text: '取消', style: 'cancel' },
           { text: '開啟設定', onPress: () => Linking.openSettings() },

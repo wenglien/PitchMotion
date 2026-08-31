@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "SpeedGun",
+    "name": "PitchMotion",
     "slug": "speedgun-mobile",
     "description": "使用裝置端 AI 分析棒球投球影片的球速、球路與好球帶落點。",
     "platforms": [
@@ -24,7 +24,7 @@
         "usesNonExemptEncryption": false
       },
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "SpeedGun 需要存取照片圖庫，以選取投球影片進行裝置端分析。"
+        "NSPhotoLibraryUsageDescription": "PitchMotion 需要存取照片圖庫，以選取投球影片進行裝置端分析。"
       }
     },
     "plugins": [
@@ -32,7 +32,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "SpeedGun 需要存取照片圖庫，以選取投球影片進行裝置端分析。",
+          "photosPermission": "PitchMotion 需要存取照片圖庫，以選取投球影片進行裝置端分析。",
           "cameraPermission": false,
           "microphonePermission": false
         }

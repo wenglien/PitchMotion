@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 220" role="img" aria-labelledby="title desc">
-  <title id="title">SpeedGun</title>
-  <desc id="desc">SpeedGun title framed by hand-drawn lines.</desc>
+  <title id="title">PitchMotion</title>
+  <desc id="desc">PitchMotion title framed by hand-drawn lines.</desc>
 
   <path d="M18 22 Q134 14 248 23 T474 19 T701 24 T902 18
            Q910 66 904 110 T908 199
@@ -10,7 +10,7 @@
   <path d="M27 31 Q168 22 307 31 T596 28 T892 29" fill="none" stroke="#ef6a62" stroke-width="2.5" stroke-linecap="round" opacity=".8"/>
   <path d="M29 187 Q179 195 329 187 T625 190 T895 186" fill="none" stroke="#75a7a1" stroke-width="2.5" stroke-linecap="round" opacity=".85"/>
 
-  <text x="460" y="111" text-anchor="middle" fill="#17324d" font-family="'Bradley Hand', 'Comic Sans MS', cursive" font-size="76" font-weight="700" letter-spacing="2">SpeedGun</text>
+  <text x="460" y="111" text-anchor="middle" fill="#17324d" font-family="'Bradley Hand', 'Comic Sans MS', cursive" font-size="70" font-weight="700" letter-spacing="1.5">PitchMotion</text>
   <text x="460" y="150" text-anchor="middle" fill="#52687b" font-family="ui-rounded, system-ui, sans-serif" font-size="20" letter-spacing="4">ON-DEVICE PITCH LAB</text>
 
   <path d="M260 168 Q360 158 460 167 T660 164" fill="none" stroke="#ef6a62" stroke-width="3" stroke-linecap="round"/>

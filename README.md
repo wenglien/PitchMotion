@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme-header.svg" alt="SpeedGun — on-device pitch lab" width="920">
+  <img src="docs/assets/readme-header.svg" alt="PitchMotion — on-device pitch lab" width="920">
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
     <td width="64%" valign="top">
       <sub>BUILT FOR THE MOUND</sub><br><br>
       <strong>從一段投球影片，讀懂速度、球路與進壘位置。</strong><br><br>
-      SpeedGun 使用 Swift、Core ML、AVFoundation 與 Metal 分析影片，再由 Expo React Native 呈現每一球的完整結果。
+      PitchMotion 使用 Swift、Core ML、AVFoundation 與 Metal 分析影片，再由 Expo React Native 呈現每一球的完整結果。
     </td>
     <td width="36%" valign="top">
       <sub>PRIVACY BY DESIGN</sub><br><br>
