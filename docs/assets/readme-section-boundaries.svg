@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 104" role="img" aria-labelledby="title desc">
+  <title id="title">04 架構邊界</title>
+  <desc id="desc">Hand-drawn section title framed by boundary brackets.</desc>
+  <path d="M18 18 Q178 11 337 18 T630 15 T902 19 Q907 51 901 86 Q742 93 580 87 T282 92 T18 87 Q12 51 18 18Z"
+        fill="#fff0ee" stroke="#17324d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="44" y="65" fill="#ef6a62" font-family="ui-rounded, system-ui, sans-serif" font-size="26" font-weight="700">04</text>
+  <path d="M92 27 Q97 51 91 77" fill="none" stroke="#ef6a62" stroke-width="3" stroke-linecap="round"/>
+  <text x="122" y="66" fill="#17324d" font-family="'Bradley Hand', 'Comic Sans MS', cursive" font-size="35" font-weight="700">架構邊界</text>
+  <g fill="none" stroke="#75a7a1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M614 29 Q596 30 596 45 L596 67 Q596 78 614 78"/>
+    <path d="M830 29 Q848 30 848 45 L848 67 Q848 78 830 78"/>
+    <path d="M636 40 Q723 34 810 40"/><path d="M636 65 Q723 71 810 65"/>
+  </g>
+</svg>

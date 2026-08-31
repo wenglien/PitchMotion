@@ -7,22 +7,23 @@
   <sub>iPhone 上的全裝置端棒球投球分析 App</sub>
 </p>
 
+<p align="center">
+  <sub><a href="#核心功能">核心功能</a> · <a href="#架構">架構</a> · <a href="#分析流程">分析流程</a> · <a href="#架構邊界">架構邊界</a> · <a href="#專案結構">專案結構</a></sub>
+</p>
+
 SpeedGun 是一款全程在 iPhone 裝置端執行的棒球投球分析 App。它使用 Swift、Core ML、AVFoundation 與 Metal 分析影片，再由 Expo React Native 呈現球速、球種、落點、位移與進壘軌跡；影片不需上傳伺服器。
 
-<p align="center"><img src="docs/assets/readme-divider.svg" alt="" width="920"></p>
+<a id="核心功能"></a>
+<p align="center"><img src="docs/assets/readme-section-features.svg" alt="01 核心功能" width="920"></p>
 
-## 核心功能
+| 分析核心 | 回放體驗 |
+|---|---|
+| **投球分析**<br>YOLO 棒球偵測、Pose 出手點判斷、SORT 追蹤、漏偵補點與軌跡平滑。 | **互動進壘回放**<br>MLB ABS 風格球路，支援播放、暫停、慢速、時間軸、自由旋轉、縮放與上一球比較。 |
+| **球速與球種**<br>依原始時間戳、出手／接球時點、投打距離與 TTC 檢核計算球速，並辨識主要球種。 | **分析結果**<br>顯示偵測覆蓋率、實測／補點比例、分析品質及疊加軌跡影片。 |
+| **落點與位移**<br>提供 MLB ABS 好球帶、好壞球判定、水平／垂直位移、IVB 與 Break Chart。 | **本機資料**<br>保存投球紀錄與設定，不需要帳號、後端服務或網路連線。 |
 
-- **投球分析**：YOLO 棒球偵測、Pose 出手點判斷、SORT 追蹤、漏偵補點與軌跡平滑。
-- **球速與球種**：依原始影片時間戳、出手／接球時點、投打距離與 TTC 檢核計算球速，並辨識主要球種。
-- **落點與位移**：提供 MLB ABS 好球帶、好壞球判定、水平／垂直位移、IVB 與 Break Chart。
-- **互動進壘回放**：以 MLB ABS 風格呈現球路；支援播放、暫停、慢速、時間軸、自由旋轉、縮放與上一球比較。
-- **分析結果**：顯示偵測覆蓋率、實測／補點比例、分析品質及疊加軌跡影片。
-- **本機資料**：保存投球紀錄與設定，不需要帳號、後端服務或網路連線。
-
-<p align="center"><img src="docs/assets/readme-divider.svg" alt="" width="920"></p>
-
-## 架構
+<a id="架構"></a>
+<p align="center"><img src="docs/assets/readme-section-architecture.svg" alt="02 架構" width="920"></p>
 
 | 層級 | 位置 | 責任 |
 |---|---|---|
@@ -33,7 +34,8 @@ SpeedGun 是一款全程在 iPhone 裝置端執行的棒球投球分析 App。�
 | iOS 分析核心 | `mobile/modules/expo-speedgun/ios` | 影片解碼、模型推論、追蹤、球速、球種、落點與 overlay |
 | 模型與研究 | `research` | YOLO、球種分類與電腦視覺研究工具；不進入 App 執行路徑 |
 
-### 分析流程
+<a id="分析流程"></a>
+<p align="center"><img src="docs/assets/readme-section-flow.svg" alt="03 分析流程" width="920"></p>
 
 ```text
 投球影片
@@ -46,15 +48,20 @@ SpeedGun 是一款全程在 iPhone 裝置端執行的棒球投球分析 App。�
   → 結果頁、互動進壘回放與歷史紀錄
 ```
 
-### 架構邊界
+<a id="架構邊界"></a>
+<p align="center"><img src="docs/assets/readme-section-boundaries.svg" alt="04 架構邊界" width="920"></p>
 
-- Swift 是球速、落點、位移與球種的唯一計算來源。
-- TypeScript 只負責資料轉接與顯示，不重新計算原生分析結果。
-- 動畫補點與平滑只影響畫面，不會改變球速或原始分析數據。
-- 2D 進壘動畫與互動 3D 回放共用 `PitchReplayModel`，確保同一球只有一份軌跡。
-- 分析、影片與使用者資料皆保留在裝置端。
+> **單一計算來源**<br>
+> Swift 負責球速、落點、位移與球種；TypeScript 只做資料轉接與顯示。
 
-### 專案結構
+> **數據與動畫分離**<br>
+> 動畫補點和平滑只改變畫面；2D 與互動 3D 共用 `PitchReplayModel`，不改寫原始分析數據。
+
+> **資料留在裝置端**<br>
+> 分析、影片、投球紀錄與使用者設定皆保留在 iPhone。
+
+<a id="專案結構"></a>
+<p align="center"><img src="docs/assets/readme-section-structure.svg" alt="05 專案結構" width="920"></p>
 
 ```text
 speedgun-mobile/

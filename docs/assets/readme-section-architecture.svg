@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 104" role="img" aria-labelledby="title desc">
+  <title id="title">02 架構</title>
+  <desc id="desc">Cool hand-drawn section title built from layered lines.</desc>
+  <path d="M20 19 Q169 12 319 19 T610 16 T900 20 Q905 52 899 86 Q746 92 590 87 T296 91 T20 86 Q14 52 20 19Z"
+        fill="#eef8f6" stroke="#17324d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="44" y="65" fill="#75a7a1" font-family="ui-rounded, system-ui, sans-serif" font-size="26" font-weight="700">02</text>
+  <path d="M92 27 Q97 50 91 77" fill="none" stroke="#75a7a1" stroke-width="3" stroke-linecap="round"/>
+  <text x="122" y="66" fill="#17324d" font-family="'Bradley Hand', 'Comic Sans MS', cursive" font-size="35" font-weight="700">架構</text>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M608 30 Q700 24 810 31 L804 44 Q706 48 615 43Z" stroke="#75a7a1" stroke-width="2.5"/>
+    <path d="M626 49 Q704 44 792 50 L787 62 Q706 67 630 62Z" stroke="#ef6a62" stroke-width="2.5"/>
+    <path d="M644 68 Q706 63 774 69 L770 80 Q706 84 647 79Z" stroke="#17324d" stroke-width="2.5"/>
+  </g>
+</svg>

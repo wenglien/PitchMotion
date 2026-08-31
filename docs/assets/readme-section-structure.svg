@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 104" role="img" aria-labelledby="title desc">
+  <title id="title">05 專案結構</title>
+  <desc id="desc">Hand-drawn section title with a simple source tree.</desc>
+  <path d="M18 18 Q176 12 334 18 T628 15 T902 19 Q908 51 901 86 Q744 94 581 87 T282 92 T18 87 Q12 51 18 18Z"
+        fill="#f3f5f7" stroke="#17324d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="44" y="65" fill="#52687b" font-family="ui-rounded, system-ui, sans-serif" font-size="26" font-weight="700">05</text>
+  <path d="M92 27 Q87 50 94 77" fill="none" stroke="#52687b" stroke-width="3" stroke-linecap="round"/>
+  <text x="122" y="66" fill="#17324d" font-family="'Bradley Hand', 'Comic Sans MS', cursive" font-size="35" font-weight="700">專案結構</text>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M630 27 Q627 51 631 78 M631 38 Q674 34 712 39 M631 57 Q685 53 733 58 M631 75 Q703 70 771 76" stroke="#75a7a1" stroke-width="3"/>
+    <path d="M712 39 Q750 34 791 39 M733 58 Q769 64 811 58 M771 76 Q800 81 839 76" stroke="#ef6a62" stroke-width="2.5"/>
+  </g>
+</svg>
