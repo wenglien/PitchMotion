@@ -78,7 +78,7 @@
 | `03` | **轉接層 · Data Adapter**<br><sub>將原生結果正規化為 PitchResult</sub> | `mobile/src/adapters/nativeAnalysis.ts` |
 | `04` | **橋接層 · Native Bridge**<br><sub>React Native 與 iOS 核心的型別化介面</sub> | `mobile/modules/expo-speedgun/src` |
 | `05` | **運算層 · iOS Core**<br><sub>影片解碼、模型推論、追蹤、球速、球種、落點與 overlay</sub> | `mobile/modules/expo-speedgun/ios` |
-| `R&D` | **研究區 · Models & Research**<br><sub>不進入 App 執行路徑</sub> | `research` |
+| `R&D` | **研究區 · Analysis Research**<br><sub>電腦視覺參考實作；不進入 App 執行路徑</sub> | `research` |
 
 <a id="分析流程"></a>
 <p align="center"><img src="docs/assets/readme-section-flow.svg" alt="03 分析流程" width="920"></p>
@@ -126,11 +126,10 @@ speedgun-mobile/                     # ROOT
 │   └── modules/expo-speedgun/
 │       ├── src/                     # BRIDGE · TypeScript 介面
 │       ├── ios/                     # CORE · Swift／Metal 分析核心
-│       └── Resources/               # MODELS · Core ML 與姿勢模型
+│       └── Resources/               # MODELS · App 使用的模型與參數
 ├── research/
 │   ├── vision/                      # R&D · 電腦視覺參考實作
-│   ├── pitch_classifier/            # R&D · 球種分類
-│   └── yolo/                        # R&D · YOLO 訓練與模型
+│   └── pitch_classifier/            # R&D · 規則式球種分類
 ├── scripts/                         # TOOLS · 開發、診斷與資料處理
 └── docs/                            # DOCS · 技術文件
 ```

@@ -8,4 +8,3 @@ scikit-image==0.22.0
 opencv-python==4.9.0.80
 mediapipe==0.10.21
 ultralytics>=8.3.150  # YOLO26 support (released 2026-01-14)
-tensorflow==2.16.1

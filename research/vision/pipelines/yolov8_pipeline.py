@@ -59,7 +59,7 @@ def run_yolov8_pipeline(
     if not os.path.isfile(weights_path):
         raise FileNotFoundError(
             f"找不到 Ultralytics YOLO 權重檔案：{weights_path}\n"
-            "請先依照 research/yolo/train_yolo26.py 完成訓練（YOLO26n，比 YOLOv8 快 43%）。"
+            "請提供可供離線研究工具讀取的 YOLO 權重檔案。"
         )
 
     log.info("Loading Ultralytics YOLO model from: %s", weights_path)

@@ -1,1 +1,1 @@
-"""Offline research tools for pitch analysis and model training."""
+"""Offline reference tools for pitch analysis."""
