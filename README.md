@@ -143,6 +143,12 @@ speedgun-mobile/                     # ROOT
 │   └── modules/expo-speedgun/
 │       ├── src/                     # BRIDGE · TypeScript 介面
 │       └── ios/                     # CORE · Swift／Metal 分析核心
+│           ├── Detection/           # DETECT · 球與姿勢辨識
+│           ├── Tracking/            # TRACK · 球體追蹤與軌跡選擇
+│           ├── Measurement/         # MEASURE · 球速、球種與落點
+│           ├── Rendering/           # RENDER · Overlay 與進壘呈現
+│           ├── Pipeline/            # PIPELINE · 分析流程協調
+│           ├── Support/             # SUPPORT · 影片與診斷支援
 │           └── Resources/           # MODELS · App 使用的模型與參數
 ├── research/
 │   ├── vision/                      # R&D · 電腦視覺參考實作

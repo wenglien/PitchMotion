@@ -60,7 +60,7 @@ L_{3D} \approx \sqrt{L_z^2 + \Delta x^2 + \Delta y^2}
 L_{eff} = L_{manual} - L_{stride}
 ```
 
-實作位於 [`BallSpeedCalculator.swift`](../../mobile/modules/expo-speedgun/ios/BallSpeedCalculator.swift)：
+實作位於 [`BallSpeedCalculator.swift`](../../mobile/modules/expo-speedgun/ios/Measurement/BallSpeedCalculator.swift)：
 
 ```math
 v_{avg} = \frac{L_{eff}}{T}
@@ -127,7 +127,7 @@ y(t) = \frac{1}{\sqrt{A(t)}} \propto r(t)
 r(t) = \sqrt{(z_0-v_z t)^2+b^2}
 ```
 
-此時 `1/√A` 不再是直線，也不會在真實手套接球時降到零。Repo 的 TTC 零交點模型（[`BallSpeedCalculator.swift`](../../mobile/modules/expo-speedgun/ios/BallSpeedCalculator.swift)）與 ball-size ranging（[`SpeedgunPipeline.swift`](../../mobile/modules/expo-speedgun/ios/SpeedgunPipeline.swift)）都會受 `b` 影響。**偏斜拍攝時應讓明確的 release/audio endpoint 優先，TTC 只當一致性檢查。**
+此時 `1/√A` 不再是直線，也不會在真實手套接球時降到零。Repo 的 TTC 零交點模型（[`BallSpeedCalculator.swift`](../../mobile/modules/expo-speedgun/ios/Measurement/BallSpeedCalculator.swift)）與 ball-size ranging（[`SpeedgunPipeline.swift`](../../mobile/modules/expo-speedgun/ios/Pipeline/SpeedgunPipeline.swift)）都會受 `b` 影響。**偏斜拍攝時應讓明確的 release/audio endpoint 優先，TTC 只當一致性檢查。**
 
 ## 4. Pose 出手時間：可用，但必須驗證事件而非只驗證關節存在
 

@@ -17,7 +17,7 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
   s.dependency 'MediaPipeTasksVision'
 
-  s.source_files = '*.swift', '*.metal'
+  s.source_files = '**/*.{swift,metal}'
   s.resources = 'Resources/best_baseball.mlmodelc', 'Resources/pose_landmarker_full.task', 'Resources/pose_landmarker_heavy.task'
 
   s.frameworks = 'CoreML', 'Vision', 'AVFoundation', 'CoreImage', 'Accelerate', 'CoreGraphics', 'Metal', 'MetalKit'

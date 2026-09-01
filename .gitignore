@@ -52,8 +52,6 @@ model/yolov4-tiny-baseball-416/variables/
 *.weights
 *.onnx
 *.mlmodel
-!mobile/modules/expo-speedgun/android/src/main/assets/**/*.tflite
-!mobile/modules/expo-speedgun/Resources/**/*.mlmodel
 
 # Local research data and generated training outputs
 research/yolo/datasets/
@@ -64,7 +62,6 @@ research/yolo/runs/
 !mobile/assets/icon.png
 !mobile/assets/splash-icon.png
 !mobile/assets/replay/mound-to-home-plate.jpg
-!mobile/android/app/src/main/res/**/*.png
 
 # Video files — tracked via Git LFS in ver.2
 # videos/
@@ -95,12 +92,11 @@ Thumbs.db
 
 # MediaPipe
 *.tflite
-!mobile/modules/expo-speedgun/android/src/main/assets/**/*.tflite
 
 # CoreML
 *.mlmodelc
-!mobile/modules/expo-speedgun/Resources/**/*.mlmodelc
-!mobile/modules/expo-speedgun/Resources/**/*.mlmodelc/**
+!mobile/modules/expo-speedgun/ios/Resources/**/*.mlmodelc
+!mobile/modules/expo-speedgun/ios/Resources/**/*.mlmodelc/**
 
 # Test outputs
 test_output/
@@ -119,8 +115,8 @@ ios/*.xcodeproj/
 
 # iOS / MediaPipe model files (binary, distribute separately)
 *.task
-!mobile/modules/expo-speedgun/Resources/pose_landmarker_full.task
-!mobile/modules/expo-speedgun/Resources/pose_landmarker_heavy.task
+!mobile/modules/expo-speedgun/ios/Resources/pose_landmarker_full.task
+!mobile/modules/expo-speedgun/ios/Resources/pose_landmarker_heavy.task
 
 # Claude Code local state (worktrees, per-machine settings)
 .claude/
