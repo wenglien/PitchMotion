@@ -1,7 +1,7 @@
 {
   "name": "mobile",
   "version": "1.0.0",
-  "main": "index.ts",
+  "main": "src/entry/index.ts",
   "engines": {
     "node": ">=20.19"
   },

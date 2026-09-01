@@ -4,13 +4,13 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { SettingsProvider } from './src/context/SettingsContext';
-import { ResultProvider } from './src/context/ResultContext';
-import BottomTabs from './src/navigation/BottomTabs';
-import ErrorBoundary from './src/components/ErrorBoundary';
-import { Colors } from './src/theme';
-import { RootStackParamList } from './src/navigation/types';
-import TrajectorySimulationScreen from './src/screens/TrajectorySimulationScreen';
+import { SettingsProvider } from '../context/SettingsContext';
+import { ResultProvider } from '../context/ResultContext';
+import BottomTabs from '../navigation/BottomTabs';
+import ErrorBoundary from '../components/ErrorBoundary';
+import { Colors } from '../theme';
+import { RootStackParamList } from '../navigation/types';
+import TrajectorySimulationScreen from '../screens/TrajectorySimulationScreen';
 
 // Match React Navigation's container background to our app bg so screen
 // transitions and tab switches don't briefly flash white.

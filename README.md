@@ -139,7 +139,11 @@ open ios/PitchMotion.xcworkspace
 ```text
 speedgun-mobile/                     # ROOT
 ├── mobile/
-│   ├── src/                         # APP · UI、狀態與資料轉接
+│   ├── src/
+│   │   ├── entry/                   # ENTRY · App 與 Expo 啟動入口
+│   │   ├── screens/                 # SCREENS · 分析、結果與設定頁面
+│   │   ├── components/              # UI · 共用元件與互動回放
+│   │   └── hooks/                   # STATE · 分析與播放狀態
 │   └── modules/expo-speedgun/
 │       ├── src/                     # BRIDGE · TypeScript 介面
 │       └── ios/                     # CORE · Swift／Metal 分析核心
