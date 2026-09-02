@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { toPitchResult } from '../src/adapters/nativeAnalysis.ts';
 import { normalizePipelineProgress } from '../src/utils/pipelineStages.ts';
-import { BASEBALL_RADIUS_M, buildChallengeCallout, buildPitchReplayModel } from '../src/utils/pitchReplay.ts';
+import { BASEBALL_RADIUS_M, buildChallengeCallout, buildPitchReplayModel, buildTunnelMetrics } from '../src/utils/pitchReplay.ts';
+import { buildBullpenMetrics } from '../src/utils/sessionAnalysis.ts';
 import {
   buildCameraBasis,
   buildStaticWorldScene,
@@ -67,6 +68,26 @@ const otherTypeReplay = buildPitchReplayModel({
   speed_info: { ...measuredPitch.speed_info, pitch_type: 'Curveball' },
 });
 assert.deepEqual(replay.points, otherTypeReplay.points);
+
+const tunnel = buildTunnelMetrics(replay, buildPitchReplayModel({
+  ...measuredPitch,
+  job_id: 'tunnel-comparison',
+  speed_info: { ...measuredPitch.speed_info, plate_x_norm: 0.65 },
+}));
+assert.ok(tunnel);
+assert.ok(Number.isFinite(tunnel.midpointSeparationCm));
+assert.ok(tunnel.plateSeparationCm > 0);
+
+const bullpen = buildBullpenMetrics([
+  { job_id: '1', created_at: '2026-01-01T00:00:01Z', speed_info: { release_speed_kmh: 100, is_strike: true } },
+  { job_id: '2', created_at: '2026-01-01T00:00:02Z', speed_info: { release_speed_kmh: 110, is_strike: false } },
+  { job_id: '3', created_at: '2026-01-01T00:00:03Z', speed_info: { release_speed_kmh: 90, is_strike: true } },
+  { job_id: '4', created_at: '2026-01-01T00:00:04Z', speed_info: { release_speed_kmh: 80 } },
+]);
+assert.equal(bullpen.avgSpeedKmh, 95);
+assert.equal(bullpen.velocityDeltaKmh, -20);
+assert.equal(bullpen.strikeRate, 2 / 3);
+assert.equal(bullpen.measurementRate, 1);
 
 const calibratedReplay = buildPitchReplayModel({
   ...measuredPitch,
@@ -186,5 +207,16 @@ assert.ok(Math.abs(fullFrameDecay - twoHalfFrameDecay) < 1e-12);
 const trajectoryScreen = readFileSync(new URL('../src/screens/TrajectorySimulationScreen.tsx', import.meta.url), 'utf8');
 assert.match(trajectoryScreen, /<PitchReplay[\s\S]*?interactive/);
 assert.equal(existsSync(new URL('../src/components/Trajectory3DView.tsx', import.meta.url)), false);
+
+const pitchReplayComponent = readFileSync(new URL('../src/components/PitchReplay.tsx', import.meta.url), 'utf8');
+assert.ok((pitchReplayComponent.match(/<TrajectorySceneDynamic/g) ?? []).length >= 2);
+assert.match(pitchReplayComponent, /\.slice\(0, 5\)/);
+assert.match(pitchReplayComponent, /comparisonModels\.map/);
+assert.match(pitchReplayComponent, /color=\{pitchDotColor\(index \+ 1\)\}/);
+assert.match(pitchReplayComponent, /showLandingResult=\{comparisonMode\}/);
+
+const sessionDetailScreen = readFileSync(new URL('../src/screens/SessionDetailScreen.tsx', import.meta.url), 'utf8');
+assert.match(sessionDetailScreen, /selected\.length < 6/);
+assert.match(sessionDetailScreen, /comparisonPitches: selectedPitches\.slice\(1\)/);
 
 console.log('architecture checks passed');

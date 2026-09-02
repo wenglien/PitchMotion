@@ -5,12 +5,12 @@ import PitchReplay from '../components/PitchReplay';
 import TrajectoryVideoCompare from '../components/trajectory/TrajectoryVideoCompare';
 import { PitchResult } from '../types';
 import { Colors, FontSize, Layout, Radius, Shadows, Spacing, Surfaces } from '../theme';
-import { formatSpeed, pitchColor, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
-import { buildPitchReplayModel } from '../utils/pitchReplay';
+import { formatSpeed, pitchColor, pitchDotColor, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
+import { buildPitchReplayModel, buildTunnelMetrics } from '../utils/pitchReplay';
 import { useSettings } from '../context/SettingsContext';
 
 type RouteParams = {
-  TrajectorySimulation: { pitch: PitchResult; comparePitch?: PitchResult; title?: string };
+  TrajectorySimulation: { pitch: PitchResult; comparePitch?: PitchResult; comparisonPitches?: PitchResult[]; title?: string };
 };
 
 function fmt(value: number | null | undefined, digits = 1) {
@@ -19,11 +19,23 @@ function fmt(value: number | null | undefined, digits = 1) {
 
 export default function TrajectorySimulationScreen() {
   const route = useRoute<RouteProp<RouteParams, 'TrajectorySimulation'>>();
-  const { pitch, comparePitch } = route.params;
+  const { pitch, comparePitch, comparisonPitches } = route.params;
   const { settings } = useSettings();
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const handleGestureActiveChange = useCallback((active: boolean) => setScrollEnabled(!active), []);
   const model = useMemo(() => buildPitchReplayModel(pitch), [pitch]);
+  const tunnelComparisons = useMemo(
+    () => (comparisonPitches?.length ? comparisonPitches : comparePitch ? [comparePitch] : []).slice(0, 5),
+    [comparePitch, comparisonPitches],
+  );
+  const compareModel = useMemo(
+    () => tunnelComparisons[0] ? buildPitchReplayModel(tunnelComparisons[0]) : null,
+    [tunnelComparisons],
+  );
+  const tunnel = useMemo(
+    () => compareModel ? buildTunnelMetrics(model, compareModel) : null,
+    [compareModel, model],
+  );
   const si = pitch.speed_info || {};
   const primaryKmh = si.release_speed_kmh ?? si.initial_speed_kmh ?? null;
   const unitLabel = speedUnitLabel(settings.speedUnit);
@@ -56,7 +68,7 @@ export default function TrajectorySimulationScreen() {
         <View style={styles.heroText}>
           <Text style={styles.eyebrow}>進壘回放</Text>
           <Text style={styles.title}>互動 3D 進壘回放</Text>
-          <Text style={styles.subtitle}>暫停動畫後可自由旋轉與縮放查看球路</Text>
+          <Text style={styles.subtitle}>{tunnelComparisons.length ? `${tunnelComparisons.length + 1} 條球路同步疊加，暫停後可自由旋轉查看 Tunnel` : '暫停動畫後可自由旋轉與縮放查看球路'}</Text>
         </View>
         {type !== 'Unknown' && (
           <View style={[styles.typePill, { backgroundColor: color }]}>
@@ -68,11 +80,45 @@ export default function TrajectorySimulationScreen() {
       <View style={styles.viewerCard}>
         <PitchReplay
           pitch={pitch}
-          previousPitch={comparePitch}
+          comparisonPitches={tunnelComparisons}
           interactive
           onGestureActiveChange={handleGestureActiveChange}
         />
       </View>
+
+      {tunnel && tunnelComparisons[0] ? (
+        <View style={styles.card}>
+          <View style={styles.tunnelHeader}>
+            <View>
+              <Text style={styles.cardTitle}>球路配對與 Tunnel</Text>
+              <Text style={styles.cardSub}>最多六條軌跡同步疊加；分離距離以 A/B 為基準</Text>
+            </View>
+            <View style={styles.tunnelBadge}>
+              <Text style={styles.tunnelBadgeText}>{tunnel.label}</Text>
+            </View>
+          </View>
+          <View style={styles.pairRow}>
+            {[pitch, ...tunnelComparisons].map((item, index) => (
+              <React.Fragment key={item.job_id || index}>
+                <View style={[styles.pairDot, { backgroundColor: pitchDotColor(index) }]} />
+                <Text style={styles.pairText}>{String.fromCharCode(65 + index)} · {pitchTypeLabel(item.speed_info?.pitch_type)}</Text>
+              </React.Fragment>
+            ))}
+          </View>
+          <View style={styles.statGrid}>
+            {[
+              { label: '出手分離', value: tunnel.releaseSeparationCm },
+              { label: '飛行中點', value: tunnel.midpointSeparationCm },
+              { label: '進壘分離', value: tunnel.plateSeparationCm },
+            ].map((item) => (
+              <View key={item.label} style={styles.statCell}>
+                <Text style={styles.statValue}>{item.value.toFixed(1)}</Text>
+                <Text style={styles.statLabel}>{item.label} · cm</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.card}>
         <TrajectoryVideoCompare pitch={pitch} pitchColor={color} />
@@ -180,6 +226,24 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.textMuted,
   },
+  tunnelHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+  },
+  tunnelBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: Colors.accentSubtle,
+    borderWidth: 1,
+    borderColor: Colors.accentBorder,
+  },
+  tunnelBadgeText: { color: Colors.accent, fontSize: 11, fontWeight: '900' },
+  pairRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: Spacing.md },
+  pairDot: { width: 9, height: 9, borderRadius: 5 },
+  pairText: { color: Colors.textMuted, fontSize: 12, fontWeight: '700', marginRight: Spacing.sm },
   statGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

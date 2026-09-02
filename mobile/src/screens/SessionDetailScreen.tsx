@@ -1,24 +1,25 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, FlatList, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, FlatList, StyleSheet, TouchableOpacity } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { Colors, Spacing, Radius, FontSize, Shadows } from '../theme';
 import { Session, PitchResult } from '../types';
-import { formatSpeed, getSpeedKmh, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
+import { formatSpeed, getSpeedKmh, pitchColor, pitchDotColor, pitchTypeLabel, speedUnitLabel, speedValue } from '../utils/conversions';
 import {
   buildTypeStats,
   toStrikeZonePitches,
   generateSessionSummary,
   generateCoachingComment,
 } from '../utils/coaching';
-import { pitchColor } from '../utils/conversions';
+import { buildBullpenMetrics } from '../utils/sessionAnalysis';
 import PitchCard from '../components/PitchCard';
 import StrikeZone from '../components/StrikeZone';
 import SegmentedTabs from '../components/SegmentedTabs';
 import { useSettings } from '../context/SettingsContext';
+import TrendChart from '../components/TrendChart';
 
 type RouteParams = { SessionDetail: { session: Session } };
 
-const TABS = ['投球列表', '軌跡圖', 'AI 建議'];
+const TABS = ['投球列表', '落點', '牛棚分析', 'Tunnel'];
 
 function ListTab({ records }: { records: PitchResult[] }) {
   const navigation = useNavigation<any>();
@@ -96,18 +97,17 @@ function GraphTab({ records }: { records: PitchResult[] }) {
   );
 }
 
-function AICoachTab({ records }: { records: PitchResult[] }) {
+function BullpenTab({ records }: { records: PitchResult[] }) {
   const { settings } = useSettings();
   const unitLabel = speedUnitLabel(settings.speedUnit);
-  const speeds = records
+  const metrics = buildBullpenMetrics(records);
+  const avgSpeed = formatSpeed(metrics.avgSpeedKmh, settings.speedUnit);
+  const maxSpeed = formatSpeed(metrics.maxSpeedKmh, settings.speedUnit);
+  const speedTrend = [...records]
+    .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime())
     .map(getSpeedKmh)
-    .filter((v): v is number => v !== null)
-    .map((kmh) => kmh);
-
-  const avgSpeed = speeds.length
-    ? formatSpeed(speeds.reduce((a, b) => a + b, 0) / speeds.length, settings.speedUnit)
-    : null;
-  const maxSpeed = speeds.length ? formatSpeed(Math.max(...speeds), settings.speedUnit) : null;
+    .filter((value): value is number => value !== null)
+    .map((value, index) => ({ label: `#${index + 1}`, value: speedValue(value, settings.speedUnit) }));
 
   const spinValues = records
     .map((r) => r.speed_info?.spin_rpm)
@@ -126,13 +126,43 @@ function AICoachTab({ records }: { records: PitchResult[] }) {
           <Text style={styles.statLabel}>投球數</Text>
         </View>
         <View style={styles.statBox}>
-          <Text style={styles.statValue}>{avgSpeed ?? '—'}</Text>
+          <Text style={styles.statValue}>{avgSpeed}</Text>
           <Text style={styles.statLabel}>均速 {unitLabel}</Text>
         </View>
         <View style={styles.statBox}>
-          <Text style={[styles.statValue, { color: Colors.accent }]}>{maxSpeed ?? '—'}</Text>
+          <Text style={[styles.statValue, { color: Colors.accent }]}>{maxSpeed}</Text>
           <Text style={styles.statLabel}>最高 {unitLabel}</Text>
         </View>
+      </View>
+
+      <View style={styles.analysisGrid}>
+        <View style={styles.analysisMetric}>
+          <Text style={styles.analysisValue}>{metrics.measurementRate == null ? '—' : `${Math.round(metrics.measurementRate * 100)}%`}</Text>
+          <Text style={styles.analysisLabel}>測速完成率</Text>
+        </View>
+        <View style={styles.analysisMetric}>
+          <Text style={styles.analysisValue}>{metrics.speedStdDevKmh == null ? '—' : speedValue(metrics.speedStdDevKmh, settings.speedUnit).toFixed(1)}</Text>
+          <Text style={styles.analysisLabel}>球速標準差 · {unitLabel}</Text>
+        </View>
+        <View style={styles.analysisMetric}>
+          <Text style={[styles.analysisValue, metrics.velocityDeltaKmh != null && metrics.velocityDeltaKmh < 0 && { color: Colors.red }]}>
+            {metrics.velocityDeltaKmh == null ? '—' : `${speedValue(metrics.velocityDeltaKmh, settings.speedUnit) >= 0 ? '+' : ''}${speedValue(metrics.velocityDeltaKmh, settings.speedUnit).toFixed(1)}`}
+          </Text>
+          <Text style={styles.analysisLabel}>後半段變化 · {unitLabel}</Text>
+        </View>
+        <View style={styles.analysisMetric}>
+          <Text style={styles.analysisValue}>{metrics.strikeRate == null ? '—' : `${Math.round(metrics.strikeRate * 100)}%`}</Text>
+          <Text style={styles.analysisLabel}>好球率 · {metrics.locatedCount} 球</Text>
+        </View>
+      </View>
+
+      <View style={styles.chartWrap}>
+        <TrendChart
+          data={speedTrend}
+          title="Session 球速趨勢"
+          subtitle="依投球時間排列，觀察熱身、穩定度與疲勞變化"
+          unit={unitLabel}
+        />
       </View>
 
       {avgRpm !== null && (
@@ -184,6 +214,88 @@ function AICoachTab({ records }: { records: PitchResult[] }) {
   );
 }
 
+function TunnelTab({ records }: { records: PitchResult[] }) {
+  const navigation = useNavigation<any>();
+  const { settings } = useSettings();
+  const [selected, setSelected] = useState<number[]>(records.length >= 2 ? [0, 1] : records.length ? [0] : []);
+  const selectedPitches = selected.map((index) => records[index]);
+
+  const togglePitch = (index: number) => {
+    if (selected.includes(index)) {
+      setSelected(selected.filter((value) => value !== index));
+    } else if (selected.length < 6) {
+      setSelected([...selected, index]);
+    }
+  };
+
+  if (records.length < 2) {
+    return (
+      <View style={styles.emptyWrap}>
+        <Text style={styles.emptyText}>至少需要兩球才能進行球路配對。</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.tunnelContent}>
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>選擇 2–6 球疊加</Text>
+        <Text style={styles.sectionSub}>依序加入 A–F；所有軌跡會共用時間軸與鏡頭。</Text>
+        <View style={styles.selectionSummary}>
+          {selectedPitches.map((pitch, index) => (
+            <View key={index} style={styles.selectionSlot}>
+              <Text style={[styles.selectionBadge, { backgroundColor: pitchDotColor(index) }]}>{String.fromCharCode(65 + index)}</Text>
+              <Text style={styles.selectionText} numberOfLines={1}>
+                {pitchTypeLabel(pitch.speed_info?.pitch_type)}
+              </Text>
+            </View>
+          ))}
+        </View>
+        <TouchableOpacity
+          style={[styles.tunnelButton, (selectedPitches.length < 2) && styles.tunnelButtonDisabled]}
+          disabled={selectedPitches.length < 2}
+          onPress={() => selectedPitches.length >= 2 && navigation.navigate('TrajectorySimulation', {
+            pitch: selectedPitches[0],
+            comparisonPitches: selectedPitches.slice(1),
+            title: '球路配對與 Tunnel',
+          })}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: selectedPitches.length < 2 }}
+        >
+          <Text style={styles.tunnelButtonText}>開啟互動 Tunnel 回放</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.tunnelList}>
+        {records.map((pitch, index) => {
+          const slot = selected.indexOf(index);
+          const unavailable = slot < 0 && selected.length >= 6;
+          const type = pitch.speed_info?.pitch_type;
+          const speed = getSpeedKmh(pitch);
+          return (
+            <TouchableOpacity
+              key={pitch.job_id || index}
+              style={[styles.tunnelPitch, slot >= 0 && styles.tunnelPitchSelected, unavailable && styles.tunnelPitchUnavailable]}
+              onPress={() => togglePitch(index)}
+              disabled={unavailable}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: slot >= 0, disabled: unavailable }}
+              accessibilityLabel={`第 ${records.length - index} 球，${pitchTypeLabel(type)}`}
+            >
+              <View style={[styles.typeDot, { backgroundColor: pitchColor(type ?? '') }]} />
+              <View style={styles.tunnelPitchCopy}>
+                <Text style={styles.tunnelPitchTitle}>第 {records.length - index} 球 · {pitchTypeLabel(type)}</Text>
+                <Text style={styles.tunnelPitchMeta}>{speed == null ? '未測得球速' : `${formatSpeed(speed, settings.speedUnit)} ${speedUnitLabel(settings.speedUnit)}`}</Text>
+              </View>
+              {slot >= 0 && <Text style={[styles.slotBadge, { backgroundColor: pitchDotColor(slot) }]}>{String.fromCharCode(65 + slot)}</Text>}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </ScrollView>
+  );
+}
+
 export default function SessionDetailScreen() {
   const { settings } = useSettings();
   const unitLabel = speedUnitLabel(settings.speedUnit);
@@ -191,22 +303,16 @@ export default function SessionDetailScreen() {
   const { session } = route.params;
   const [activeTab, setActiveTab] = useState(TABS[0]);
   const { dateLabel, records } = session;
-  const speeds = records
-    .map(getSpeedKmh)
-    .filter((v): v is number => v !== null)
-    .map((kmh) => kmh);
-  const avgSpeed = speeds.length
-    ? formatSpeed(speeds.reduce((a, b) => a + b, 0) / speeds.length, settings.speedUnit)
-    : null;
-  const maxSpeed = speeds.length ? formatSpeed(Math.max(...speeds), settings.speedUnit) : null;
+  const metrics = buildBullpenMetrics(records);
+  const avgSpeed = metrics.avgSpeedKmh == null ? null : formatSpeed(metrics.avgSpeedKmh, settings.speedUnit);
+  const maxSpeed = metrics.maxSpeedKmh == null ? null : formatSpeed(metrics.maxSpeedKmh, settings.speedUnit);
   const breakValues = records
     .map((r) => r.speed_info?.total_break_cm)
     .filter((v): v is number => v != null);
   const avgBreak = breakValues.length
     ? (breakValues.reduce((a, b) => a + b, 0) / breakValues.length).toFixed(1)
     : null;
-  const strikeCount = records.filter((r) => r.speed_info?.is_strike === true).length;
-  const strikeRate = records.length ? Math.round((strikeCount / records.length) * 100) : null;
+  const strikeRate = metrics.strikeRate == null ? null : Math.round(metrics.strikeRate * 100);
 
   return (
     <View style={styles.container}>
@@ -236,7 +342,8 @@ export default function SessionDetailScreen() {
       <View style={{ flex: 1 }}>
         {activeTab === TABS[0] && <ListTab records={records} />}
         {activeTab === TABS[1] && <GraphTab records={records} />}
-        {activeTab === TABS[2] && <AICoachTab records={records} />}
+        {activeTab === TABS[2] && <BullpenTab records={records} />}
+        {activeTab === TABS[3] && <TunnelTab records={records} />}
       </View>
     </View>
   );
@@ -339,6 +446,26 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginTop: 2,
   },
+  analysisGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+  },
+  analysisMetric: {
+    flexBasis: '46%',
+    flexGrow: 1,
+    minHeight: 76,
+    justifyContent: 'center',
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    padding: Spacing.md,
+  },
+  analysisValue: { color: Colors.text, fontSize: FontSize.xxl, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  analysisLabel: { color: Colors.textMuted, fontSize: FontSize.xs, fontWeight: '700', marginTop: 4 },
+  chartWrap: { marginHorizontal: Spacing.lg },
   coachBody: { fontSize: FontSize.md, color: Colors.text, lineHeight: 24, marginTop: Spacing.sm },
   highlightsLabel: {
     fontSize: FontSize.sm,
@@ -370,4 +497,20 @@ const styles = StyleSheet.create({
   highlightSpeed: { fontSize: FontSize.md, fontWeight: '700', color: Colors.text },
   highlightType: { fontSize: FontSize.sm, color: Colors.textMuted, fontWeight: '500' },
   highlightComment: { fontSize: FontSize.sm, color: Colors.textMuted, lineHeight: 19 },
+  tunnelContent: { paddingBottom: 32 },
+  selectionSummary: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.lg },
+  selectionSlot: { flexBasis: '30%', flexGrow: 1, minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingHorizontal: Spacing.md, borderRadius: Radius.lg, backgroundColor: Colors.surface2, borderWidth: 1, borderColor: Colors.border },
+  selectionBadge: { width: 24, height: 24, lineHeight: 24, borderRadius: 12, overflow: 'hidden', textAlign: 'center', color: '#fff', backgroundColor: Colors.accent, fontSize: 12, fontWeight: '900' },
+  selectionText: { flex: 1, color: Colors.text, fontSize: FontSize.sm, fontWeight: '800' },
+  tunnelButton: { minHeight: 48, marginTop: Spacing.md, borderRadius: Radius.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.accent },
+  tunnelButtonDisabled: { opacity: 0.45 },
+  tunnelButtonText: { color: '#fff', fontSize: FontSize.md, fontWeight: '900' },
+  tunnelList: { marginHorizontal: Spacing.lg, marginTop: Spacing.md, gap: Spacing.sm },
+  tunnelPitch: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingHorizontal: Spacing.lg, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.surface },
+  tunnelPitchSelected: { borderColor: Colors.accent, backgroundColor: Colors.accentSubtle },
+  tunnelPitchUnavailable: { opacity: 0.4 },
+  tunnelPitchCopy: { flex: 1 },
+  tunnelPitchTitle: { color: Colors.text, fontSize: FontSize.md, fontWeight: '800' },
+  tunnelPitchMeta: { color: Colors.textMuted, fontSize: FontSize.sm, marginTop: 3 },
+  slotBadge: { width: 28, height: 28, lineHeight: 28, borderRadius: 14, overflow: 'hidden', textAlign: 'center', color: '#fff', backgroundColor: Colors.accent, fontSize: 13, fontWeight: '900' },
 });

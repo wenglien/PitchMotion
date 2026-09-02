@@ -35,6 +35,48 @@ export interface PitchReplayModel {
   warning: string;
 }
 
+export interface TunnelMetrics {
+  releaseSeparationCm: number;
+  midpointSeparationCm: number;
+  plateSeparationCm: number;
+  label: string;
+}
+
+function pointAtProgress(model: PitchReplayModel, progress: number): TrajectoryWorldPoint | null {
+  if (!model.points.length) return null;
+  const target = clamp(progress, 0, 1);
+  const nextIndex = model.points.findIndex((point) => point.t >= target);
+  if (nextIndex <= 0) return model.points[Math.max(0, nextIndex)];
+  if (nextIndex < 0) return model.points[model.points.length - 1];
+  const before = model.points[nextIndex - 1];
+  const after = model.points[nextIndex];
+  const ratio = (target - before.t) / Math.max(1e-6, after.t - before.t);
+  return {
+    x: before.x + (after.x - before.x) * ratio,
+    y: before.y + (after.y - before.y) * ratio,
+    z: before.z + (after.z - before.z) * ratio,
+    t: target,
+  };
+}
+
+export function buildTunnelMetrics(primary: PitchReplayModel, comparison: PitchReplayModel): TunnelMetrics | null {
+  const separation = (progress: number) => {
+    const a = pointAtProgress(primary, progress);
+    const b = pointAtProgress(comparison, progress);
+    return a && b ? Math.hypot(a.x - b.x, a.y - b.y) * 100 : null;
+  };
+  const releaseSeparationCm = separation(0);
+  const midpointSeparationCm = separation(0.5);
+  const plateSeparationCm = separation(1);
+  if (releaseSeparationCm == null || midpointSeparationCm == null || plateSeparationCm == null) return null;
+  return {
+    releaseSeparationCm,
+    midpointSeparationCm,
+    plateSeparationCm,
+    label: midpointSeparationCm <= 10 ? '高度重疊' : midpointSeparationCm <= 20 ? '形成 Tunnel' : '中段已分離',
+  };
+}
+
 export function buildChallengeCallout(model: PitchReplayModel) {
   const landing = model.landingPoint;
   if (!landing) return null;

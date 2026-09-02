@@ -32,9 +32,15 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "PitchMotion 需要存取照片圖庫，以選取投球影片進行裝置端分析。",
-          "cameraPermission": false,
-          "microphonePermission": false
+          "photosPermission": "PitchMotion 需要存取照片圖庫，以選取投球影片進行裝置端分析。"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "PitchMotion 需要使用相機拍攝投球影片進行裝置端分析。",
+          "microphonePermission": "PitchMotion 需要錄製投球與接球聲音，以協助辨識飛行時間。",
+          "barcodeScannerEnabled": false
         }
       ],
       "expo-video",

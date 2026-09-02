@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet,
   Alert, Linking, useWindowDimensions,
@@ -12,6 +12,7 @@ import { useSettings } from '../context/SettingsContext';
 import { useResult } from '../context/ResultContext';
 import { useOfflineAnalysis } from '../hooks/useOfflineAnalysis';
 import AnalysisProgress from '../components/AnalysisProgress';
+import GuidedCaptureModal from '../components/GuidedCaptureModal';
 import { friendlyError, isCancellation } from '../utils/errors';
 import { isManualDistanceCalibrated } from '../types';
 import type { StrikeZoneCalibration } from '../types';
@@ -85,6 +86,7 @@ export default function AnalyzeScreen() {
   const [showRaw, setShowRaw] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [statusType, setStatusType] = useState<'' | 'error' | 'success'>('');
+  const [showCapture, setShowCapture] = useState(false);
 
   const batterHeightM = Number.parseFloat(batterHeightText);
   const hasValidBatterHeight = Number.isFinite(batterHeightM) && batterHeightM >= 1.0 && batterHeightM <= 2.4;
@@ -103,7 +105,37 @@ export default function AnalyzeScreen() {
     setShowRaw(false);
   };
 
-  const pickVideo = useCallback(async () => {
+  const selectVideo = (
+    uri: string,
+    name: string,
+    baseMeta: SelectedVideoMeta,
+  ) => {
+    setVideoUri(uri);
+    setVideoName(name);
+    resetAnalysis();
+    setVideoMeta({ ...baseMeta, metadataPending: true });
+    getVideoMetadata(uri)
+      .then((meta: VideoMetadata) => {
+        setVideoMeta((prev) => prev ? {
+          ...prev,
+          durationS: meta.duration_s != null ? meta.duration_s.toFixed(1) : prev.durationS,
+          width: meta.width ?? prev.width,
+          height: meta.height ?? prev.height,
+          fps: meta.fps,
+          captureFps: meta.capture_fps,
+          effectiveFps: meta.effective_fps,
+          effectiveCaptureFps: meta.effective_capture_fps,
+          interpolationFactor: meta.interpolation_factor,
+          totalFrames: meta.total_frames,
+          metadataPending: false,
+        } : prev);
+      })
+      .catch(() => setVideoMeta((prev) => prev ? { ...prev, metadataPending: false } : prev));
+    setStatusMsg(`✓ ${name}`);
+    setStatusType('success');
+  };
+
+  const pickVideo = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       setStatusMsg('需要相簿存取權限才能選擇影片。');
@@ -135,45 +167,20 @@ export default function AnalyzeScreen() {
       return;
     }
 
-    setVideoUri(asset.uri);
-    setVideoName(asset.fileName || 'video.mp4');
-    resetAnalysis();
     const sizeMB = asset.fileSize ? (asset.fileSize / 1024 / 1024).toFixed(1) : '?';
     const durationS = asset.duration != null ? (asset.duration / 1000).toFixed(1) : '?';
-    const baseMeta: SelectedVideoMeta = {
+    selectVideo(asset.uri, asset.fileName || 'video.mp4', {
       sizeMB,
       durationS,
       width: asset.width,
       height: asset.height,
-      metadataPending: true,
-    };
-    setVideoMeta(baseMeta);
-    getVideoMetadata(asset.uri)
-      .then((meta: VideoMetadata) => {
-        if (meta.error) {
-          setVideoMeta((prev) => prev ? { ...prev, metadataPending: false } : prev);
-          return;
-        }
-        setVideoMeta((prev) => prev ? {
-          ...prev,
-          durationS: meta.duration_s != null ? meta.duration_s.toFixed(1) : prev.durationS,
-          width: meta.width ?? prev.width,
-          height: meta.height ?? prev.height,
-          fps: meta.fps,
-          captureFps: meta.capture_fps,
-          effectiveFps: meta.effective_fps,
-          effectiveCaptureFps: meta.effective_capture_fps,
-          interpolationFactor: meta.interpolation_factor,
-          totalFrames: meta.total_frames,
-          metadataPending: false,
-        } : prev);
-      })
-      .catch(() => {
-        setVideoMeta((prev) => prev ? { ...prev, metadataPending: false } : prev);
-      });
-    setStatusMsg(`✓ ${asset.fileName || 'Video selected'}`);
-    setStatusType('success');
-  }, []);
+    });
+  };
+
+  const handleCaptured = (uri: string) => {
+    setShowCapture(false);
+    selectVideo(uri, '引導拍攝影片.mov', { sizeMB: '?', durationS: '?' });
+  };
 
   const onAnalyzeOffline = async () => {
     if (!videoUri || analyzing || !hasValidBatterHeight) return;
@@ -282,6 +289,7 @@ export default function AnalyzeScreen() {
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+      <GuidedCaptureModal visible={showCapture} onClose={() => setShowCapture(false)} onCaptured={handleCaptured} />
       {analyzing ? (
         <View style={[styles.responsivePane, { width: panelWidth, marginTop: 16 }]}>
           <AnalysisProgress
@@ -328,16 +336,28 @@ export default function AnalyzeScreen() {
                 <Text style={styles.sectionTitle}>影片</Text>
                 <Text style={styles.sectionSub} numberOfLines={1}>{videoUri ? videoName : `MP4 或 MOV，最多 ${MAX_MB}MB`}</Text>
               </View>
-              <TouchableOpacity
-                style={styles.secondaryButton}
-                onPress={pickVideo}
-                activeOpacity={0.75}
-                accessibilityRole="button"
-                accessibilityLabel={videoUri ? '更換投球影片' : '從相簿選擇投球影片'}
-              >
-                <Ionicons name={videoUri ? 'swap-horizontal-outline' : 'add-outline'} size={18} color={Colors.accent} />
-                <Text style={styles.secondaryButtonText}>{videoUri ? '更換' : '選擇'}</Text>
-              </TouchableOpacity>
+              <View style={styles.sectionActions}>
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPress={() => setShowCapture(true)}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel="開啟投球引導拍攝"
+                >
+                  <Ionicons name="camera-outline" size={18} color={Colors.accent} />
+                  <Text style={styles.secondaryButtonText}>拍攝</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPress={pickVideo}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel={videoUri ? '更換投球影片' : '從相簿選擇投球影片'}
+                >
+                  <Ionicons name={videoUri ? 'swap-horizontal-outline' : 'add-outline'} size={18} color={Colors.accent} />
+                  <Text style={styles.secondaryButtonText}>{videoUri ? '更換' : '相簿'}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {videoUri ? (
@@ -605,6 +625,10 @@ const styles = StyleSheet.create({
   sectionTitleWrap: {
     flex: 1,
     minWidth: 0,
+  },
+  sectionActions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
   },
   sectionTitle: {
     color: Colors.text,

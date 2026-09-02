@@ -17,8 +17,9 @@ import Svg, {
 } from 'react-native-svg';
 import { PitchResult } from '../types';
 import { Colors, Radius, Spacing } from '../theme';
-import { formatSpeed, pitchColor, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
+import { formatSpeed, pitchColor, pitchDotColor, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
 import { PITCH_REPLAY_SCALE, buildChallengeCallout, buildPitchReplayModel } from '../utils/pitchReplay';
+import type { PitchReplayModel } from '../utils/pitchReplay';
 import {
   buildCameraBasis,
   CENTER_X,
@@ -28,6 +29,7 @@ import {
   projectWorld,
   VIEW_W,
 } from '../utils/trajectoryProjection';
+import type { Camera } from '../utils/trajectoryProjection';
 import { usePitchReplayClock } from '../hooks/usePitchReplayClock';
 import { useTrajectoryCamera } from '../hooks/useTrajectoryCamera';
 import { useTrajectoryProjection } from '../hooks/useTrajectoryProjection';
@@ -47,8 +49,32 @@ const INTERACTIVE_CAMERA = { ...DEFAULT_CAMERA, pitch: 5, zoom: 2.05 };
 interface Props {
   pitch: PitchResult;
   previousPitch?: PitchResult | null;
+  comparisonPitches?: PitchResult[];
   interactive?: boolean;
   onGestureActiveChange?: (active: boolean) => void;
+}
+
+function TunnelTrajectory({ model, camera, progress, color }: {
+  model: PitchReplayModel;
+  camera: Camera;
+  progress: number;
+  color: string;
+}) {
+  const projection = useTrajectoryProjection(model, camera);
+  return (
+    <TrajectorySceneDynamic
+      pitchColor={color}
+      progress={progress}
+      timeline={projection.timeline}
+      projected={projection.projected}
+      shadowProjected={projection.shadowProjected}
+      landingProjected={projection.landingProjected}
+      landingShadow={projection.landingShadow}
+      isStrike={model.isStrike}
+      showLandingResult
+      challenge
+    />
+  );
 }
 
 function clamp01(value: number) {
@@ -69,18 +95,22 @@ function arrowHead(x: number, y: number, dx: number, dy: number, size = 7) {
 export default function PitchReplay({
   pitch,
   previousPitch = null,
+  comparisonPitches,
   interactive = false,
   onGestureActiveChange,
 }: Props) {
   const isFocused = useIsFocused();
   const { settings } = useSettings();
-  const [showPrevious, setShowPrevious] = useState(false);
+  const [showPrevious, setShowPrevious] = useState(previousPitch != null);
   const timelineWidthRef = useRef(VIEW_W);
   const model = useMemo(() => buildPitchReplayModel(pitch), [pitch]);
-  const previousModel = useMemo(
-    () => previousPitch ? buildPitchReplayModel(previousPitch) : null,
-    [previousPitch],
+  const comparisonModels = useMemo(
+    () => (comparisonPitches?.length ? comparisonPitches : previousPitch ? [previousPitch] : [])
+      .slice(0, 5)
+      .map(buildPitchReplayModel),
+    [comparisonPitches, previousPitch],
   );
+  const previousModel = comparisonModels[0] ?? null;
   const flightDurationS = model.durationS * PITCH_REPLAY_SCALE;
   const totalDurationS = flightDurationS + (interactive ? 0 : CAMERA_ROTATION_S) + RESULT_REVEAL_S;
   const clock = usePitchReplayClock(totalDurationS, isFocused);
@@ -144,6 +174,7 @@ export default function PitchReplay({
     [camera, edge, model.distanceM],
   );
   const type = pitch.speed_info?.pitch_type;
+  const comparisonMode = interactive && comparisonModels.length > 0;
   const previousColor = pitchColor(previousPitch?.speed_info?.pitch_type ?? '');
   const speedKmh = pitch.speed_info?.release_speed_kmh ?? pitch.speed_info?.initial_speed_kmh;
   const verdict = model.isStrike === true ? '好球' : model.isStrike === false ? '壞球' : '落點確認';
@@ -166,7 +197,7 @@ export default function PitchReplay({
     <View style={styles.wrap}>
       <View style={styles.hud}>
         <View>
-          <Text style={styles.hudLabel}>{interactive ? '互動 3D 進壘回放' : resultProgress > 0.65 ? `挑戰判定 · ${verdict}` : '進壘挑戰回放'}</Text>
+          <Text style={styles.hudLabel}>{comparisonMode ? 'TUNNEL 疊加回放' : interactive ? '互動 3D 進壘回放' : resultProgress > 0.65 ? `挑戰判定 · ${verdict}` : '進壘挑戰回放'}</Text>
           <Text style={styles.hudValue}>
             {pitchTypeLabel(type)}{speedKmh != null ? ` · ${formatSpeed(speedKmh, settings.speedUnit)} ${speedUnitLabel(settings.speedUnit)}` : ''}
           </Text>
@@ -209,11 +240,19 @@ export default function PitchReplay({
         </Defs>
         <Rect x={0} y={0} width={VIEW_W} height={CHALLENGE_H} fill="url(#stageVignette)" />
         <TrajectorySceneStatic scene={projection.scene} challenge />
-        {showPrevious && previousModel && previousProjection.path ? (
+        {comparisonMode ? comparisonModels.map((comparisonModel, index) => (
+          <TunnelTrajectory
+            key={index}
+            model={comparisonModel}
+            camera={camera}
+            progress={ballProgress}
+            color={pitchDotColor(index + 1)}
+          />
+        )) : showPrevious && previousModel && previousProjection.path ? (
           <Path d={previousProjection.path} stroke={previousColor} strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round" fill="none" opacity={0.28} />
         ) : null}
         <TrajectorySceneDynamic
-          pitchColor={CHALLENGE_TRAIL}
+          pitchColor={comparisonMode ? pitchDotColor(0) : CHALLENGE_TRAIL}
           progress={ballProgress}
           timeline={projection.timeline}
           projected={projection.projected}
@@ -221,12 +260,12 @@ export default function PitchReplay({
           landingProjected={projection.landingProjected}
           landingShadow={projection.landingShadow}
           isStrike={model.isStrike}
-          showLandingResult={false}
+          showLandingResult={comparisonMode}
           showPath={interactive || cameraRotationProgress < 1}
           challenge
         />
 
-        {ballProgress >= 1 && landing ? (
+        {!comparisonMode && ballProgress >= 1 && landing ? (
           <G>
             <Circle cx={landing.x + 3} cy={landing.y + 5} r={ballRadius + 2} fill="#020617" opacity={0.24} />
             <Circle cx={landing.x} cy={landing.y} r={ballRadius} fill="url(#ballFill)" stroke="#e2e8f0" strokeWidth={1.2} />
@@ -275,7 +314,7 @@ export default function PitchReplay({
           </G>
         ) : null}
 
-        {resultOpacity > 0 && landing && edgeProjected && edge && !edge.inside ? (
+        {!comparisonMode && resultOpacity > 0 && landing && edgeProjected && edge && !edge.inside ? (
           <G opacity={resultOpacity}>
             <Line x1={measureStartX} y1={measureStartY} x2={edgeProjected.x} y2={edgeProjected.y} stroke="#020617" strokeWidth={5} opacity={0.72} />
             <Line x1={measureStartX} y1={measureStartY} x2={edgeProjected.x} y2={edgeProjected.y} stroke="#fff" strokeWidth={2.2} />
@@ -354,7 +393,7 @@ export default function PitchReplay({
         </TouchableOpacity>
       </View>
 
-      {previousModel ? (
+      {previousModel && !comparisonMode ? (
         <TouchableOpacity
           style={styles.compareRow}
           onPress={() => setShowPrevious((value) => !value)}
@@ -362,7 +401,7 @@ export default function PitchReplay({
           accessibilityState={{ checked: showPrevious }}
         >
           <View style={[styles.swatch, { backgroundColor: previousColor }]} />
-          <Text style={styles.compareText}>比較上一球</Text>
+          <Text style={styles.compareText}>球路配對疊加</Text>
           <Text style={styles.compareState}>{showPrevious ? '已顯示' : '已隱藏'}</Text>
         </TouchableOpacity>
       ) : null}
