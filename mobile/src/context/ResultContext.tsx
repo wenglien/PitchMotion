@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
+import { Alert } from 'react-native';
 import { PitchResult } from '../types';
 import { saveResultToHistory } from '../hooks/useLocalHistory';
 
@@ -39,7 +40,14 @@ export function ResultProvider({ children }: { children: React.ReactNode }) {
       ? r
       : { ...r, created_at: new Date().toISOString() };
     setResultState(withTs);
-    saveResultToHistory(withTs);
+    const save = () => {
+      saveResultToHistory(withTs).catch(() => Alert.alert(
+        '分析完成，但紀錄尚未儲存',
+        '本次結果仍可在結果頁查看。請確認裝置儲存空間後重試。',
+        [{ text: '稍後', style: 'cancel' }, { text: '重試儲存', onPress: save }],
+      ));
+    };
+    save();
     setHasNewResult(true);
 
     setSessionResults((prev) => {

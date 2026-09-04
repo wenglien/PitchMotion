@@ -13,12 +13,9 @@ import {
 export function generateCoachingComment(si?: SpeedInfo): string {
   if (!si) return '持續練習出手一致性與投球動作。';
 
-  const mph = si.release_speed_kmh
-    ? si.release_speed_kmh * KMH_TO_MPH
-    : si.initial_speed_kmh
-      ? si.initial_speed_kmh * KMH_TO_MPH
-      : null;
-  const rpm = si.spin_rpm ?? null;
+  const kmh = getSpeedKmh({ speed_info: si });
+  const mph = kmh == null ? null : kmh * KMH_TO_MPH;
+  const rpm = Number.isFinite(si.spin_rpm) && (si.spin_rpm ?? 0) > 0 ? si.spin_rpm! : null;
   const type = si.pitch_type;
   const parts: string[] = [];
 
@@ -67,7 +64,7 @@ export interface TypeStat {
 }
 
 export function buildTypeStats(records: PitchResult[]): TypeStat[] {
-  const map: Record<string, { count: number; speedsKmh: number[] }> = {};
+  const map: Record<string, { count: number; speedsKmh: number[] }> = Object.create(null);
   for (const r of records) {
     const si = r.speed_info || {};
     const type = si.pitch_type && si.pitch_type !== 'Unknown' ? si.pitch_type : 'Unknown';
@@ -92,7 +89,7 @@ export function toStrikeZonePitches(records: PitchResult[]) {
   return records
     .filter((r) => {
       const si = r.speed_info || {};
-      return si.plate_x_norm != null && si.plate_y_norm != null;
+      return Number.isFinite(si.plate_x_norm) && Number.isFinite(si.plate_y_norm);
     })
     .map((r) => {
       const si = r.speed_info || {};
@@ -116,7 +113,7 @@ export function generateSessionSummary(records: PitchResult[], speedUnit: SpeedU
     : null;
   const maxKmh = speeds.length ? Math.max(...speeds) : null;
 
-  const typeCounts: Record<string, number> = {};
+  const typeCounts: Record<string, number> = Object.create(null);
   records.forEach((r) => {
     const t = r.speed_info?.pitch_type;
     if (t && t !== 'Unknown') typeCounts[t] = (typeCounts[t] || 0) + 1;

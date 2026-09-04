@@ -1,6 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { ActivityIndicator, Alert, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Settings, DEFAULT_SETTINGS } from '../types';
+import { normalizeSettings } from '../utils/settings';
 
 const STORAGE_KEY = 'speedgun_settings';
 
@@ -19,32 +21,38 @@ const SettingsContext = createContext<SettingsContextValue>({
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [loaded, setLoaded] = useState(false);
+  const edited = useRef(false);
+  const pendingSave = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
+    let active = true;
     AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          // Drop retired remote-analysis settings from existing installations.
-          const { backendUrl: _backendUrl, analysisMode: _analysisMode, ...localSettings } = parsed;
-          const next = { ...DEFAULT_SETTINGS, ...localSettings };
-          setSettings(next);
-          if ('backendUrl' in parsed || 'analysisMode' in parsed) {
-            AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-          }
-        } catch {}
+      if (active && raw) setSettings(normalizeSettings(JSON.parse(raw)));
+    }).catch(() => {
+      if (active) {
+        Alert.alert('無法讀取設定', '暫時使用預設值，原設定未被覆寫。分析前請重新確認投打距離與跨步補償。');
       }
-      setLoaded(true);
+    }).finally(() => {
+      if (active) setLoaded(true);
     });
+    return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    if (!loaded || !edited.current) return;
+    const serialized = JSON.stringify(settings);
+    pendingSave.current = pendingSave.current
+      .then(() => AsyncStorage.setItem(STORAGE_KEY, serialized))
+      .catch(() => Alert.alert('設定尚未儲存', '本次設定仍有效，但重新開啟 App 前請再確認儲存空間並重新套用設定。'));
+  }, [loaded, settings]);
+
   const updateSettings = useCallback((partial: Partial<Settings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...partial };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
+    edited.current = true;
+    setSettings((prev) => normalizeSettings({ ...prev, ...partial }));
   }, []);
+
+  // Input fields must mount with the loaded calibration, not stale defaults.
+  if (!loaded) return <View style={{ flex: 1, justifyContent: 'center' }}><ActivityIndicator accessibilityLabel="讀取設定中" /></View>;
 
   return (
     <SettingsContext.Provider value={{ settings, updateSettings, loaded }}>

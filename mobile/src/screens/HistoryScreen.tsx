@@ -26,6 +26,7 @@ export default function HistoryScreen() {
   const { settings } = useSettings();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [trendMetric, setTrendMetric] = useState<TrendMetric>('speed');
   const [pitchFilter, setPitchFilter] = useState<string>('全部');
   const speedUnit = settings.speedUnit;
@@ -36,6 +37,9 @@ export default function HistoryScreen() {
     try {
       const data = await loadLocalHistory();
       setSessions(groupIntoSessions(data));
+      setLoadError(false);
+    } catch {
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -58,8 +62,14 @@ export default function HistoryScreen() {
           text: '清除',
           style: 'destructive',
           onPress: async () => {
-            await clearLocalHistory();
-            setSessions([]);
+            try {
+              await clearLocalHistory();
+              setSessions([]);
+              setPitchFilter('全部');
+              setLoadError(false);
+            } catch {
+              Alert.alert('清除失敗', '投球紀錄尚未清除，請稍後重試。');
+            }
           },
         },
       ],
@@ -102,7 +112,7 @@ export default function HistoryScreen() {
     } else {
       const values = records
         .map((record) => record.speed_info?.total_break_cm)
-        .filter((item): item is number => item != null);
+        .filter((item): item is number => item != null && Number.isFinite(item));
       value = values.length ? values.reduce((sum, item) => sum + item, 0) / values.length : null;
     }
     return value == null ? [] : [{ label: session.dateLabel.slice(5), value }];
@@ -188,6 +198,18 @@ export default function HistoryScreen() {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={Colors.accent} />
+      </View>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.emptyTitle}>暫時無法讀取紀錄</Text>
+        <Text style={styles.emptyBody}>原有資料未被清除，請重試讀取。</Text>
+        <TouchableOpacity style={styles.emptyAction} onPress={load} accessibilityRole="button">
+          <Text style={styles.emptyActionText}>重新讀取</Text>
+        </TouchableOpacity>
       </View>
     );
   }

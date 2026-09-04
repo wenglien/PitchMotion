@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useEvent } from 'expo';
+import { useIsFocused } from '@react-navigation/native';
 
 interface Props {
   uri: string;
@@ -28,6 +29,7 @@ export default function VideoPlayer({
   autoPlay = false,
   loop = false,
 }: Props) {
+  const isFocused = useIsFocused();
   const player = useVideoPlayer(uri, (p) => {
     p.loop = loop;
     p.timeUpdateEventInterval = 0.25;
@@ -52,10 +54,11 @@ export default function VideoPlayer({
     !isPlaying;
 
   useEffect(() => {
-    if (autoPlay && status === 'readyToPlay') {
+    if (!isFocused) player.pause();
+    else if (autoPlay && status === 'readyToPlay') {
       player.play();
     }
-  }, [autoPlay, status, player]);
+  }, [autoPlay, isFocused, status, player]);
 
   const handleReplay = () => {
     player.currentTime = 0;
@@ -82,7 +85,7 @@ export default function VideoPlayer({
       {isError && (
         <View pointerEvents="none" style={styles.overlay}>
           <Text style={styles.errorTitle}>無法載入影片</Text>
-          <Text style={styles.overlayText}>請稍後重試或檢查網路連線</Text>
+          <Text style={styles.overlayText}>本機影片可能已移除，請重新選取原始影片。</Text>
         </View>
       )}
 
@@ -91,6 +94,8 @@ export default function VideoPlayer({
           style={styles.overlay}
           activeOpacity={0.85}
           onPress={handleReplay}
+          accessibilityRole="button"
+          accessibilityLabel="重新播放影片"
         >
           <View style={styles.replayBtn}>
             <Text style={styles.replayIcon}>↻</Text>

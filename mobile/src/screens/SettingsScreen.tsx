@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, ScrollView, TouchableOpacity,
-  KeyboardAvoidingView, Linking, Platform, StyleSheet,
+  KeyboardAvoidingView, Linking, Platform, StyleSheet, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, FontSize, Radius, Shadows, Spacing, Surfaces, TouchTarget } from '../theme';
@@ -48,15 +48,21 @@ export default function SettingsScreen() {
   const [zyMinText, setZyMinText] = useState(settings.strikeZone ? String(settings.strikeZone.yMin) : '');
   const [zyMaxText, setZyMaxText] = useState(settings.strikeZone ? String(settings.strikeZone.yMax) : '');
 
+  useEffect(() => { setStrideText(String(settings.strideCorrectionM)); }, [settings.strideCorrectionM]);
+
   const hasDistanceCalibration = isManualDistanceCalibrated(settings.moundDistanceM);
-  const moundInputValue = Number.parseFloat(moundText);
+  const moundInputValue = Number(moundText);
   const moundInputError = moundTouched
     && moundText.trim() !== ''
     && !isManualDistanceCalibrated(moundInputValue);
 
-  const commitMoundDistance = () => {
+  const saveMoundDistance = (value: number) => {
     setMoundTouched(true);
-    const value = Number.parseFloat(moundText);
+    if (isManualDistanceCalibrated(value) && settings.strideCorrectionM > value - 1) {
+      updateSettings({ moundDistanceM: 0 });
+      Alert.alert('請先調整跨步補償', '補償後需保留至少 1 公尺的飛行距離，調整後請重新確認投打距離。');
+      return;
+    }
     if (isManualDistanceCalibrated(value)) {
       setMoundText(String(value));
       updateSettings({ moundDistanceM: value });
@@ -74,10 +80,8 @@ export default function SettingsScreen() {
       return;
     }
 
-    const xMin = parseFloat(zxMinText);
-    const xMax = parseFloat(zxMaxText);
-    const yMin = parseFloat(zyMinText);
-    const yMax = parseFloat(zyMaxText);
+    if (values.some((value) => value.trim() === '')) return;
+    const [xMin, xMax, yMin, yMax] = values.map(Number);
     const ok = [xMin, xMax, yMin, yMax].every(Number.isFinite)
       && xMin >= 0 && xMin < xMax && xMax <= 1
       && yMin >= 0 && yMin < yMax && yMax <= 1;
@@ -193,11 +197,11 @@ export default function SettingsScreen() {
                       setMoundTouched(true);
                       // Do not let a previously saved calibration remain valid
                       // while the user is replacing it with an incomplete value.
-                      if (!isManualDistanceCalibrated(Number.parseFloat(value))) {
+                      if (!isManualDistanceCalibrated(Number(value))) {
                         updateSettings({ moundDistanceM: 0 });
                       }
                     }}
-                    onBlur={commitMoundDistance}
+                    onBlur={() => saveMoundDistance(Number(moundText))}
                     keyboardType="decimal-pad"
                     placeholder="例如 7.0"
                     placeholderTextColor={Colors.textMuted}
@@ -216,7 +220,7 @@ export default function SettingsScreen() {
                         onPress={() => {
                           setMoundText(String(value));
                           setMoundTouched(true);
-                          updateSettings({ moundDistanceM: value });
+                          saveMoundDistance(value);
                         }}
                         activeOpacity={0.75}
                         accessibilityRole="button"
@@ -251,10 +255,15 @@ export default function SettingsScreen() {
                     value={strideText}
                     onChangeText={setStrideText}
                     onBlur={() => {
-                      const n = parseFloat(strideText);
-                      const val = isNaN(n) ? 0 : n;
-                      setStrideText(String(val));
-                      updateSettings({ strideCorrectionM: val });
+                      const value = Number(strideText);
+                      const maxStride = (settings.moundDistanceM || MAX_MANUAL_MOUND_DISTANCE_M) - 1;
+                      if (!Number.isFinite(value) || value < 0 || value > maxStride) {
+                        setStrideText(String(settings.strideCorrectionM));
+                        Alert.alert('跨步補償無效', `請輸入 0–${maxStride} 公尺，並保留至少 1 公尺的有效飛行距離。`);
+                        return;
+                      }
+                      setStrideText(String(value));
+                      updateSettings({ strideCorrectionM: value });
                     }}
                     keyboardType="decimal-pad"
                     placeholder="例如 1.7"

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo } from 'react-native';
+import { AccessibilityInfo, AppState } from 'react-native';
 
 export type ReplayRate = 0.25 | 0.5 | 1;
 
@@ -14,6 +14,8 @@ export function usePitchReplayClock(durationS: number, active = true) {
     let mounted = true;
     AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
       if (mounted) setReduceMotion(enabled);
+    }).catch(() => {
+      if (mounted) setReduceMotion(true);
     });
     const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
     return () => {
@@ -42,8 +44,20 @@ export function usePitchReplayClock(durationS: number, active = true) {
       if (next < 1) frame = requestAnimationFrame(tick);
       else setPlaying(false);
     };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    if (AppState.currentState !== 'background' && AppState.currentState !== 'inactive') {
+      frame = requestAnimationFrame(tick);
+    }
+    const subscription = AppState.addEventListener('change', (state) => {
+      cancelAnimationFrame(frame);
+      if (state === 'active') {
+        previous = performance.now();
+        frame = requestAnimationFrame(tick);
+      }
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      subscription.remove();
+    };
   }, [active, durationS, playing, rate]);
 
   const replay = useCallback(() => {

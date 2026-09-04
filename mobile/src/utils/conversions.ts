@@ -34,11 +34,11 @@ const PITCH_TYPE_LABELS: Record<string, string> = {
 
 export function pitchTypeLabel(type: string | null | undefined): string {
   if (!type) return '未知球種';
-  return PITCH_TYPE_LABELS[type] ?? type;
+  return Object.hasOwn(PITCH_TYPE_LABELS, type) ? PITCH_TYPE_LABELS[type] : type;
 }
 
 export function pitchColor(type: string): string {
-  return PitchColors[type] || '#7c5cfc';
+  return Object.hasOwn(PitchColors, type) ? PitchColors[type] : '#7c5cfc';
 }
 
 export function pitchDotColor(i: number): string {
@@ -46,7 +46,7 @@ export function pitchDotColor(i: number): string {
 }
 
 export function formatTime(iso?: string): string {
-  if (!iso) return '';
+  if (!iso || !Number.isFinite(Date.parse(iso))) return '';
   try {
     return new Date(iso).toLocaleTimeString(undefined, {
       hour: '2-digit',
@@ -59,7 +59,7 @@ export function formatTime(iso?: string): string {
 }
 
 export function formatDate(iso?: string): string {
-  if (!iso) return '';
+  if (!iso || !Number.isFinite(Date.parse(iso))) return '';
   try {
     return new Date(iso).toLocaleDateString(undefined, {
       year: 'numeric',
@@ -80,7 +80,7 @@ export function shortMethod(m?: string): string {
 }
 
 export function toDateKey(iso?: string): string {
-  if (!iso) return 'Unknown';
+  if (!iso || !Number.isFinite(Date.parse(iso))) return 'Unknown';
   try {
     const d = new Date(iso);
     const y = d.getFullYear();
@@ -94,5 +94,6 @@ export function toDateKey(iso?: string): string {
 
 export function getSpeedKmh(r: { speed_info?: { release_speed_kmh?: number; initial_speed_kmh?: number } }): number | null {
   const si = r.speed_info || {};
-  return si.release_speed_kmh ?? si.initial_speed_kmh ?? null;
+  return [si.release_speed_kmh, si.initial_speed_kmh]
+    .find((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0) ?? null;
 }

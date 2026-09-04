@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet,
   Alert, Linking, useWindowDimensions,
@@ -87,8 +87,12 @@ export default function AnalyzeScreen() {
   const [statusMsg, setStatusMsg] = useState('');
   const [statusType, setStatusType] = useState<'' | 'error' | 'success'>('');
   const [showCapture, setShowCapture] = useState(false);
+  const metadataRequest = useRef(0);
+  const pickingVideo = useRef(false);
 
-  const batterHeightM = Number.parseFloat(batterHeightText);
+  useEffect(() => () => { metadataRequest.current += 1; }, []);
+
+  const batterHeightM = Number(batterHeightText);
   const hasValidBatterHeight = Number.isFinite(batterHeightM) && batterHeightM >= 1.0 && batterHeightM <= 2.4;
   const hasDistanceCalibration = isManualDistanceCalibrated(settings.moundDistanceM);
   const batterHeightError = heightTouched && batterHeightText.trim() !== '' && !hasValidBatterHeight;
@@ -110,12 +114,14 @@ export default function AnalyzeScreen() {
     name: string,
     baseMeta: SelectedVideoMeta,
   ) => {
+    const request = ++metadataRequest.current;
     setVideoUri(uri);
     setVideoName(name);
     resetAnalysis();
     setVideoMeta({ ...baseMeta, metadataPending: true });
     getVideoMetadata(uri)
       .then((meta: VideoMetadata) => {
+        if (request !== metadataRequest.current) return;
         setVideoMeta((prev) => prev ? {
           ...prev,
           durationS: meta.duration_s != null ? meta.duration_s.toFixed(1) : prev.durationS,
@@ -130,51 +136,52 @@ export default function AnalyzeScreen() {
           metadataPending: false,
         } : prev);
       })
-      .catch(() => setVideoMeta((prev) => prev ? { ...prev, metadataPending: false } : prev));
+      .catch(() => {
+        if (request === metadataRequest.current) setVideoMeta((prev) => prev ? { ...prev, metadataPending: false } : prev);
+      });
     setStatusMsg(`✓ ${name}`);
     setStatusType('success');
   };
 
   const pickVideo = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      setStatusMsg('需要相簿存取權限才能選擇影片。');
-      setStatusType('error');
-      Alert.alert(
-        '權限未開啟',
-        '請到「設定 → PitchMotion → 照片」開啟相簿存取權。',
-        [
-          { text: '取消', style: 'cancel' },
-          { text: '開啟設定', onPress: () => Linking.openSettings() },
-        ],
-      );
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['videos'],
-      quality: 1,
-    });
-
-    if (result.canceled || !result.assets?.[0]) return;
-
-    const asset = result.assets[0];
+    if (pickingVideo.current) return;
+    pickingVideo.current = true;
     try {
-      if (asset.fileSize) checkFileSize(asset.fileSize, MAX_MB);
-    } catch (e: any) {
-      setStatusMsg(e.message);
-      setStatusType('error');
-      return;
-    }
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        setStatusMsg('需要相簿存取權限才能選擇影片。');
+        setStatusType('error');
+        Alert.alert(
+          '權限未開啟',
+          '請到「設定 → PitchMotion → 照片」開啟相簿存取權。',
+          [
+            { text: '取消', style: 'cancel' },
+            { text: '開啟設定', onPress: () => Linking.openSettings() },
+          ],
+        );
+        return;
+      }
 
-    const sizeMB = asset.fileSize ? (asset.fileSize / 1024 / 1024).toFixed(1) : '?';
-    const durationS = asset.duration != null ? (asset.duration / 1000).toFixed(1) : '?';
-    selectVideo(asset.uri, asset.fileName || 'video.mp4', {
-      sizeMB,
-      durationS,
-      width: asset.width,
-      height: asset.height,
-    });
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['videos'],
+        quality: 1,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const asset = result.assets[0];
+      if (asset.fileSize) checkFileSize(asset.fileSize, MAX_MB);
+      selectVideo(asset.uri, asset.fileName || 'video.mp4', {
+        sizeMB: asset.fileSize ? (asset.fileSize / 1024 / 1024).toFixed(1) : '?',
+        durationS: asset.duration != null ? (asset.duration / 1000).toFixed(1) : '?',
+        width: asset.width,
+        height: asset.height,
+      });
+    } catch (error) {
+      setStatusMsg(friendlyError(error, { action: '選擇影片' }) ?? '無法開啟相簿，請稍後重試。');
+      setStatusType('error');
+    } finally {
+      pickingVideo.current = false;
+    }
   };
 
   const handleCaptured = (uri: string) => {
@@ -189,7 +196,7 @@ export default function AnalyzeScreen() {
     const initEntry = { msg: '本機分析已開始', isError: false };
     rawLogsRef.current = [...rawLogsRef.current.slice(-200), initEntry];
     setRawLogs(rawLogsRef.current);
-    setUploadPct(100);
+    setUploadPct(0);
     setCurrentStage('init');
     setStatusMsg('');
     setStatusType('');
@@ -378,7 +385,7 @@ export default function AnalyzeScreen() {
                 {videoMeta && (
                   <View style={styles.videoDetails}>
                     <Text style={styles.videoDetailsText}>
-                      {resolutionLabel} · {videoMeta.fps ? `${videoMeta.fps} fps` : '讀取影片資訊中'}
+                      {resolutionLabel} · {videoMeta.fps ? `${videoMeta.fps} fps` : videoMeta.metadataPending ? '讀取影片資訊中' : '無法讀取幀率'}
                     </Text>
                   </View>
                 )}
@@ -457,7 +464,7 @@ export default function AnalyzeScreen() {
               <Text style={[styles.heightHint, batterHeightError && { color: Colors.red }]}>
                 {batterHeightError
                   ? '請輸入 1.00 到 2.40 公尺之間的身高'
-                  : needsHeight ? '輸入後即可開始分析。' : `好球帶高度約 ${zoneHeightCm?.toFixed(1)} cm。`}
+                  : !hasValidBatterHeight ? '輸入後即可開始分析。' : `好球帶高度約 ${zoneHeightCm?.toFixed(1)} cm。`}
               </Text>
             </View>
 

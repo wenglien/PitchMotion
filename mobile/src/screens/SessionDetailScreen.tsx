@@ -105,13 +105,14 @@ function BullpenTab({ records }: { records: PitchResult[] }) {
   const maxSpeed = formatSpeed(metrics.maxSpeedKmh, settings.speedUnit);
   const speedTrend = [...records]
     .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime())
-    .map(getSpeedKmh)
-    .filter((value): value is number => value !== null)
-    .map((value, index) => ({ label: `#${index + 1}`, value: speedValue(value, settings.speedUnit) }));
+    .flatMap((record, index) => {
+      const value = getSpeedKmh(record);
+      return value === null ? [] : [{ label: `#${index + 1}`, value: speedValue(value, settings.speedUnit) }];
+    });
 
   const spinValues = records
     .map((r) => r.speed_info?.spin_rpm)
-    .filter((v): v is number => v != null);
+    .filter((v): v is number => v != null && Number.isFinite(v));
   const avgRpm = spinValues.length
     ? Math.round(spinValues.reduce((a, b) => a + b, 0) / spinValues.length)
     : null;
@@ -308,7 +309,7 @@ export default function SessionDetailScreen() {
   const maxSpeed = metrics.maxSpeedKmh == null ? null : formatSpeed(metrics.maxSpeedKmh, settings.speedUnit);
   const breakValues = records
     .map((r) => r.speed_info?.total_break_cm)
-    .filter((v): v is number => v != null);
+    .filter((v): v is number => v != null && Number.isFinite(v));
   const avgBreak = breakValues.length
     ? (breakValues.reduce((a, b) => a + b, 0) / breakValues.length).toFixed(1)
     : null;

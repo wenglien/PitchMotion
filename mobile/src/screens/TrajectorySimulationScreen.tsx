@@ -5,7 +5,7 @@ import PitchReplay from '../components/PitchReplay';
 import TrajectoryVideoCompare from '../components/trajectory/TrajectoryVideoCompare';
 import { PitchResult } from '../types';
 import { Colors, FontSize, Layout, Radius, Shadows, Spacing, Surfaces } from '../theme';
-import { formatSpeed, pitchColor, pitchDotColor, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
+import { formatSpeed, getSpeedKmh, pitchColor, pitchDotColor, pitchTypeLabel, speedUnitLabel } from '../utils/conversions';
 import { buildPitchReplayModel, buildTunnelMetrics } from '../utils/pitchReplay';
 import { useSettings } from '../context/SettingsContext';
 
@@ -37,7 +37,7 @@ export default function TrajectorySimulationScreen() {
     [compareModel, model],
   );
   const si = pitch.speed_info || {};
-  const primaryKmh = si.release_speed_kmh ?? si.initial_speed_kmh ?? null;
+  const primaryKmh = getSpeedKmh(pitch);
   const unitLabel = speedUnitLabel(settings.speedUnit);
   const primarySpeed = primaryKmh != null ? formatSpeed(primaryKmh, settings.speedUnit) : null;
   const type = si.pitch_type && si.pitch_type !== 'Unknown' ? si.pitch_type : 'Unknown';
@@ -68,7 +68,7 @@ export default function TrajectorySimulationScreen() {
         <View style={styles.heroText}>
           <Text style={styles.eyebrow}>進壘回放</Text>
           <Text style={styles.title}>互動 3D 進壘回放</Text>
-          <Text style={styles.subtitle}>{tunnelComparisons.length ? `${tunnelComparisons.length + 1} 條球路同步疊加，暫停後可自由旋轉查看 Tunnel` : '暫停動畫後可自由旋轉與縮放查看球路'}</Text>
+          <Text style={styles.subtitle}>{tunnelComparisons.length ? `${tunnelComparisons.length + 1} 條球路同步出手，到位後放大好球帶；拖曳回到第三人稱全景` : '到位後放大好球帶；拖曳鏡頭從第三人稱查看完整投球場景'}</Text>
         </View>
         {type !== 'Unknown' && (
           <View style={[styles.typePill, { backgroundColor: color }]}>
@@ -79,6 +79,7 @@ export default function TrajectorySimulationScreen() {
 
       <View style={styles.viewerCard}>
         <PitchReplay
+          key={[pitch, ...tunnelComparisons].map((item) => item.job_id).join(':')}
           pitch={pitch}
           comparisonPitches={tunnelComparisons}
           interactive

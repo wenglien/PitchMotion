@@ -7,9 +7,10 @@ type ProjectedScene = ReturnType<typeof import('../../utils/trajectoryProjection
 interface Props {
   scene: ProjectedScene;
   challenge?: boolean;
+  showHomePlate?: boolean;
 }
 
-function TrajectorySceneStatic({ scene, challenge = false }: Props) {
+function TrajectorySceneStatic({ scene, challenge = false, showHomePlate = true }: Props) {
   return (
     <>
       {!challenge ? (
@@ -68,13 +69,15 @@ function TrajectorySceneStatic({ scene, challenge = false }: Props) {
         </>
       ) : null}
 
-      <Polygon
-        points={polygonPoints(scene.homePlate)}
-        fill="#f8fafc"
-        opacity={challenge ? 0.78 : 0.94}
-        stroke="#fff"
-        strokeWidth={challenge ? 1.4 : 1}
-      />
+      {showHomePlate ? (
+        <Polygon
+          points={polygonPoints(scene.homePlate)}
+          fill="#f8fafc"
+          opacity={challenge ? 0.78 : 0.94}
+          stroke="#fff"
+          strokeWidth={challenge ? 1.4 : 1}
+        />
+      ) : null}
       {!challenge ? (
         <SvgText x={scene.platePt.x} y={scene.platePt.y + 22} fill="#cbd5e1" fontSize={11} fontWeight="700" textAnchor="middle">
           本壘板
@@ -85,8 +88,8 @@ function TrajectorySceneStatic({ scene, challenge = false }: Props) {
         points={polygonPoints(scene.strikeZone)}
         fill="url(#zoneGradient)"
         stroke={challenge ? '#f8fafc' : '#38bdf8'}
-        strokeWidth={challenge ? 1.4 : 2}
-        opacity={challenge ? 0.72 : 0.92}
+        strokeWidth={challenge ? 1.2 : 2}
+        opacity={challenge ? 0.58 : 0.92}
       />
       {!challenge && scene.zoneHLines.map((line, index) => (
         <Line

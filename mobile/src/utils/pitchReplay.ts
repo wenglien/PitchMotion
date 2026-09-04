@@ -46,8 +46,8 @@ function pointAtProgress(model: PitchReplayModel, progress: number): TrajectoryW
   if (!model.points.length) return null;
   const target = clamp(progress, 0, 1);
   const nextIndex = model.points.findIndex((point) => point.t >= target);
-  if (nextIndex <= 0) return model.points[Math.max(0, nextIndex)];
   if (nextIndex < 0) return model.points[model.points.length - 1];
+  if (nextIndex === 0) return model.points[0];
   const before = model.points[nextIndex - 1];
   const after = model.points[nextIndex];
   const ratio = (target - before.t) / Math.max(1e-6, after.t - before.t);

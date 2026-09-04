@@ -17,6 +17,7 @@ import {
   cameraVelocityFromGesture,
   clamp,
   decayCameraVelocity,
+  interpolateCamera,
   lerpYaw,
   normalizeCamera,
   zoomAroundFocal,
@@ -28,11 +29,27 @@ interface Options {
   onGestureActiveChange?: (active: boolean) => void;
   initialCamera?: Camera;
   enabled?: boolean;
+  automaticCamera?: Camera;
+  viewHeight?: number;
+  reduceMotion?: boolean;
 }
 
-export function useTrajectoryCamera({ onGestureActiveChange, initialCamera, enabled = true }: Options = {}) {
+export function useTrajectoryCamera({ onGestureActiveChange, initialCamera, enabled = true, automaticCamera, viewHeight = VIEW_H, reduceMotion = false }: Options = {}) {
   const initialCameraRef = useRef(normalizeCamera(initialCamera ?? DEFAULT_CAMERA));
-  const [camera, setCamera] = useState<Camera>(initialCameraRef.current);
+  const [manualCamera, setCamera] = useState<Camera>(initialCameraRef.current);
+  const [manual, setManual] = useState(false);
+  const manualRef = useRef(false);
+  const automaticCameraRef = useRef(automaticCamera);
+  automaticCameraRef.current = automaticCamera;
+  const camera = !manual && automaticCamera ? automaticCamera : manualCamera;
+  const [pullbackProgress, setPullbackProgress] = useState(1);
+  const pullbackFromRef = useRef<Camera | null>(null);
+  const pullbackRafRef = useRef<number | null>(null);
+  const displayedCamera = pullbackFromRef.current
+    ? interpolateCamera(pullbackFromRef.current, camera, pullbackProgress)
+    : camera;
+  const displayedCameraRef = useRef(displayedCamera);
+  displayedCameraRef.current = displayedCamera;
   const [gesturing, setGesturing] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(initialCamera ? null : VIEW_PRESETS[0].id);
 
@@ -100,6 +117,9 @@ export function useTrajectoryCamera({ onGestureActiveChange, initialCamera, enab
   );
 
   const stopInertia = useCallback(() => {
+    if (cameraRafRef.current != null) cancelAnimationFrame(cameraRafRef.current);
+    cameraRafRef.current = null;
+    pendingCameraRef.current = null;
     if (inertiaRafRef.current != null) {
       cancelAnimationFrame(inertiaRafRef.current);
       inertiaRafRef.current = null;
@@ -113,6 +133,28 @@ export function useTrajectoryCamera({ onGestureActiveChange, initialCamera, enab
       transitionRafRef.current = null;
     }
   }, []);
+
+  const stopPullback = useCallback(() => {
+    if (pullbackRafRef.current != null) cancelAnimationFrame(pullbackRafRef.current);
+    pullbackRafRef.current = null;
+    pullbackFromRef.current = null;
+    setPullbackProgress(1);
+  }, []);
+
+  const startPullback = useCallback((from: Camera) => {
+    stopPullback();
+    if (reduceMotion) return;
+    pullbackFromRef.current = from;
+    setPullbackProgress(0);
+    const started = performance.now();
+    const tick = (now: number) => {
+      const t = clamp((now - started) / PRESET_TRANSITION_MS, 0, 1);
+      setPullbackProgress(t * t * (3 - 2 * t));
+      if (t < 1) pullbackRafRef.current = requestAnimationFrame(tick);
+      else pullbackRafRef.current = null;
+    };
+    pullbackRafRef.current = requestAnimationFrame(tick);
+  }, [reduceMotion, stopPullback]);
 
   const setGestureActive = useCallback(
     (active: boolean) => {
@@ -129,12 +171,19 @@ export function useTrajectoryCamera({ onGestureActiveChange, initialCamera, enab
       stopInertia();
       stopTransition();
       flushLiveCamera();
+      if (automaticCameraRef.current && !manualRef.current) {
+        const from = displayedCameraRef.current;
+        manualRef.current = true;
+        setManual(true);
+        publishCamera({ ...initialCameraRef.current, yaw: from.yaw });
+        startPullback(from);
+      }
       gestureModeRef.current = mode;
       gestureStartRef.current = cameraRef.current;
       setGestureActive(true);
       setActivePreset(null);
     },
-    [flushLiveCamera, setGestureActive, stopInertia, stopTransition],
+    [flushLiveCamera, publishCamera, setGestureActive, startPullback, stopInertia, stopTransition],
   );
 
   const endGesture = useCallback(() => {
@@ -224,9 +273,25 @@ export function useTrajectoryCamera({ onGestureActiveChange, initialCamera, enab
     stopInertia();
     stopTransition();
     flushLiveCamera();
+    const from = displayedCameraRef.current;
+    manualRef.current = true;
+    setManual(true);
     publishCamera(initialCameraRef.current);
+    startPullback(from);
+    onGestureActiveChange?.(true);
+    onGestureActiveChange?.(false);
     setActivePreset(initialCamera ? null : VIEW_PRESETS[0].id);
-  }, [flushLiveCamera, initialCamera, publishCamera, stopInertia, stopTransition]);
+  }, [flushLiveCamera, initialCamera, onGestureActiveChange, publishCamera, startPullback, stopInertia, stopTransition]);
+
+  const resumeAutomatic = useCallback(() => {
+    stopInertia();
+    stopTransition();
+    flushLiveCamera();
+    stopPullback();
+    manualRef.current = false;
+    setManual(false);
+    publishCamera(initialCameraRef.current);
+  }, [flushLiveCamera, publishCamera, stopInertia, stopPullback, stopTransition]);
 
   const onPanBegin = useCallback(() => {
     if (gestureModeRef.current === 'pinch') return;
@@ -275,11 +340,14 @@ export function useTrajectoryCamera({ onGestureActiveChange, initialCamera, enab
       const nextZoom = pinchStartZoomRef.current * Math.pow(scale, 1.02);
       const viewport = viewportRef.current;
       const viewFocalX = focalX * VIEW_W / Math.max(1, viewport.width);
-      const viewFocalY = focalY * VIEW_H / Math.max(1, viewport.height);
-      const partial = zoomAroundFocal(start, nextZoom, viewFocalX, viewFocalY);
+      const viewFocalY = focalY * viewHeight / Math.max(1, viewport.height);
+      // Orbit mode zooms the observer toward the system, without translating it.
+      const partial = automaticCameraRef.current
+        ? { zoom: clamp(nextZoom, MIN_ZOOM, MAX_ZOOM) }
+        : zoomAroundFocal(start, nextZoom, viewFocalX, viewFocalY);
       applyCameraLive({ ...start, ...partial });
     },
-    [applyCameraLive],
+    [applyCameraLive, viewHeight],
   );
 
   const onPinchEnd = useCallback(() => {
@@ -359,18 +427,21 @@ export function useTrajectoryCamera({ onGestureActiveChange, initialCamera, enab
       if (liveRafRef.current != null) cancelAnimationFrame(liveRafRef.current);
       stopInertia();
       stopTransition();
+      if (pullbackRafRef.current != null) cancelAnimationFrame(pullbackRafRef.current);
     },
     [stopInertia, stopTransition],
   );
 
   return {
-    camera,
+    camera: displayedCamera,
+    manual,
     gesturing,
     activePreset,
     gesture,
     applyPreset,
     adjustZoom,
     resetView,
+    resumeAutomatic,
     stopInertia,
     setViewportSize: (width: number, height: number) => {
       viewportRef.current = { width: Math.max(1, width), height: Math.max(1, height) };

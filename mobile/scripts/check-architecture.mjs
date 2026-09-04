@@ -3,14 +3,17 @@ import { existsSync, readFileSync } from 'node:fs';
 import { toPitchResult } from '../src/adapters/nativeAnalysis.ts';
 import { normalizePipelineProgress } from '../src/utils/pipelineStages.ts';
 import { BASEBALL_RADIUS_M, buildChallengeCallout, buildPitchReplayModel, buildTunnelMetrics } from '../src/utils/pitchReplay.ts';
-import { buildBullpenMetrics } from '../src/utils/sessionAnalysis.ts';
 import {
   buildCameraBasis,
+  buildReplayCameraFrames,
   buildStaticWorldScene,
   cameraVelocityFromGesture,
   decayCameraVelocity,
   pathFrom,
   projectStaticScene,
+  projectWorld,
+  interpolateCamera,
+  normalizeYaw,
   DEFAULT_CAMERA,
   normalizeCamera,
 } from '../src/utils/trajectoryProjection.ts';
@@ -77,17 +80,6 @@ const tunnel = buildTunnelMetrics(replay, buildPitchReplayModel({
 assert.ok(tunnel);
 assert.ok(Number.isFinite(tunnel.midpointSeparationCm));
 assert.ok(tunnel.plateSeparationCm > 0);
-
-const bullpen = buildBullpenMetrics([
-  { job_id: '1', created_at: '2026-01-01T00:00:01Z', speed_info: { release_speed_kmh: 100, is_strike: true } },
-  { job_id: '2', created_at: '2026-01-01T00:00:02Z', speed_info: { release_speed_kmh: 110, is_strike: false } },
-  { job_id: '3', created_at: '2026-01-01T00:00:03Z', speed_info: { release_speed_kmh: 90, is_strike: true } },
-  { job_id: '4', created_at: '2026-01-01T00:00:04Z', speed_info: { release_speed_kmh: 80 } },
-]);
-assert.equal(bullpen.avgSpeedKmh, 95);
-assert.equal(bullpen.velocityDeltaKmh, -20);
-assert.equal(bullpen.strikeRate, 2 / 3);
-assert.equal(bullpen.measurementRate, 1);
 
 const calibratedReplay = buildPitchReplayModel({
   ...measuredPitch,
@@ -204,6 +196,50 @@ const fullFrameDecay = decayCameraVelocity(1, 1000 / 60);
 const twoHalfFrameDecay = decayCameraVelocity(decayCameraVelocity(1, 1000 / 120), 1000 / 120);
 assert.ok(Math.abs(fullFrameDecay - twoHalfFrameDecay) < 1e-12);
 
+// Six simultaneous pitches must share one field, and all endpoints must fit the close-up.
+const sixReplays = [-0.6, -0.25, -0.05, 0.1, 0.35, 0.7].map((x, index) => buildPitchReplayModel({
+  job_id: `orbit-${index}`,
+  speed_info: { flight_time_s: 0.3 + index * 0.06 },
+  trajectory_metadata: {
+    mound_distance_m: 18 + index * 0.4,
+    release_point_x_m: 0.2 + index * 0.03,
+    release_point_y_m: 1.9,
+    release_point_z_m: 18 + index * 0.4,
+    plate_crossing_x_m: x,
+    plate_crossing_y_m: 0.4 + index * 0.24,
+  },
+}));
+const beforeOrbit = JSON.stringify(sixReplays);
+const primaryReplay = sixReplays[0];
+const frames = buildReplayCameraFrames(primaryReplay, sixReplays.slice(1), 378);
+assert.equal(frames.distanceM, Math.max(...sixReplays.map((item) => item.distanceM)));
+assert.equal(frames.overview.target.z, frames.distanceM / 2);
+assert.deepEqual(frames.zone.target, { x: 0, y: primaryReplay.strikeZone.centerYM, z: 0 });
+assert.ok(frames.zone.zoom > frames.overview.zoom * 2);
+const sharedWorld = buildStaticWorldScene(frames.distanceM, primaryReplay.strikeZone);
+const inFrame = (point) => Number.isFinite(point.x) && Number.isFinite(point.y)
+  && point.x >= 20 && point.x <= 320 && point.y >= 20 && point.y <= 358;
+for (let yaw = -180; yaw <= 180; yaw += 30) {
+  for (const pitch of [-8, 24, 60, 88]) {
+    const basis = buildCameraBasis({ ...frames.overview, yaw, pitch });
+    const projectedTarget = projectWorld(frames.overview.target, frames.distanceM, basis);
+    assert.equal(projectedTarget.x, 170);
+    assert.equal(projectedTarget.y, 189);
+    for (const point of [...sharedWorld.lane, ...sharedWorld.strikeZone, ...sixReplays.flatMap((item) => item.points)]) {
+      assert.ok(inFrame(projectWorld(point, frames.distanceM, basis)), `overview clipped at yaw=${yaw}, pitch=${pitch}`);
+    }
+  }
+}
+for (const point of [...sharedWorld.strikeZone, ...sixReplays.map((item) => item.landingPoint)]) {
+  assert.ok(inFrame(projectWorld(point, frames.distanceM, buildCameraBasis(frames.zone))));
+}
+const halfwayCamera = interpolateCamera(frames.overview, frames.zone, 0.5);
+assert.equal(halfwayCamera.target.z, frames.distanceM / 4);
+assert.equal(interpolateCamera(frames.zone, frames.overview, 0).zoom, frames.zone.zoom);
+assert.equal(normalizeYaw(interpolateCamera(frames.zone, frames.overview, 1).yaw), normalizeYaw(frames.overview.yaw));
+assert.equal(JSON.stringify(sixReplays), beforeOrbit, 'camera movement mutated measured trajectories');
+assert.deepEqual(buildReplayCameraFrames(primaryReplay, [...sixReplays.slice(1), outsideReplay], 378), frames);
+
 const trajectoryScreen = readFileSync(new URL('../src/screens/TrajectorySimulationScreen.tsx', import.meta.url), 'utf8');
 assert.match(trajectoryScreen, /<PitchReplay[\s\S]*?interactive/);
 assert.equal(existsSync(new URL('../src/components/Trajectory3DView.tsx', import.meta.url)), false);
@@ -213,7 +249,37 @@ assert.ok((pitchReplayComponent.match(/<TrajectorySceneDynamic/g) ?? []).length 
 assert.match(pitchReplayComponent, /\.slice\(0, 5\)/);
 assert.match(pitchReplayComponent, /comparisonModels\.map/);
 assert.match(pitchReplayComponent, /color=\{pitchDotColor\(index \+ 1\)\}/);
-assert.match(pitchReplayComponent, /showLandingResult=\{comparisonMode\}/);
+assert.match(pitchReplayComponent, /showLandingResult=\{interactive\}/);
+assert.match(pitchReplayComponent, /automaticCamera: interactive \? interactiveCamera/);
+assert.match(pitchReplayComponent, /Math\.max\(model\.durationS, \.\.\.comparisonModels\.map/);
+assert.match(pitchReplayComponent, /useTrajectoryProjection\(model, camera, distanceM\)/);
+assert.match(pitchReplayComponent, /challenge=\{absMode\}/);
+assert.match(pitchReplayComponent, /trajectoryCamera\.resumeAutomatic\(\)/);
+assert.doesNotMatch(pitchReplayComponent, /const previousProjection =/);
+assert.match(pitchReplayComponent, /professional-home-plate-blur\.jpg/);
+assert.match(pitchReplayComponent, /Image as SvgImage/);
+assert.match(pitchReplayComponent, /<SvgImage[\s\S]*?href=\{STADIUM_BACKGROUND\}[\s\S]*?preserveAspectRatio="xMidYMid slice"/);
+assert.match(pitchReplayComponent, /const ABS_ZONE_BOTTOM_Y =/);
+assert.match(pitchReplayComponent, /ABS_ZONE_BOTTOM_Y - projectedZoneBottom\.y/);
+assert.match(pitchReplayComponent, /showHomePlate=\{!absMode\}/);
+assert.match(pitchReplayComponent, /PITCHMOTION/);
+assert.match(pitchReplayComponent, />ABS</);
+assert.match(pitchReplayComponent, /model\.isStrike === true \? 'STRIKE'/);
+assert.doesNotMatch(pitchReplayComponent, /const projectedOutcome =/);
+assert.match(pitchReplayComponent, /ABS_HOME_PLATE_X - projectedZone\.x/);
+assert.match(pitchReplayComponent, /const ABS_RESULT_ZOOM = 7;/);
+assert.match(pitchReplayComponent, /const outcomeZoom = outside[^;]*: ABS_RESULT_ZOOM;/);
+assert.match(pitchReplayComponent, /id="resultGlow"/);
+assert.match(pitchReplayComponent, /fill="url\(#resultGlow\)"/);
+assert.match(pitchReplayComponent, /const ballRadius = 4\.5;/);
+assert.doesNotMatch(pitchReplayComponent, /ballRadius = 4\.5 \+ resultProgress/);
+assert.equal(existsSync(new URL('../assets/replay/professional-home-plate-blur.jpg', import.meta.url)), true);
+
+const dynamicTrajectory = readFileSync(new URL('../src/components/trajectory/TrajectorySceneDynamic.tsx', import.meta.url), 'utf8');
+assert.match(dynamicTrajectory, /const shadowPath = challenge \? '' : pathUntilProgress/);
+
+const guidedCapture = readFileSync(new URL('../src/components/GuidedCaptureModal.tsx', import.meta.url), 'utf8');
+assert.match(guidedCapture, /autofocus="on"/);
 
 const sessionDetailScreen = readFileSync(new URL('../src/screens/SessionDetailScreen.tsx', import.meta.url), 'utf8');
 assert.match(sessionDetailScreen, /selected\.length < 6/);

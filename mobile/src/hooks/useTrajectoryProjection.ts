@@ -11,8 +11,7 @@ import {
   projectWorld,
 } from '../utils/trajectoryProjection';
 
-export function useTrajectoryProjection(model: PitchReplayModel, camera: Camera) {
-  const distanceM = model.distanceM;
+export function useTrajectoryProjection(model: PitchReplayModel, camera: Camera, distanceM = model.distanceM) {
   const curvePoints = model.points;
 
   const staticWorld = useMemo(

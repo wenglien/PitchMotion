@@ -10,8 +10,9 @@
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "check:architecture": "node --experimental-strip-types scripts/check-architecture.mjs",
+    "check:functionality": "node scripts/check-functionality.mjs",
     "check:speed": "xcrun swiftc modules/expo-speedgun/ios/Types.swift modules/expo-speedgun/ios/Tracking/SORTTracker.swift modules/expo-speedgun/ios/Tracking/TrackSelection.swift modules/expo-speedgun/ios/Measurement/BallSpeedCalculator.swift scripts/check-speed-calculator.swift -o /tmp/speedgun-check-speed && /tmp/speedgun-check-speed",
-    "check:release": "npm run typecheck && npm run check:architecture && npm run check:speed && npx expo-doctor && expo export --platform ios"
+    "check:release": "npm run typecheck && npm run check:architecture && npm run check:functionality && npm run check:speed && npx expo-doctor && expo export --platform ios"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",

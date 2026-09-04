@@ -1,4 +1,5 @@
 import type { PitchResult } from '../types';
+import { getSpeedKmh } from './conversions';
 
 export interface BullpenMetrics {
   measuredCount: number;
@@ -17,17 +18,17 @@ const average = (values: number[]) => (
   values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
 );
 
-const speedKmh = (record: PitchResult) => (
-  record.speed_info?.release_speed_kmh ?? record.speed_info?.initial_speed_kmh ?? null
+const isFiniteNumber = (value: number | null): value is number => (
+  value !== null && Number.isFinite(value)
 );
 
 export function buildBullpenMetrics(records: PitchResult[]): BullpenMetrics {
-  const speeds = records.map(speedKmh).filter((value): value is number => value !== null);
+  const speeds = records.map(getSpeedKmh).filter(isFiniteNumber);
   const avgSpeedKmh = average(speeds);
   const chronologicalSpeeds = [...records]
     .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime())
-    .map(speedKmh)
-    .filter((value): value is number => value !== null);
+    .map(getSpeedKmh)
+    .filter(isFiniteNumber);
   const split = Math.ceil(chronologicalSpeeds.length / 2);
   const firstHalf = average(chronologicalSpeeds.slice(0, split));
   const secondHalf = average(chronologicalSpeeds.slice(split));

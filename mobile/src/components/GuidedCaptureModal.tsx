@@ -24,7 +24,10 @@ export default function GuidedCaptureModal({ visible, onClose, onCaptured }: Pro
   const [elapsedS, setElapsedS] = useState(0);
 
   useEffect(() => {
-    if (!visible) setReady(false);
+    if (!visible) {
+      setReady(false);
+      setElapsedS(0);
+    }
   }, [visible]);
 
   useEffect(() => {
@@ -85,7 +88,7 @@ export default function GuidedCaptureModal({ visible, onClose, onCaptured }: Pro
             active={visible}
             facing="back"
             mode="video"
-            autofocus="off"
+            autofocus="on"
             videoQuality="1080p"
             videoStabilizationMode="standard"
             onCameraReady={() => setReady(true)}
