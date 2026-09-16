@@ -36,6 +36,7 @@ final class VideoDecoder {
     // by CMSampleBufferGetImageBuffer() becomes a dangling pointer the moment
     // sampleBuffer goes out of scope (it is unretained / +0).
     private var lastSampleBuffer: CMSampleBuffer?
+    private var hasDecodedFrame = false
 
     init(url: URL) throws {
         asset = AVAsset(url: url)
@@ -194,8 +195,7 @@ final class VideoDecoder {
         }
 
         let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("speedgun_sdr_\(Int(Date().timeIntervalSince1970)).mp4")
-        try? FileManager.default.removeItem(at: outputURL)
+            .appendingPathComponent("speedgun_sdr_\(UUID().uuidString).mp4")
 
         // Build an AVVideoComposition that forces the output color space to BT.709 SDR.
         // This uses Core Image's automatic HDR→SDR tone mapping pipeline.
@@ -226,6 +226,9 @@ final class VideoDecoder {
         exportSession.videoComposition = composition
 
         await exportSession.export()
+        if exportSession.status != .completed {
+            try? FileManager.default.removeItem(at: outputURL)
+        }
 
         switch exportSession.status {
         case .completed:
@@ -291,6 +294,7 @@ final class VideoDecoder {
 
         self.reader = reader
         self.output = output
+        hasDecodedFrame = false
         NSLog("[VideoDecoder] startReading OK — status=%d fps=%d captureFps=%d size=%dx%d",
               reader.status.rawValue,
               fps, captureFps,
@@ -304,15 +308,26 @@ final class VideoDecoder {
     }
 
     /// Get the next decoded frame with its source PTS. Returns nil when done.
-    func nextFrame() -> DecodedVideoFrame? {
-        guard let output = output, let reader = reader else { return nil }
-        guard reader.status == .reading else { return nil }
+    func nextFrame() throws -> DecodedVideoFrame? {
+        guard let output = output, let reader = reader else {
+            throw SpeedgunError.videoLoadFailed("Video reader has not been started")
+        }
+        if reader.status == .completed {
+            guard hasDecodedFrame else { throw SpeedgunError.noFramesExtracted }
+            return nil
+        }
+        guard reader.status == .reading else {
+            throw SpeedgunError.videoLoadFailed(reader.error?.localizedDescription ?? "Video reading interrupted")
+        }
 
         if let sampleBuffer = output.copyNextSampleBuffer() {
             // Retain the sample buffer for the lifetime of this frame so the
             // CVPixelBuffer it vends (unretained +0) remains valid.
             lastSampleBuffer = sampleBuffer
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                throw SpeedgunError.videoLoadFailed("Decoded sample has no image buffer")
+            }
+            hasDecodedFrame = true
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             let presentationTimeS: Double? = (pts.isValid && !pts.isIndefinite && pts.seconds.isFinite)
                 ? pts.seconds
@@ -324,13 +339,10 @@ final class VideoDecoder {
             )
         }
         lastSampleBuffer = nil
-        // Log why reading stopped
-        if reader.status == .failed {
-            NSLog("[VideoDecoder] nextFrame — reader failed: %@",
-                  reader.error?.localizedDescription ?? "unknown error")
-        } else {
-            NSLog("[VideoDecoder] nextFrame — reader status=%d (completed or cancelled)", reader.status.rawValue)
+        guard reader.status == .completed else {
+            throw SpeedgunError.videoLoadFailed(reader.error?.localizedDescription ?? "Video reading interrupted")
         }
+        guard hasDecodedFrame else { throw SpeedgunError.noFramesExtracted }
         return nil
     }
 

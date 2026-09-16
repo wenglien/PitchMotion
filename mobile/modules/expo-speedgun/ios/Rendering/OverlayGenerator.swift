@@ -66,6 +66,7 @@ final class OverlayGenerator {
 
         // --- Video reader ---
         let videoReader = try AVAssetReader(asset: asset)
+        defer { videoReader.cancelReading() }
         let readerSettings: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
         ]
@@ -103,10 +104,19 @@ final class OverlayGenerator {
             trackOutput.alwaysCopiesSampleData = false
             readerOutput = trackOutput
         }
+        guard videoReader.canAdd(readerOutput) else {
+            throw SpeedgunError.overlayGenerationFailed("Cannot add video reader output")
+        }
         videoReader.add(readerOutput)
 
         try? FileManager.default.removeItem(at: outputURL)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        defer {
+            if writer.status != .completed {
+                writer.cancelWriting()
+                try? FileManager.default.removeItem(at: outputURL)
+            }
+        }
         let expectedFPS = max(24, min(120, Int(round(videoTrack.nominalFrameRate))))
         let targetBitrate = overlayBitrate(width: outWidth, height: outHeight)
 
@@ -133,10 +143,17 @@ final class OverlayGenerator {
                 kCVPixelBufferHeightKey as String: outHeight,
             ]
         )
+        guard writer.canAdd(writerInput) else {
+            throw SpeedgunError.overlayGenerationFailed("Cannot add video writer input")
+        }
         writer.add(writerInput)
 
-        videoReader.startReading()
-        writer.startWriting()
+        guard videoReader.startReading() else {
+            throw SpeedgunError.overlayGenerationFailed(videoReader.error?.localizedDescription ?? "Cannot start video reader")
+        }
+        guard writer.startWriting() else {
+            throw SpeedgunError.overlayGenerationFailed(writer.error?.localizedDescription ?? "Cannot start video writer")
+        }
         writer.startSession(atSourceTime: .zero)
 
         let colorSpace = CGColorSpaceCreateDeviceRGB()
@@ -183,14 +200,23 @@ final class OverlayGenerator {
         var deferredError: Error?
         while let sampleBuffer = readerOutput.copyNextSampleBuffer() {
             autoreleasepool {
-                guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+                guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                    deferredError = SpeedgunError.overlayGenerationFailed("Decoded sample has no image buffer")
+                    return
+                }
                 let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
                 // Create output pixel buffer
-                guard let pool = adaptor.pixelBufferPool else { return }
+                guard let pool = adaptor.pixelBufferPool else {
+                    deferredError = SpeedgunError.overlayGenerationFailed("Video pixel buffer pool unavailable")
+                    return
+                }
                 var outBuffer: CVPixelBuffer?
                 CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outBuffer)
-                guard let outputBuffer = outBuffer else { return }
+                guard let outputBuffer = outBuffer else {
+                    deferredError = SpeedgunError.overlayGenerationFailed("Cannot allocate video frame")
+                    return
+                }
 
                 // Draw frame with overlays
                 drawOverlayFrame(
@@ -215,6 +241,10 @@ final class OverlayGenerator {
                 // Wait for writer to be ready
                 var videoWaitLoops = 0
                 while !writerInput.isReadyForMoreMediaData {
+                    guard writer.status == .writing else {
+                        deferredError = SpeedgunError.overlayGenerationFailed(writer.error?.localizedDescription ?? "Video writer interrupted")
+                        return
+                    }
                     videoWaitLoops += 1
                     if videoWaitLoops == 500 || videoWaitLoops == 2000 {
                         // #region agent log
@@ -254,7 +284,10 @@ final class OverlayGenerator {
                     }
                     Thread.sleep(forTimeInterval: 0.01)
                 }
-                adaptor.append(outputBuffer, withPresentationTime: presentationTime)
+                guard adaptor.append(outputBuffer, withPresentationTime: presentationTime) else {
+                    deferredError = SpeedgunError.overlayGenerationFailed(writer.error?.localizedDescription ?? "Cannot append video frame")
+                    return
+                }
 
                 frameIndex += 1
                 if frameIndex % 30 == 0 {
@@ -268,6 +301,9 @@ final class OverlayGenerator {
             }
         }
 
+        guard videoReader.status == .completed, frameIndex > 0 else {
+            throw SpeedgunError.overlayGenerationFailed(videoReader.error?.localizedDescription ?? "Video stream incomplete")
+        }
         NSLog("[OverlayGenerator] Video done (%d frames), copying audio...", frameIndex)
         progressCallback?(0.95, "Video stream complete (\(frameIndex) frames), finalizing MP4")
         // #region agent log
@@ -305,8 +341,6 @@ final class OverlayGenerator {
             ]
         )
         // #endregion
-
-        videoReader.cancelReading()
 
         guard writer.status == .completed else {
             // #region agent log

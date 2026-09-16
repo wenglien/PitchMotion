@@ -86,6 +86,90 @@ function historyHarness() {
 
 const pitch = (id, speed = 120) => ({ job_id: id, speed_info: { release_speed_kmh: speed } });
 
+function captureHarness() {
+  const hooks = hookHarness();
+  const captures = [];
+  let starts = 0, stops = 0, closed = 0, finish, tree;
+  const native = {
+    recordAsync: () => { starts++; return new Promise((resolve) => { finish = resolve; }); },
+    stopRecording: () => { stops++; },
+  };
+  const { default: Capture } = loadModule('src/components/GuidedCaptureModal.tsx', {
+    react: hooks.react,
+    'react-native': { Modal: 'Modal', View: 'View', Text: 'Text', TouchableOpacity: 'Button',
+      StyleSheet: { create: (value) => value }, Alert: { alert: () => assert.fail('unexpected capture alert') } },
+    'expo-camera': { CameraView: 'Camera',
+      useCameraPermissions: () => [{ granted: true }], useMicrophonePermissions: () => [{ granted: true }] },
+    '@expo/vector-icons': { Ionicons: 'Icon' },
+    'react-native-safe-area-context': { SafeAreaView: 'SafeArea' },
+    __globals: { setInterval, clearInterval },
+  });
+  function find(node, predicate) {
+    if (!node || typeof node !== 'object') return undefined;
+    if (predicate(node)) return node;
+    for (const child of (node.children ?? []).flat()) {
+      const found = find(child, predicate);
+      if (found) return found;
+    }
+  }
+  return {
+    hooks, captures,
+    render(visible = true) {
+      tree = hooks.render(() => Capture({ visible, onClose: () => { closed++; }, onCaptured: (uri) => captures.push(uri) }));
+      const camera = find(tree, (node) => node.type === 'Camera');
+      if (camera) camera.props.ref.current = native;
+      return camera;
+    },
+    button: (label) => find(tree, (node) => node.props?.accessibilityLabel === label),
+    finish: (uri) => finish({ uri }), counts: () => ({ starts, stops, closed }),
+  };
+}
+
+test('capture mounts only while visible and rejects duplicate taps before render', async () => {
+  const capture = captureHarness();
+  assert.equal(capture.render(false), undefined);
+  capture.render().props.onCameraReady();
+  capture.render();
+  const start = capture.button('開始錄影').props.onPress;
+  const first = start();
+  const duplicate = start();
+  assert.equal(capture.counts().starts, 1);
+  capture.finish('file:///pitch.mov');
+  await Promise.all([first, duplicate]);
+  assert.equal(capture.captures.length, 1);
+  capture.hooks.unmount();
+});
+
+test('closing capture before recording rerenders stops it and discards the result', async () => {
+  const capture = captureHarness();
+  capture.render().props.onCameraReady();
+  capture.render();
+  const recording = capture.button('開始錄影').props.onPress();
+  capture.button('關閉引導拍攝').props.onPress();
+  assert.equal(capture.counts().stops, 1);
+  assert.equal(capture.counts().closed, 1);
+  capture.finish('file:///discard.mov');
+  await recording;
+  assert.equal(capture.captures.length, 0);
+  assert.equal(capture.counts().closed, 1);
+  capture.hooks.unmount();
+});
+
+test('hidden or unmounted capture never delivers a late recording to analysis', async () => {
+  for (const unmount of [false, true]) {
+    const capture = captureHarness();
+    capture.render().props.onCameraReady();
+    capture.render();
+    const recording = capture.button('開始錄影').props.onPress();
+    if (unmount) capture.hooks.unmount();
+    else capture.render(false);
+    capture.finish('file:///late.mov');
+    await recording;
+    assert.equal(capture.captures.length, 0);
+    capture.hooks.unmount();
+  }
+});
+
 test('concurrent saves retain every pitch; reads wait for pending saves', async () => {
   const history = historyHarness();
   const saves = Array.from({ length: 6 }, (_, i) => history.saveResultToHistory(pitch(String(i))));

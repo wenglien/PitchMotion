@@ -17,6 +17,7 @@ interface Props {
 export default function GuidedCaptureModal({ visible, onClose, onCaptured }: Props) {
   const cameraRef = useRef<CameraView | null>(null);
   const discardRecording = useRef(false);
+  const recordingRef = useRef(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [ready, setReady] = useState(false);
@@ -28,6 +29,10 @@ export default function GuidedCaptureModal({ visible, onClose, onCaptured }: Pro
       setReady(false);
       setElapsedS(0);
     }
+    return () => {
+      discardRecording.current = true;
+      if (recordingRef.current) cameraRef.current?.stopRecording();
+    };
   }, [visible]);
 
   useEffect(() => {
@@ -48,7 +53,8 @@ export default function GuidedCaptureModal({ visible, onClose, onCaptured }: Pro
   };
 
   const startRecording = async () => {
-    if (!cameraRef.current || !ready || recording) return;
+    if (!visible || !cameraRef.current || !ready || recordingRef.current) return;
+    recordingRef.current = true;
     discardRecording.current = false;
     setElapsedS(0);
     setRecording(true);
@@ -62,26 +68,23 @@ export default function GuidedCaptureModal({ visible, onClose, onCaptured }: Pro
     } catch (error) {
       if (!discardRecording.current) Alert.alert('錄影失敗', error instanceof Error ? error.message : '請重新拍攝。');
     } finally {
+      recordingRef.current = false;
       setRecording(false);
-      if (discardRecording.current) onClose();
     }
   };
 
   const stopRecording = () => cameraRef.current?.stopRecording();
 
   const close = () => {
-    if (!recording) {
-      onClose();
-      return;
-    }
     discardRecording.current = true;
-    cameraRef.current?.stopRecording();
+    if (recordingRef.current) cameraRef.current?.stopRecording();
+    onClose();
   };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={close}>
       <View style={styles.container}>
-        {hasPermission ? (
+        {visible && hasPermission ? (
           <CameraView
             ref={cameraRef}
             style={StyleSheet.absoluteFill}

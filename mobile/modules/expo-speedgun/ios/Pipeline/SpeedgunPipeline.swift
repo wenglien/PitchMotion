@@ -59,6 +59,9 @@ final class SpeedgunPipeline {
         // ── HDR→SDR conversion: iPhone HLG/Dolby Vision causes washed-out frames ──
         var effectiveURL = videoURL
         var sdrTempURL: URL?
+        defer {
+            if let sdrTempURL { try? FileManager.default.removeItem(at: sdrTempURL) }
+        }
         let probeDecoder = try VideoDecoder(url: videoURL)
         if probeDecoder.isHDR {
             reportProgress("setup", 0.02, "HDR video detected, converting to SDR...")
@@ -154,6 +157,7 @@ final class SpeedgunPipeline {
         // Stage 2: Phase 1 Detection
         reportProgress("detecting", 0.05, "Starting ball detection...")
         try decoder.startReading()
+        defer { decoder.stopReading() }
 
         var rawDetections: [RawDetection] = []
         var frameInfos: [FrameInfo] = []
@@ -311,7 +315,7 @@ final class SpeedgunPipeline {
         }
 
         // Use letterboxed full-flight detection from frame 0.
-        while let decodedFrame = decoder.nextFrame() {
+        while let decodedFrame = try decoder.nextFrame() {
             autoreleasepool {
                 let currentTimeline = resolveRealTimeline(decodedFrame.presentationTimeS)
                 // If interpolation is on and we have a previous frame, insert
@@ -980,6 +984,7 @@ final class SpeedgunPipeline {
         // Stage 6: Overlay Generation
         reportProgress("overlay", 0.71, "Generating overlay video...")
         let overlayURL = generateOverlayURL()
+        var overlayCompleted = false
         // #region agent log
         DebugLogger.log(
             hypothesisId: "H5",
@@ -1007,6 +1012,7 @@ final class SpeedgunPipeline {
                     self?.reportProgress("overlay", 0.71 + pct * 0.24, detail)
                 }
             )
+            overlayCompleted = true
             // #region agent log
             DebugLogger.log(
                 hypothesisId: "H4",
@@ -1019,6 +1025,7 @@ final class SpeedgunPipeline {
             )
             // #endregion
         } catch {
+            try? FileManager.default.removeItem(at: overlayURL)
             // Overlay failure is non-fatal
             reportProgress("overlay", 0.95, "Overlay generation failed: \(error.localizedDescription)")
             // #region agent log
@@ -1041,8 +1048,8 @@ final class SpeedgunPipeline {
         // JS bridge expects: { speed_info: {...}, overlay_uri: "...", job_id: "...", ... }
         var result: [String: Any] = [:]
         result["speed_info"] = speedInfo.toDictionary()
-        result["job_id"] = "offline_\(Int(Date().timeIntervalSince1970))"
-        if FileManager.default.fileExists(atPath: overlayURL.path) {
+        result["job_id"] = "offline_\(UUID().uuidString)"
+        if overlayCompleted {
             result["overlay_uri"] = overlayURL.absoluteString
         }
         // #region agent log
@@ -1164,11 +1171,6 @@ final class SpeedgunPipeline {
         result["yolo_raw_detection_frames"] = yoloRawDetectionFrames
         result["yolo_total_detections"] = yoloTotalDetections
         result["yolo_ball_in_frame_count"] = yoloBallInFrameCount
-
-        // Clean up temporary SDR file
-        if let sdrURL = sdrTempURL {
-            try? FileManager.default.removeItem(at: sdrURL)
-        }
 
         return result
     }
@@ -1834,7 +1836,7 @@ final class SpeedgunPipeline {
 
     private func generateOverlayURL() -> URL {
         let tempDir = FileManager.default.temporaryDirectory
-        let filename = "speedgun_overlay_\(Int(Date().timeIntervalSince1970)).mp4"
+        let filename = "speedgun_overlay_\(UUID().uuidString).mp4"
         return tempDir.appendingPathComponent(filename)
     }
 

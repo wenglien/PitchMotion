@@ -21,8 +21,8 @@ const SETTINGS_TABS = [BASIC_TAB, ADVANCED_TAB];
 
 const MOUND_PRESETS = [5, 7, 14, 18.44];
 const STRIDE_PRESETS = [0, 1.5, 1.8];
-const PRIVACY_URL = 'https://github.com/wenglien/Baseball-Trajectory-Analysis/blob/main/docs/privacy-policy.md';
-const SUPPORT_URL = 'https://github.com/wenglien/Baseball-Trajectory-Analysis/issues';
+const PRIVACY_URL = 'https://github.com/wenglien/PitchMotion/blob/main/docs/privacy-policy.md';
+const SUPPORT_URL = 'https://github.com/wenglien/PitchMotion/issues';
 const BACKGROUND_CREDIT_URL = 'https://commons.wikimedia.org/wiki/File:FldofDrmsPtcrMound051904.jpg';
 const DEFAULT_ZONE: StrikeZoneCalibration = { xMin: 0.33, xMax: 0.67, yMin: 0.56, yMax: 0.86 };
 const DETECTION_MODES = [
